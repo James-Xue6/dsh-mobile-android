@@ -22,3 +22,23 @@ desktop.ini
 !res/**/*.png
 harness/*.log
 keystore.local.ps1
+
+# 验证脚手架与运行产物（评审 N-F）：这些目录/脚本含 harness class、e2e 运行日志、
+# 模拟器产物，git add -A 会把它们一起带进库 —— 与 P0-7「仓库卫生」的初衷相反。
+# 注意：tools/ 下的 mock-gateway.mjs / run-e2e.mjs 也一并被忽略（当前未入库，
+# 若要保留可后续用 git add -f 单独入库）。
+tools/
+harness/build.ps1
+harness/snapshot/
+.verify-e2e/
+
+# --- 测试脚手架：脚本与夹具要入库，运行产物不入库 ---
+!tools/
+tools/runs/
+tools/logs/
+!harness/build.ps1
+harness/out/
+!harness/snapshot/
+!harness/src/Probe.java
+!harness/src/ProbePrefix.java
+.verify-e2e/
