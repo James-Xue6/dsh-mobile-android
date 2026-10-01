@@ -18,6 +18,7 @@ public final class SettingsView extends LinearLayout {
         void onConnect(String lan, String wan, boolean useWan, String token, String deviceName);
         void onSwitchEndpoint(String lan, String wan, boolean useWan);
         void onToggleInsecureTls(boolean on);
+        void onCheckUpdate();
         void onOpenFeedback();
         void onPastePairing();
         void onDisconnect();
@@ -31,6 +32,7 @@ public final class SettingsView extends LinearLayout {
     private TextView useLanBtn;
     private TextView useWanBtn;
     private TextView aboutText;
+    private TextView updateHint;
     private boolean useWanState;
     private TextView insecureBtn;
     private boolean insecureState;
@@ -161,6 +163,18 @@ public final class SettingsView extends LinearLayout {
         aboutText.setTextIsSelectable(true);
         about.addView(aboutText);
 
+        // 版本更新：一键检查 + 结果提示（有新版本时启动也会自动弹窗）
+        LinearLayout upRow = Ui.row(ctx);
+        upRow.setLayoutParams(Ui.fill());
+        upRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        TextView upBtn = secondary("检查更新");
+        upBtn.setOnClickListener(v -> host.onCheckUpdate());
+        upRow.addView(upBtn, weight(1f, 0));
+        about.addView(upRow);
+        updateHint = Ui.text(ctx, "", 12f, Ui.INK_FAINT, false);
+        updateHint.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+        about.addView(updateHint);
+
 
         // ---- 状态卡片
         LinearLayout st = section(body, "当前状态", false);
@@ -241,6 +255,11 @@ public final class SettingsView extends LinearLayout {
 
     public void setAbout(String text) {
         if (aboutText != null) aboutText.setText(text == null ? "" : text);
+    }
+
+    /** 版本更新检查的结果提示（「已是最新」「有新版本 v0.4」「检查失败」…）。 */
+    public void setUpdateHint(String text) {
+        if (updateHint != null) updateHint.setText(text == null ? "" : text);
     }
 
     private void paintEndpoints(boolean useWan) {

@@ -1,0 +1,8 @@
+{
+  "versionCode": 4,
+  "versionName": "0.4",
+  "notes": "新增版本更新提醒：启动自动检查、发现新版本弹窗一键更新，设置→关于里也能手动检查",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.4/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.4/dist/dsh-mobile.apk",
+  "page": "https://github.com/James-Xue6/dsh-mobile-android"
+}

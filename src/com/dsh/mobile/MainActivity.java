@@ -139,6 +139,7 @@ public final class MainActivity extends Activity implements
                 refreshListStatus();
             } else {
                 gw.setTrustAllCerts(store.insecureTls());
+        checkUpdate(false);   // 启动时后台查一次新版本（6 小时内不重复）
         gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
             }
         } else {
@@ -230,6 +231,7 @@ public final class MainActivity extends Activity implements
         settingsView.setDisplayMode(store.displayMode());
         settingsView.setInsecureTls(store.insecureTls());
         refreshAbout();
+        settingsView.setUpdateHint(lastUpdateHint);
         refreshFeedbackHint();
         settingsView.setStatus(lastStateText.isEmpty() ? "未连接" : lastStateText, false);
         settingsView.setDiagnostics(gw.debugState() + "\n" + gw.traceText());
@@ -1907,6 +1909,134 @@ public final class MainActivity extends Activity implements
         }
     }
 
+    // ============================================================ 版本更新提醒
+    //
+    // 清单放在仓库的 dist/version.json（随每次发版更新）：
+    //   { versionCode, versionName, notes, url, mirror }
+    // 先走 CDN（国内通常更快），失败再走 GitHub raw。
+    private static final String UPDATE_MANIFEST_CDN =
+            "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/version.json";
+    private static final String UPDATE_MANIFEST_GH =
+            "https://raw.githubusercontent.com/James-Xue6/dsh-mobile-android/main/dist/version.json";
+    /** 自动检查的间隔（手动点「检查更新」不受限制）。 */
+    private static final long UPDATE_CHECK_INTERVAL_MS = 6L * 60 * 60 * 1000;
+
+    private int myVersionCode() {
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return android.os.Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    private String myVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** 后台拉取版本清单；manual=true 表示用户主动点的（失败/已最新都会提示）。 */
+    private void checkUpdate(final boolean manual) {
+        if (!manual && System.currentTimeMillis() - store.lastUpdateCheck() < UPDATE_CHECK_INTERVAL_MS) return;
+        if (manual) updateHint("正在检查…");
+        new Thread(() -> {
+            JSONObject m = fetchJson(UPDATE_MANIFEST_CDN);
+            if (m == null) m = fetchJson(UPDATE_MANIFEST_GH);
+            final JSONObject manifest = m;
+            runOnUiThread(() -> {
+                store.setLastUpdateCheck(System.currentTimeMillis());
+                handleUpdateResult(manifest, manual);
+            });
+        }, "update-check").start();
+    }
+
+    private static JSONObject fetchJson(String url) {
+        java.net.HttpURLConnection c = null;
+        try {
+            java.net.URL u = new java.net.URL(url);
+            c = (java.net.HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent", "DSH-Mobile-Android");
+            if (c.getResponseCode() != 200) return null;
+            java.io.InputStream is = c.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            is.close();
+            return new JSONObject(new String(bos.toByteArray(), "UTF-8"));
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** 最近一次更新检查的结论（设置页还没创建时先存着，创建后回填）。 */
+    private String lastUpdateHint = "";
+
+    private void updateHint(String text) {
+        lastUpdateHint = text == null ? "" : text;
+        if (settingsView != null) settingsView.setUpdateHint(lastUpdateHint);
+    }
+
+    private void handleUpdateResult(JSONObject m, boolean manual) {
+        int mine = myVersionCode();
+        if (m == null) {
+            updateHint("检查失败：网络不可用");
+            if (manual) Toast.makeText(this, "检查更新失败，请确认网络可用", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final int latest = m.optInt("versionCode", 0);
+        final String name = m.optString("versionName", "?");
+        final String notes = m.optString("notes", "");
+        final String url = m.optString("url", "");
+        final String mirror = m.optString("mirror", "");
+        if (latest <= mine) {
+            String txt = "已是最新版本（v" + myVersionName() + "）";
+            updateHint(txt);
+            if (manual) Toast.makeText(this, txt, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        updateHint("有新版本 v" + name + "（当前 v" + myVersionName() + "）");
+        // 用户对同一版本点过「以后再说」就不再自动弹（手动点仍会弹）
+        if (!manual && name.equals(store.skipVersion())) return;
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("发现新版本 v" + name)
+                .setMessage((notes.isEmpty() ? "有新版本可用。" : notes)
+                        + "\n\n当前版本 v" + myVersionName()
+                        + "\n下载后覆盖安装即可，无需卸载。")
+                .setPositiveButton("立即更新", (d, w) -> {
+                    String target = url.isEmpty() ? mirror : url;
+                    if (target.isEmpty()) {
+                        Toast.makeText(this, "清单里没有下载地址", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target)));
+                    } catch (Throwable t) {
+                        Toast.makeText(this, "打不开下载页：" + t.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNeutralButton("复制链接", (d, w) -> {
+                    String target = url.isEmpty() ? mirror : url;
+                    try {
+                        android.content.ClipboardManager cm =
+                                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("apk", target));
+                        Toast.makeText(this, "下载链接已复制", Toast.LENGTH_SHORT).show();
+                    } catch (Throwable ignored) { }
+                })
+                .setNegativeButton("以后再说", (d, w) -> store.setSkipVersion(name))
+                .show();
+    }
+
     private void refreshFeedbackHint() {
         if (settingsView == null) return;
         int n = store.feedbackCount();
@@ -1918,6 +2048,11 @@ public final class MainActivity extends Activity implements
         }
         settingsView.setFeedbackHint(n == 0 ? "还没有提交过反馈"
                 : ("已记录 " + n + " 条 · 最近：" + last));
+    }
+
+    @Override
+    public void onCheckUpdate() {
+        checkUpdate(true);
     }
 
     @Override
