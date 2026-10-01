@@ -81,6 +81,10 @@ public final class MainActivity extends Activity implements
     private String lastFeedbackDraft = "";
     /** 自动切换端点只用一次，连接成功或手动切换后复位。 */
     private boolean failoverUsed = false;
+    /** 非空表示正在配对；失败会换成下一个候选地址重试。 */
+    private String pendingPairCode = null;
+    private java.util.List<String> pairCandidates = new java.util.ArrayList<>();
+    private int pairIndex = 0;
 
     // 当前会话的目标 / 任务提要
     private String planGoal = "";
@@ -484,6 +488,9 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onPaired(JSONObject paired) {
+        pendingPairCode = null;   // 配对完成，停止候选重试
+        pairCandidates = new java.util.ArrayList<>();
+        pairIndex = 0;
         String token = paired.optString("token", "");
         if (!token.isEmpty()) store.setToken(token);
         JSONObject dev = paired.optJSONObject("device");
@@ -1822,6 +1829,57 @@ public final class MainActivity extends Activity implements
         });
     }
 
+    /**
+     * 从配对载荷挑出手机可能连得上的地址。
+     * 网关给的 publicUrl 常常是电脑本机地址（ws://127.0.0.1:…），手机永远连不上；
+     * endpoints 里才有隧道 / 局域网等真实可用地址。
+     */
+    private static java.util.List<String> buildPairCandidates(JSONObject payload, String primary) {
+        java.util.LinkedHashSet<String> all = new java.util.LinkedHashSet<>();
+        if (primary != null && !primary.trim().isEmpty()) all.add(primary.trim());
+        JSONArray eps = payload.optJSONArray("endpoints");
+        if (eps != null) {
+            for (int i = 0; i < eps.length(); i++) {
+                String e = eps.optString(i, "").trim();
+                if (!e.isEmpty()) all.add(e);
+            }
+        }
+        java.util.List<String> priv = new java.util.ArrayList<>();
+        java.util.List<String> pub = new java.util.ArrayList<>();
+        for (String u : all) {
+            if (isLoopbackUrl(u)) continue;
+            if (Store.isPrivateUrl(u)) priv.add(u);
+            else pub.add(u);
+        }
+        priv.addAll(pub); // 私有网段优先：在家最快；不行再走公网
+        return priv;
+    }
+
+    private static boolean isLoopbackUrl(String url) {
+        String s = url == null ? "" : url.toLowerCase(java.util.Locale.ROOT);
+        return s.contains("://127.0.0.1") || s.contains("://localhost")
+                || s.contains("://[::1]") || s.contains("://0.0.0.0");
+    }
+
+    /** 用下一个候选地址继续配对；都用完则明确报错。 */
+    private void pairWithNextCandidate() {
+        if (pendingPairCode == null) return;
+        while (pairIndex < pairCandidates.size()) {
+            String target = pairCandidates.get(pairIndex++);
+            if (GatewayClient.cleartextProblem(target) != null) continue;
+            store.setUrl(target);
+            if (settingsView != null) {
+                settingsView.setStatus("正在配对 " + hostOf(target)
+                        + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个地址）…", false);
+            }
+            gw.pair(target, pendingPairCode, store.deviceId(), store.deviceName());
+            return;
+        }
+        pendingPairCode = null;
+        Toast.makeText(this, "配对失败：配对码里的地址都连不上。\n"
+                + "请确认手机能上网；或在电脑面板重新生成二维码后重扫。", Toast.LENGTH_LONG).show();
+    }
+
     /** 连不上时自动在「内网 / 公网」之间切一次（只切一次，避免来回跳）。 */
     private boolean tryFailover() {
         if (failoverUsed) return false;
@@ -1839,6 +1897,8 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onReconnectScheduled(String reason) {
+        // 配对阶段失败：换下一个候选地址继续配对（而不是去连一个还没配对的 token）
+        if (pendingPairCode != null) { pairWithNextCandidate(); return; }
         if (tryFailover()) return;
         String active = store.url();
         if (active.contains("trycloudflare.com") || reason.contains("404")) {
@@ -1993,6 +2053,14 @@ public final class MainActivity extends Activity implements
 
     private void startPairing(String raw) {
         if (raw == null || raw.trim().isEmpty()) return;
+        // 面板里有两张二维码：安装包下载链接、配对码。扫错的时候要讲清楚。
+        String scanned = raw.trim();
+        if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
+            Toast.makeText(this, "这是「安装包下载链接」，不是配对码。\n"
+                    + "请用手机浏览器打开它下载安装 App；\n"
+                    + "配对请扫电脑面板里「生成配对二维码」那一张。", Toast.LENGTH_LONG).show();
+            return;
+        }
         try {
             JSONObject payload = decodePairing(raw.trim());
             int version = payload.optInt("version", 0);
@@ -2011,12 +2079,18 @@ public final class MainActivity extends Activity implements
                 Toast.makeText(this, "配对信息不完整", Toast.LENGTH_LONG).show();
                 return;
             }
-            String problem = GatewayClient.cleartextProblem(url);
-            if (problem != null) {
-                Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            // 网关给的 publicUrl 可能只对电脑本机有效（例如 ws://127.0.0.1:19387/…），
+            // 真正可用的是 payload.endpoints —— 它带着隧道 / 局域网等全部地址。
+            // 这里排成候选列表逐个试：私有网段优先（在家最快），不行再走公网。
+            pairCandidates = buildPairCandidates(payload, url);
+            if (pairCandidates.isEmpty()) {
+                Toast.makeText(this, "配对码里只有电脑本机地址（127.0.0.1 / localhost），手机连不上。\n"
+                        + "请在电脑面板重新点「生成配对二维码」，"
+                        + "并把「配对连接方式」选成「自动选择 · 优先外网」；\n"
+                        + "或者在 App 设置里手动填「公网地址」。", Toast.LENGTH_LONG).show();
                 return;
             }
-            store.setUrl(url);
+            store.setUrl(pairCandidates.get(0));
             // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
               // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
               String lan = "", wan = "";
@@ -2035,8 +2109,9 @@ public final class MainActivity extends Activity implements
               if (!wan.isEmpty()) store.setWanUrl(wan);
               store.setUseWan(lan.isEmpty() && !wan.isEmpty());
               failoverUsed = false;
-              gw.pair(url, code, store.deviceId(), store.deviceName());
-            settingsView.setStatus("正在配对 " + hostOf(url) + " …", false);
+              pendingPairCode = code;
+              pairIndex = 0;
+              pairWithNextCandidate();
         } catch (Throwable t) {
             Toast.makeText(this, "配对串无法解析：" + t.getMessage(), Toast.LENGTH_LONG).show();
         }
