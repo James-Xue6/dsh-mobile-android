@@ -1,0 +1,58 @@
+[18ms] ��Դ�����ɹ�: version=2 publicUrl=ws://127.0.0.1:3999/ws/mobile code=kSEMkNnd... gatewayId=718b85f5-518b-4922-9243-b1443f8f00b5
+[25ms] �׶�1��������뽨�����Ӳ����
+[28ms] state=CONNECTING �� �������� ws://127.0.0.1:3999/ws/mobile
+[64ms] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[66ms]   ����֡ session-archives {"kind":"session-archives","archivedSessionIds":[]}
+[66ms] PAIRED ȡ�ó��� token=JSQGHbVV... device={"lastSeenAt":1790787715052,"createdAt":1790787581667,"name":"jvm-harness-2","online":false,"id":"af6de632-6484-4750-9ee1-31d3956af18f","connections":0}
+[66ms]   ����֡ session-queues {"kind":"session-queues","queues":{}}
+[66ms] state=READY �� ������
+[70ms] HELLO protocol=3 dshVersion=0.2.0-rc.2 historyFormatVersion=4 authenticated=true port=3999
+[70ms] capabilities: split-channels,assistant-stream-v1,history-format-version,projection-baseline,images,session-create,session-agent-preset,commands,tasks,goals,schedule-management,plugin-management-v1,session-cancel,queue-control,session-archive,session-rename,file-downloads
+[70ms] device: id=af6de632-6484-4750-9ee1-31d3956af18f name=jvm-harness-2
+[74ms] SESSIONS �� 1 ��
+[76ms]   �� session-1b13bf64-c496-4304-b159-81992c22fd2b  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[76ms] �׶�3������Ϣ��ʡ�� sessionId �� �Զ������»Ự��
+[88ms]   event[0] permission/preset 
+[88ms]   event[1] sandbox/mode 
+[89ms]   event[2] approval/policy 
+[94ms]   event[3] agent/inbox/spliced 
+[96ms]   event[4] turn/start 
+[96ms]   ����֡ session-agent-preset-updated {"kind":"session-agent-preset-updated","sessionId":"session-ec547582-67b1-451f-aa82-4f18e0...
+[96ms]   event[5] agent/inbox/spliced 
+[98ms]   ����֡ session-queue {"kind":"session-queue","sessionId":"session-ec547582-67b1-451f-aa82-4f18e0e67f82","items"...
+[99ms] SENT sessionId=session-ec547582-67b1-451f-aa82-4f18e0e67f82 mode=queue
+[99ms] �׶�3b�����ĸûỰ��assistantStream=true��
+[99ms]   ����֡ session-queue {"kind":"session-queue","sessionId":"session-ec547582-67b1-451f-aa82-4f18e0e67f82","items"...
+[99ms] SUBSCRIBED session=session-ec547582-67b1-451f-aa82-4f18e0e67f82 assistantStream=true subscriptionId=616a7919-6244-486d-9b33-3f07d5a01dac
+[104ms] SNAPSHOT session=session-ec547582-67b1-451f-aa82-4f18e0e67f82 events=6 cursor=5 replace=true hasMore=false streamId=48d096f0-ee68-4077-a705-e52d7ec5c87b
+[190ms]   event[6] step/start 
+[190ms]   ����֡ session-title-changed {"kind":"session-title-changed","sessionId":"session-ec547582-67b1-451f-aa82-4f18e0e67f82"...
+[191ms]   event[7] system/message 
+[191ms]   event[8] user/message ֻ�ظ��ĸ��֣������ɹ�
+[192ms]   event[10] user/message Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCu...
+[192ms]   event[9] user/message <system-reminder>\nThe following workspace instructions may be relevant to your work. Use ...
+[192ms]   event[12] request/header 
+[192ms]   event[13] request/context 
+[192ms]   event[11] user/message <system-reminder>\nA skill is a reusable set of task-specific instructions. The following ...
+[192ms]   event[14] session/title 
+[192ms]   event[15] session/title-llm-request 
+[192ms]   ��֡ start outcome=null
+[669ms] �׶�2���Ͽ��������豸 token ����
+[669ms] state=DISCONNECTED �� �ѶϿ�
+[671ms] state=DISCONNECTED �� �ѶϿ�
+[1283ms] state=CONNECTING �� �������� ws://127.0.0.1:3999/ws/mobile
+[1284ms] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[1286ms]   ����֡ session-archives {"kind":"session-archives","archivedSessionIds":[]}
+[1286ms]   ����֡ session-queues {"kind":"session-queues","queues":{}}
+[1286ms] HELLO protocol=3 dshVersion=0.2.0-rc.2 historyFormatVersion=4 authenticated=true port=3999
+[1286ms] capabilities: split-channels,assistant-stream-v1,history-format-version,projection-baseline,images,session-create,session-agent-preset,commands,tasks,goals,schedule-management,plugin-management-v1,session-cancel,queue-control,session-archive,session-rename,file-downloads
+[1286ms] state=READY �� ������
+[1286ms] device: id=af6de632-6484-4750-9ee1-31d3956af18f name=jvm-harness-2
+[1290ms] SESSIONS �� 2 ��
+[1290ms]   �� session-ec547582-67b1-451f-aa82-4f18e0e67f82  title=- cwd=F:\AI\���򿪷� running=true blank=false
+[1290ms]   �� session-1b13bf64-c496-4304-b159-81992c22fd2b  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[1590ms]   event[16] session/title 
+[1590ms]   ����֡ session-title-changed {"kind":"session-title-changed","sessionId":"session-ec547582-67b1-451f-aa82-4f18e0e67f82"...
+[2002ms]   event[18] step/end 
+[2002ms]   event[17] assistant/message �����ɹ�
+[2003ms]   event[19] turn/end 

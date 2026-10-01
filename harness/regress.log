@@ -1,0 +1,72 @@
+[15ms] ��Դ�����ɹ�: version=2 publicUrl=ws://127.0.0.1:3999/ws/mobile code=rfvWWWiz... gatewayId=718b85f5-518b-4922-9243-b1443f8f00b5
+[20ms] �׶�1��������뽨�����Ӳ����
+[24ms] state=CONNECTING �� �������� ws://127.0.0.1:3999/ws/mobile
+[54ms] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[78ms] PAIRED ȡ�ó��� token=b5muleTk... device={"lastSeenAt":1790787943990,"createdAt":1790787581667,"name":"regress","online":false,"id":"af6de632-6484-4750-9ee1-31d3956af18f","connections":0}
+[78ms]   ����֡ session-archives {"kind":"session-archives","archivedSessionIds":[]}
+[79ms]   ����֡ session-queues {"kind":"session-queues","queues":{}}
+[79ms] state=READY �� ������
+[80ms] HELLO protocol=3 dshVersion=0.2.0-rc.2 historyFormatVersion=4 authenticated=true port=3999
+[81ms] capabilities: split-channels,assistant-stream-v1,history-format-version,projection-baseline,images,session-create,session-agent-preset,commands,tasks,goals,schedule-management,plugin-management-v1,session-cancel,queue-control,session-archive,session-rename,file-downloads
+[81ms] device: id=af6de632-6484-4750-9ee1-31d3956af18f name=regress
+[86ms] SESSIONS �� 3 ��
+[88ms]   �� session-99341b30-d597-4d81-a614-e7130e05a33a  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[88ms]   �� session-ec547582-67b1-451f-aa82-4f18e0e67f82  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[88ms]   �� session-1b13bf64-c496-4304-b159-81992c22fd2b  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[88ms] �׶�3������Ϣ��ʡ�� sessionId �� �Զ������»Ự��: Run the shell command echo harness-regress-ok and report its output
+[94ms]   event[1] sandbox/mode 
+[94ms]   event[0] permission/preset 
+[94ms]   event[2] approval/policy 
+[95ms]   event[3] agent/inbox/spliced 
+[95ms]   event[4] turn/start 
+[95ms]   ����֡ session-agent-preset-updated {"kind":"session-agent-preset-updated","sessionId":"session-a048ba75-c8a3-4782-8dda-e8514a...
+[96ms]   event[5] agent/inbox/spliced 
+[97ms]   ����֡ session-queue {"kind":"session-queue","sessionId":"session-a048ba75-c8a3-4782-8dda-e8514ae4eec5","items"...
+[97ms] SENT sessionId=session-a048ba75-c8a3-4782-8dda-e8514ae4eec5 mode=queue
+[97ms]   ����֡ session-queue {"kind":"session-queue","sessionId":"session-a048ba75-c8a3-4782-8dda-e8514ae4eec5","items"...
+[97ms] �׶�3b�����ĸûỰ��assistantStream=true��
+[99ms] SUBSCRIBED session=session-a048ba75-c8a3-4782-8dda-e8514ae4eec5 assistantStream=true subscriptionId=133b8e1a-8096-495b-8017-456f007ecdb1
+[101ms] SNAPSHOT session=session-a048ba75-c8a3-4782-8dda-e8514ae4eec5 events=6 cursor=5 replace=true hasMore=false streamId=b34bbc8e-294c-4b12-a1f7-67e4976820cf
+[144ms]   event[6] step/start 
+[145ms]   ����֡ session-title-changed {"kind":"session-title-changed","sessionId":"session-a048ba75-c8a3-4782-8dda-e8514ae4eec5"...
+[146ms]   event[7] system/message 
+[146ms]   event[8] user/message Run the shell command echo harness-regress-ok and report its output
+[146ms]   event[10] user/message Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCu...
+[146ms]   event[12] request/header 
+[146ms]   event[9] user/message <system-reminder>\nThe following workspace instructions may be relevant to your work. Use ...
+[146ms]   event[13] request/context 
+[147ms]   event[11] user/message <system-reminder>\nA skill is a reusable set of task-specific instructions. The following ...
+[147ms]   event[14] session/title 
+[147ms]   event[15] session/title-llm-request 
+[147ms]   ��֡ start outcome=null
+[686ms] �׶�2���Ͽ��������豸 token ����
+[686ms] state=DISCONNECTED �� �ѶϿ�
+[1292ms] state=CONNECTING �� �������� ws://127.0.0.1:3999/ws/mobile
+[1293ms] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[1296ms]   ����֡ session-archives {"kind":"session-archives","archivedSessionIds":[]}
+[1296ms]   ����֡ session-queues {"kind":"session-queues","queues":{}}
+[1296ms] HELLO protocol=3 dshVersion=0.2.0-rc.2 historyFormatVersion=4 authenticated=true port=3999
+[1296ms] capabilities: split-channels,assistant-stream-v1,history-format-version,projection-baseline,images,session-create,session-agent-preset,commands,tasks,goals,schedule-management,plugin-management-v1,session-cancel,queue-control,session-archive,session-rename,file-downloads
+[1296ms] state=READY �� ������
+[1296ms] device: id=af6de632-6484-4750-9ee1-31d3956af18f name=regress
+[1301ms] SESSIONS �� 4 ��
+[1301ms]   �� session-a048ba75-c8a3-4782-8dda-e8514ae4eec5  title=- cwd=F:\AI\���򿪷� running=true blank=false
+[1301ms]   �� session-99341b30-d597-4d81-a614-e7130e05a33a  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[1301ms]   �� session-ec547582-67b1-451f-aa82-4f18e0e67f82  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[1301ms]   �� session-1b13bf64-c496-4304-b159-81992c22fd2b  title=- cwd=F:\AI\���򿪷� running=false blank=false
+[1538ms]   event[16] session/title 
+[1538ms]   ����֡ session-title-changed {"kind":"session-title-changed","sessionId":"session-a048ba75-c8a3-4782-8dda-e8514ae4eec5"...
+[2325ms]   event[17] assistant/message 
+[2326ms]   event[18] tool/call pwsh
+[2555ms]   event[20] step/end 
+[2555ms]   event[19] tool/result isError=false
+[2560ms]   event[21] step/start 
+[4928ms]   event[22] assistant/message 
+[4928ms]   event[23] tool/call pwsh
+[4932ms]   event[24] approval/asked 
+[4933ms] !! APPROVAL ���� tool=pwsh reason=escalate sandbox to danger-full-access: ��������ɳ���� pwsh �� 0xC0000142 ����ʧ�ܣ��������������ͬһ��������һ��ȫȨ�����ԡ� approvalId=ad38b4d7-31ad-4be3-9ed5-88157c24d748 rpcId=67feaa4e-3350-4f1c-8521-924508d288d9
+[4933ms]    �� �ύ approval-response outcome=allowed-once��App ������Ƭ��·����
+[4933ms]   ����֡ approval-resolved rpcId=67feaa4e-3350-4f1c-8521-924508d288d9 outcome=allowed-once accepted=null
+[4933ms]   ����֡ approval-response rpcId=67feaa4e-3350-4f1c-8521-924508d288d9 outcome=allowed-once accepted=true
+[7627ms]   event[29] assistant/message ���������\n\n```\nharness-regress-ok\n```\n\n˵�����״�����������ɳ����ִ��ʱ `pwsh` �� `0xC0000142`��DLL ��ʼ��ʧ�ܣ�...
+[7628ms]   event[31] turn/end 

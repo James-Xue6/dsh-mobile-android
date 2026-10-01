@@ -1,0 +1,41 @@
+{
+  "name": "dsh-mobile-access",
+  "displayName": "手机接入",
+  "version": "1.0.0",
+  "description": "中文名：手机接入。在 DSH 设置里直接管理手机端接入——一键开关移动网关、生成配对二维码与访问令牌、查看并撤销已配对设备。协议层复用 dsh-plugin-mobile-gateway，本插件只提供接入编排与界面。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "mobile",
+    "pairing",
+    "qr"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "license": "MIT"
+}

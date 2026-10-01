@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DSH 掌上通</string>
+    <string name="camera_permission">需要相机权限才能扫描配对二维码</string>
+</resources>

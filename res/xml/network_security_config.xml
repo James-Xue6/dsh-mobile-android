@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DSH Mobile talks to a self-hosted gateway on the user's own machine.
+  The LAN endpoint is plain ws:// over a private network, and the public
+  endpoint is user-supplied (reverse proxy, may be http:// on an intranet).
+  Cleartext is therefore required. It is NOT permitted to arbitrary hosts:
+  GatewayClient verifies that any cleartext target is a private/loopback/
+  link-local address or a .local name before opening a connection.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

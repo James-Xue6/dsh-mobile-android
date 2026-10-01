@@ -1,0 +1,18 @@
+# 构建中间产物
+.buildstage/
+build/
+out4/
+*.class
+*.dex
+
+# 本机工具与密钥（绝不入库）
+*.jks
+*.keystore
+*.p12
+local.properties
+.tools/
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,6 @@
+# dsh-mobile-access 组合包 patch：在组合树里挂载本插件的宿主行。
+# 行名就是本包名；client-modules 的 node 侧扫描到该行后读取本包的 dsh.client
+# 声明，并对外提供 /plugins/dsh-mobile-access/client.js。
+- insert:
+    - id: mobile-access
+      name: dsh-mobile-access

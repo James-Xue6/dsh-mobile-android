@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FFF4F6FB</color>
+    <color name="surface">#FFFFFFFF</color>
+    <color name="brand">#FF4D6BFE</color>
+    <color name="ink">#FF17181C</color>
+    <color name="launcher_bg">#FF4D6BFE</color>
+</resources>
