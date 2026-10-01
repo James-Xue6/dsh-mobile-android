@@ -133,9 +133,15 @@ window.__ModuleLoader__.load({
       var deviceName = nameState[0]
       var setDeviceName = nameState[1]
       var urlState = React.useState('')
-    var riskState = React.useState(false)
-    var riskOkState = React.useState(false)
+        var riskState = React.useState(false)
+        var riskOpen = riskState[0]
+        var setRiskOpen = riskState[1]
+        var riskOkState = React.useState(false)
+        var riskOk = riskOkState[0]
+        var setRiskOk = riskOkState[1]
         var appState = React.useState(null)
+        var app = appState[0]
+        var setApp = appState[1]
       var manualUrl = urlState[0]
       var setManualUrl = urlState[1]
 
