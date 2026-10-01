@@ -380,7 +380,8 @@ window.__ModuleLoader__.load({
         var az = []
         az.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '手机 App 安装包'))
         az.push(React.createElement('div', { className: 'dsma-desc', key: 'd' },
-          '手机和电脑连同一个 WiFi 时，直接扫下面的码下载安装；装好后回到上面「生成配对二维码」扫一次即可接入。'))
+          '手机扫码下载安装包（从公开仓库/CDN 取，不依赖任何人的本机网络）；'
+          + '手机和电脑在同一 WiFi 时可改用下面的「局域网直发」秒下。装好后回到上面「生成配对二维码」扫一次即可接入。'))
         if (ap && ap.available) {
           if (ap.qrSvg) {
             az.push(React.createElement('div', {
@@ -392,14 +393,26 @@ window.__ModuleLoader__.load({
           az.push(React.createElement('div', { className: 'dsma-row', key: 'r1' },
             React.createElement('button', {
               type: 'button', className: 'dsma-btn', disabled: !ap.qrUrl,
-              onClick: function () { copy(ap.qrUrl, '安装包地址') },
-            }, '复制局域网地址'),
-            React.createElement('a', {
-              className: 'dsma-btn', href: ap.publicUrl, target: '_blank', rel: 'noreferrer',
-            }, '外网 CDN 直链')))
+              onClick: function () { copy(ap.qrUrl, 'CDN 地址') },
+            }, '复制 CDN 链接'),
+            React.createElement('button', {
+              type: 'button', className: 'dsma-btn', disabled: !ap.githubUrl,
+              onClick: function () { copy(ap.githubUrl, 'GitHub 地址') },
+            }, '复制 GitHub 直链')))
+          if (ap.lanUrls && ap.lanUrls.length) {
+            az.push(React.createElement('div', { className: 'dsma-row', key: 'r2' },
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn', disabled: !ap.lanUrls[0],
+                onClick: function () { copy(ap.lanUrls[0], '局域网地址') },
+              }, '复制局域网直发地址')))
+            az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'lan' },
+              '局域网直发（同一 WiFi 秒下）：' + ap.lanUrls[0]))
+          }
           az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
-            '安装包 ' + (ap.size / 1024).toFixed(1) + ' KB · ' + ap.name
+            'v' + (ap.version || '?') + ' · ' + (ap.size / 1024).toFixed(1) + ' KB · ' + ap.name
             + '（扫码 → 浏览器下载 → 点安装，允许未知来源即可）'))
+          az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'gh' },
+            'GitHub 直链（CDN 不通时用）：' + (ap.githubUrl || '')))
         } else if (ap) {
           az.push(React.createElement('div', { className: 'dsma-line', key: 'na' },
             '插件目录里还没有安装包。把 dsh-mobile.apk 放到：' + ap.apkPath))

@@ -25,6 +25,12 @@ const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
 const APK_PATH = path.join(PLUGIN_DIR, 'app', 'dsh-mobile.apk')
 /** 局域网发安装包的端口（只发这一个文件，不做目录服务） */
 const APP_PORT = Number(process.env.DSH_MOBILE_APP_PORT || 8099)
+/** App 版本（发版时与 AndroidManifest 的 versionName 一起改） */
+const APP_VERSION = '0.1'
+const REPO_SLUG = 'James-Xue6/dsh-mobile-android'
+/** 公开发布地址：默认走 CDN（国内通常比 GitHub 稳），并给出 GitHub 兜底 */
+const GITHUB_URL = 'https://github.com/' + REPO_SLUG + '/raw/v' + APP_VERSION + '/dist/dsh-mobile.apk'
+const CDN_URL = 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + APP_VERSION + '/dist/dsh-mobile.apk'
 
 /** 复用网关依赖里的 qrcode 生成二维码；解析不到就退化为纯链接（面板自动降级） */
 function loadQrCode() {
@@ -214,20 +220,22 @@ export function apply(ctx) {
             const info = apkInfo()
             const lan = lanIPv4()
             const urls = lan.map((ip) => 'http://' + ip + ':' + APP_PORT + '/app.apk')
-            const publicUrl = 'https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/dsh-mobile.apk'
+            // 默认二维码指向「公开发布地址」：安装包从 CDN/GitHub 走，不依赖任何人的本机网络。
+            // 局域网直连只是备选（离线、或公网慢的时候）。
+            const lanPage = urls.length ? urls[0] : ''
             let qrSvg = null
-            let qrUrl = urls[0] || ''
-            if (info.available && qrUrl) {
-              const QRCode = loadQrCode()
-              if (QRCode) {
-                try { qrSvg = await QRCode.toString(qrUrl, { type: 'svg', margin: 1, width: 220 }) } catch { qrSvg = null }
-              }
+            const qrTarget = CDN_URL
+            const QRCode = loadQrCode()
+            if (QRCode) {
+              try { qrSvg = await QRCode.toString(qrTarget, { type: 'svg', margin: 1, width: 220 }) } catch { qrSvg = null }
             }
             sendJson(res, 200, {
+              version: APP_VERSION,
               available: info.available, size: info.size, name: info.name, port: APP_PORT,
-              lanUrls: urls, qrUrl, qrSvg, publicUrl,
+              lanUrls: urls, lanPage,
+              publicUrl: CDN_URL, githubUrl: GITHUB_URL,
+              qrUrl: qrTarget, qrSvg,
               apkPath: APK_PATH,
-              downloadPage: urls.length ? urls[0].replace('/app.apk', '/') : '',
             })
             return
           }

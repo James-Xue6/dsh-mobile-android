@@ -31,6 +31,8 @@ pwsh -File .\pc-plugin\install.ps1
 **③ 手机装 App**：在面板的「手机 App 安装包」卡片上，**手机连同一个 WiFi 扫码即下载安装** ——
 安装包由插件从你这台电脑直接发出（局域网 8099 端口），不经过任何第三方网盘或 CDN。
 
+> 也可以不用面板：直接从公开地址下载 APK —— CDN `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.1/dist/dsh-mobile.apk`，或 GitHub `https://github.com/James-Xue6/dsh-mobile-android/raw/v0.1/dist/dsh-mobile.apk`（国内 CDN 更快）。
+
 **④ 扫码配对**：装好后回到面板点「生成配对二维码」，用 App 扫它 ——
 **内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
 

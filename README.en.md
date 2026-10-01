@@ -32,6 +32,8 @@ and registers the dependency inside your DSH profile.
 Wi-Fi, scan the QR code to download and install**. The APK is served straight from your own computer
 (local port 8099) — no third-party cloud drive or CDN involved.
 
+> You can also skip the panel: download the APK straight from the CDN `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.1/dist/dsh-mobile.apk` or GitHub `https://github.com/James-Xue6/dsh-mobile-android/raw/v0.1/dist/dsh-mobile.apk` (the CDN is usually faster in mainland China).
+
 **4. Pair by QR**: back in the panel, click "Generate pairing QR code" and scan it with the app —
 **both the LAN and the public address are filled in at once**, so you can use the LAN at home and
 switch to the public address when you go out, with no manual typing.
