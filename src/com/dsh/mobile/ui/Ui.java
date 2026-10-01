@@ -17,6 +17,9 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** 视觉常量、圆角工具、以及轻量 Markdown 渲染。整体对齐 DSH 桌面版配色。 */
 public final class Ui {
 
@@ -142,13 +145,16 @@ public final class Ui {
         String[] lines = src.split("\n", -1);
         boolean inCode = false;
         StringBuilder codeBuf = new StringBuilder();
+        // 代码块的字符范围：行内标记在代码块里必须原样保留，不能删也不能上样式
+        List<int[]> codeRanges = new ArrayList<>();
 
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             String trimmed = line.trim();
             if (trimmed.startsWith("```")) {
                 if (inCode) {
-                    appendCodeBlock(out, codeBuf.toString());
+                    int[] r = appendCodeBlock(out, codeBuf.toString());
+                    if (r != null) codeRanges.add(r);
                     codeBuf.setLength(0);
                     inCode = false;
                 } else {
@@ -174,13 +180,17 @@ public final class Ui {
             }
             if (i < lines.length - 1) out.append('\n');
         }
-        if (inCode && codeBuf.length() > 0) appendCodeBlock(out, codeBuf.toString());
+        if (inCode && codeBuf.length() > 0) {
+            int[] r = appendCodeBlock(out, codeBuf.toString());
+            if (r != null) codeRanges.add(r);
+        }
 
-        inline(out);
+        inline(out, codeRanges);
         return out;
     }
 
-    private static void appendCodeBlock(SpannableStringBuilder out, String code) {
+    /** 追加一个代码块，返回它的 [start, end) 字符范围（空块返回 null）。 */
+    private static int[] appendCodeBlock(SpannableStringBuilder out, String code) {
         if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
         int start = out.length();
         out.append(code);
@@ -191,32 +201,55 @@ public final class Ui {
             out.setSpan(new RelativeSizeSpan(0.92f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         out.append('\n');
+        return end > start ? new int[]{start, end} : null;
     }
 
-    /** 行内反引号与 ** 加粗。 */
-    private static void inline(SpannableStringBuilder sb) {
+    /** [from, to) 是否与任一受保护范围（代码块）相交。 */
+    private static boolean overlapsAny(List<int[]> ranges, int from, int to) {
+        for (int[] r : ranges) {
+            if (from < r[1] && to > r[0]) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 行内反引号与 ** 加粗：既上样式，也把标记符本身删掉。
+     * 以前只上样式不删标记，用户会满屏看到 `**` 和反引号（评审 P1-13）。
+     * 删除必须倒序（先删靠后的），否则前面的下标会错位；SpannableStringBuilder
+     * 会自动平移已经设置好的 Span，所以删除后样式范围依然正确。
+     */
+    private static void inline(SpannableStringBuilder sb, List<int[]> codeRanges) {
         String s = sb.toString();
+        List<int[]> cuts = new ArrayList<>();      // 每个待删除标记符的 [start, end)
         int i = 0;
         while (i < s.length()) {
             char ch = s.charAt(i);
             if (ch == '`') {
                 int close = s.indexOf('`', i + 1);
                 int nl = s.indexOf('\n', i + 1);
-                if (close > i && (nl < 0 || close < nl)) {
+                if (close > i && (nl < 0 || close < nl) && !overlapsAny(codeRanges, i, close + 1)) {
                     sb.setSpan(new TypefaceSpan("monospace"), i + 1, close, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                     sb.setSpan(new BackgroundColorSpan(CODE_BG), i + 1, close, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    cuts.add(new int[]{i, i + 1});
+                    cuts.add(new int[]{close, close + 1});
                     i = close + 1;
                     continue;
                 }
             } else if (ch == '*' && i + 1 < s.length() && s.charAt(i + 1) == '*') {
                 int close = s.indexOf("**", i + 2);
-                if (close > i) {
+                if (close > i && !overlapsAny(codeRanges, i, close + 2)) {
                     sb.setSpan(new StyleSpan(Typeface.BOLD), i + 2, close, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    cuts.add(new int[]{i, i + 2});
+                    cuts.add(new int[]{close, close + 2});
                     i = close + 2;
                     continue;
                 }
             }
             i++;
+        }
+        for (int k = cuts.size() - 1; k >= 0; k--) {
+            int[] r = cuts.get(k);
+            sb.delete(r[0], r[1]);
         }
     }
 

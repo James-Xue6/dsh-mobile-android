@@ -283,7 +283,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         applyFilter();
     }
 
-    /** 简洁模式：完成的命令不显示，只保留"正在运行"；空响应气泡也不显示。 */
+    /** 简洁模式：完成的命令不显示，只保留"正在运行"与失败的行；空响应气泡也不显示。 */
     public void setCompact(boolean value) {
         this.compact = value;
         adapter.setCompact(value);
@@ -295,7 +295,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         for (ChatItem it : full) {
             // 没有正文的助手气泡一律不显示（只有思考、或工具回合的空壳）——两种模式都适用
             if (it.kind == ChatItem.ASSISTANT && it.text.trim().isEmpty() && !it.streaming) continue;
-            if (compact && it.kind == ChatItem.TOOL && !it.toolRunning) continue;
+            // 简洁模式过滤掉"已完成"的工具行；但失败的行必须留下，
+            // 否则用户只看得到结果不对、看不到哪一步出错了（评审 P1-12）。
+            if (compact && it.kind == ChatItem.TOOL && !it.toolRunning && !it.toolError) continue;
             view.add(it);
         }
         adapter.setItems(view);

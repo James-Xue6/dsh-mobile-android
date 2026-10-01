@@ -174,6 +174,9 @@ public final class GatewayClient {
         stopPing();
         main.removeCallbacks(reconnectTask);
         final int gen = ++generation;
+        // 每代只收尾一次：WsClient 在"异常断开"时会先 onFailure 再在 finally 里 onClosed，
+        // 两者都调 scheduleReconnect 会把退避直接翻倍并弹两次提示（评审 P1-3）。
+        final boolean[] settled = new boolean[1];
         WsClient old = ws;
         ws = null;
         if (old != null) old.close(1000, "reconnect");
@@ -210,6 +213,8 @@ public final class GatewayClient {
 
                 @Override public void onClosed(int code, String reason) {
                     if (gen != generation) return;
+                    if (settled[0]) return;     // onFailure 已经收尾，避免二次调度重连（P1-3）
+                    settled[0] = true;
                     stopPing();
                     if (manualClose || !wantConnected) { setState(State.DISCONNECTED, "已断开"); return; }
                     if (code == 4004) { wantConnected = false; setState(State.GATEWAY_OFF, "网关已关闭（请在电脑端开启移动网关）"); return; }
@@ -228,6 +233,8 @@ public final class GatewayClient {
 
                 @Override public void onFailure(Throwable error) {
                     if (gen != generation) return;
+                    if (settled[0]) return;     // onClosed 已经收尾，避免二次调度重连（P1-3）
+                    settled[0] = true;
                     stopPing();
                     if (manualClose || !wantConnected) return;
                     String msg = error == null ? "未知错误" : String.valueOf(error.getMessage());

@@ -48,7 +48,34 @@ Step '0/7' "暂存源码到 ASCII 路径 $Stage"
 # ASCII 暂存根必须是「指向工作区内的 junction」：aapt2 需要纯 ASCII 路径，
 # 而沙箱只允许 javac/d8 这类子进程写工作区内的文件（直接写 C:\ 会被拒绝）。
 $realStage = Join-Path $root '.buildstage'
-if (-not (Test-Path $Stage)) {
+
+# 断链 junction 自愈（评审 P0-5 ①）：
+#   旧写法用 Test-Path 判「路径是否存在」，而 .buildstage 被 git clean -xfd 清掉后
+#   残留的 C:\dshstage 断链 junction 仍会让 Test-Path 返回 True —— 于是跳过重建，
+#   随后在 $Stage\app 上报 "Could not find a part of the path" 且永不自愈。
+#   实测（Windows + .NET）：断链 junction 上 Test-Path 与 [IO.Directory]::Exists 都是 True，
+#   只有「链接目标本身是否存在」以及「$Stage\子路径是否可达」才是可靠的判据，故在此显式
+#   解析 junction 的 Target 并检查目标可达性。
+function Test-StageLink($path, $target) {
+  $it = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  if ($null -eq $it) { return $false }                               # 路径本身不存在
+  $isLink = (($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+  if (-not $isLink) { return [System.IO.Directory]::Exists($path) }   # 实体目录：沿用旧行为
+  $t = @($it.Target) | Where-Object { $_ } | Select-Object -First 1
+  if (-not $t) { return $false }
+  # 断链：junction 还在，但目标目录已被删除
+  if (-not [System.IO.Directory]::Exists([string]$t)) { return $false }
+  return ([System.IO.Path]::GetFullPath([string]$t).TrimEnd('\') -ieq
+          [System.IO.Path]::GetFullPath($target).TrimEnd('\'))
+}
+
+if (-not (Test-StageLink $Stage $realStage)) {
+  if (Test-Path -LiteralPath $Stage) {
+    # 清理断链/错链：junction 只能用非递归的 rmdir，Remove-Item -Recurse 会跟进链接删到目标里去
+    & cmd.exe /c rmdir "$Stage" | Out-Null
+    if (Test-Path -LiteralPath $Stage) { throw "暂存路径 $Stage 残留且无法清理，请手动删除后重试" }
+    Write-Host "    已清理断链/失效的暂存路径 $Stage"
+  }
   New-Item -ItemType Directory -Force -Path $realStage | Out-Null
   New-Item -ItemType Junction -Path $Stage -Target $realStage | Out-Null
   Write-Host "    已建立 junction $Stage -> $realStage"
@@ -168,13 +195,19 @@ if (-not $ksPass) {
   throw "缺少签名口令：请设置环境变量 DSH_KS_PASS，或创建 $ksLocal 写入 `$KsPass = '你的口令'"
 }
 
+# 期望的证书指纹（SHA-256，大写、无冒号）。换密钥对老用户是灾难性事件：
+# 新密钥签名后覆盖安装一律报「应用未安装」，因此密钥缺失时绝不自动重建。
+$expectedFp = '2E518D756794EB72864B5A7C21849EA39FD27754EED0B60B74B2C7E12D8ECE8E'
+
 if (-not (Test-Path $ks)) {
-  Write-Host "    生成固定签名密钥库 $ks"
-  & $keytool -genkeypair `
-    -keystore $ks -alias dshmobile -keyalg RSA -keysize 2048 -validity 10950 `
-    -storepass $ksPass -keypass $ksPass `
-    -dname 'CN=DSH Mobile, OU=Personal, O=DSH Mobile, L=Local, ST=Local, C=CN' | Out-Null
-  Assert-Ok 'keytool'
+  Write-Host "`n[!] 签名密钥库缺失: $ks" -ForegroundColor Red
+  Write-Host "    alias                 : dshmobile"
+  Write-Host "    期望证书 SHA-256 指纹 : $expectedFp"
+  Write-Host "    证书有效期至          : 2056-09-23"
+  Write-Host "    本脚本拒绝自动生成新密钥（评审 P0-5 ②）：换新密钥后，所有已装旧版本的用户"
+  Write-Host "    覆盖安装都会报「应用未安装」。请从备份恢复该 .jks（口令见 keystore.local.ps1"
+  Write-Host "    或环境变量 DSH_KS_PASS）后重试。"
+  throw "签名密钥库缺失，已终止构建（绝不自动重签）"
 }
 
 $signed = Join-Path $out 'dsh-mobile.apk'
@@ -186,7 +219,18 @@ $signed = Join-Path $out 'dsh-mobile.apk'
 Assert-Ok 'apksigner sign'
 
 Write-Host "`n===== 签名校验 =====" -ForegroundColor Green
-& "$bt\apksigner.bat" verify --verbose --print-certs $signed | Select-Object -First 12
+$certOut = & "$bt\apksigner.bat" verify --verbose --print-certs $signed 2>&1
+if ($LASTEXITCODE -ne 0) { throw "apksigner verify 失败 (exit $LASTEXITCODE)" }
+$certOut | Select-Object -First 12 | ForEach-Object { Write-Host "    $_" }
+
+# 指纹必须与期望值一致：换了密钥却把包发出去，比构建失败严重得多
+$fpMatch = [regex]::Match(($certOut -join "`n"), 'SHA-256 digest:\s*([0-9a-fA-F:]+)')
+if (-not $fpMatch.Success) { throw '无法从 apksigner verify 输出中读到证书指纹，拒绝产出未验证的包' }
+$fp = $fpMatch.Groups[1].Value.Replace(':', '').ToUpperInvariant()
+if ($fp -ne $expectedFp) {
+  throw "签名证书 SHA-256 指纹不符！`n  实际: $fp`n  期望: $expectedFp`n该包不能分发给老用户（覆盖安装会失败），请用正确密钥库重新签名。"
+}
+Write-Host "    证书 SHA-256 指纹与期望一致: $fp" -ForegroundColor Green
 
 Write-Host "`n===== APK 信息 =====" -ForegroundColor Green
 & "$bt\aapt2.exe" dump badging $signed |
@@ -200,3 +244,9 @@ Copy-Item $signed $final -Force
 
 $size = (Get-Item $final).Length
 Write-Host "`n产物: $final  ($([math]::Round($size/1KB,1)) KB)" -ForegroundColor Green
+
+# 分发一致性：给用户一份可核对的 SHA-256（评审 P0-5 ③）
+$apkHash = (Get-FileHash -LiteralPath $final -Algorithm SHA256).Hash.ToLowerInvariant()
+$hashFile = "$final.sha256"
+Set-Content -LiteralPath $hashFile -Value "$apkHash  dsh-mobile.apk" -Encoding ASCII
+Write-Host "校验值: $hashFile  ($apkHash)" -ForegroundColor Green
