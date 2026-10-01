@@ -25,6 +25,7 @@ public final class Store {
     private static final String K_RISK_ACK = "risk_ack";
     private static final String K_SKIP_VERSION = "skip_version";
     private static final String K_LAST_UPDATE_CHECK = "last_update_check";
+    private static final String K_FEEDBACK_CFG = "feedback_cfg";
 
     private final SharedPreferences sp;
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
@@ -87,6 +88,10 @@ public final class Store {
 
     public long lastUpdateCheck() { return sp.getLong(K_LAST_UPDATE_CHECK, 0L); }
     public void setLastUpdateCheck(long v) { sp.edit().putLong(K_LAST_UPDATE_CHECK, v).apply(); }
+
+    /** 作者配置的反馈通道（update 清单里的 feedback 段，JSON 原文）；没配过为空。 */
+    public String feedbackCfg() { return sp.getString(K_FEEDBACK_CFG, ""); }
+    public void setFeedbackCfg(String v) { sp.edit().putString(K_FEEDBACK_CFG, v == null ? "" : v).apply(); }
 
     public boolean useWan() { return sp.getBoolean(K_USE_WAN, false); }
     public void setUseWan(boolean v) { sp.edit().putBoolean(K_USE_WAN, v).apply(); }

@@ -1,8 +1,13 @@
 {
-  "versionCode": 4,
-  "versionName": "0.4",
-  "notes": "新增版本更新提醒：启动自动检查、发现新版本弹窗一键更新，设置→关于里也能手动检查",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.4/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.4/dist/dsh-mobile.apk",
+  "versionCode": 5,
+  "versionName": "0.5",
+  "notes": "意见反馈改为发给作者（GitHub Issue 一键提交，可复制兜底）；流式滚动冲突修复；扫码配对自动跳过 127.0.0.1；版本更新提醒",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.5/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.5/dist/dsh-mobile.apk",
+  "feedback": {
+    "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
+    "labels": "feedback",
+    "email": ""
+  },
   "page": "https://github.com/James-Xue6/dsh-mobile-android"
 }

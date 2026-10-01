@@ -1738,17 +1738,92 @@ public final class MainActivity extends Activity implements
         android.widget.TextView env = Ui.text(this, "会自动附上：" + feedbackEnv(), 11.5f, Ui.INK_FAINT, false);
         env.setPadding(0, Ui.dp(this, 8), 0, 0);
         box.addView(env);
+        final boolean toAuthor = feedbackChannel() != null;
+        if (toAuthor) {
+            android.widget.TextView hint = Ui.text(this,
+                    "点「发给作者」会用浏览器/邮件打开，把内容发给开发这个 App 的人。",
+                    11.5f, Ui.INK_FAINT, false);
+            hint.setPadding(0, Ui.dp(this, 6), 0, 0);
+            box.addView(hint);
+        }
 
-        new android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
                 .setTitle("意见反馈")
-                .setView(box)
-                .setPositiveButton("发送到电脑", (d, w) -> sendFeedback(ed.getText().toString()))
-                .setNeutralButton("复制", (d, w) -> {
-                    copyFeedback(feedbackText(ed.getText().toString()));
-                    Toast.makeText(this, "已复制，可直接粘给我", Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("取消", null)
-                .show();
+                .setView(box);
+        if (toAuthor) {
+            b.setPositiveButton("发给作者", (d, w) -> sendToAuthor(ed.getText().toString()))
+                    .setNeutralButton("复制", (d, w) -> {
+                        copyFeedback(feedbackText(ed.getText().toString()));
+                        Toast.makeText(this, "已复制，可粘到任意地方", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNegativeButton("发到我的电脑", (d, w) -> sendFeedback(ed.getText().toString()));
+        } else {
+            b.setPositiveButton("发到电脑", (d, w) -> sendFeedback(ed.getText().toString()))
+                    .setNeutralButton("复制", (d, w) -> {
+                        copyFeedback(feedbackText(ed.getText().toString()));
+                        Toast.makeText(this, "已复制，可粘到任意地方", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNegativeButton("取消", null);
+        }
+        b.show();
+    }
+
+    /**
+     * 作者在 dist/version.json 的 feedback 段里配置的反馈通道。
+     * 之前的做法是把反馈发进「用户自己电脑上的 DSH」，那只对作者本人有意义；
+     * 发给别人用的 App 必须把反馈送回作者，所以这里走公开通道（GitHub Issue 或邮件）。
+     */
+    private JSONObject feedbackChannel() {
+        String cfg = store.feedbackCfg();
+        if (cfg.isEmpty()) return null;
+        try { return new JSONObject(cfg); } catch (Throwable t) { return null; }
+    }
+
+    private String buildFeedbackUrl(String text) {
+        JSONObject fb = feedbackChannel();
+        if (fb == null) return "";
+        String issues = fb.optString("issues", "");
+        String email = fb.optString("email", "");
+        String title = "【DSH 掌上通】意见反馈 v" + myVersionName();
+        try {
+            if (!issues.isEmpty()) {
+                String labels = fb.optString("labels", "");
+                return issues + (issues.contains("?") ? "&" : "?")
+                        + "title=" + android.net.Uri.encode(title)
+                        + "&body=" + android.net.Uri.encode(text)
+                        + (labels.isEmpty() ? "" : "&labels=" + android.net.Uri.encode(labels));
+            }
+            if (!email.isEmpty()) {
+                return "mailto:" + email
+                        + "?subject=" + android.net.Uri.encode(title)
+                        + "&body=" + android.net.Uri.encode(text);
+            }
+        } catch (Throwable ignored) { }
+        return "";
+    }
+
+    private void sendToAuthor(String body) {
+        String t = body == null ? "" : body.trim();
+        if (t.isEmpty()) {
+            Toast.makeText(this, "先写点内容吧", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        store.addFeedback(t);
+        String full = feedbackText(t);
+        copyFeedback(full);   // 同时复制一份，万一浏览器/邮件打不开也不丢
+        String url = buildFeedbackUrl(full);
+        if (url.isEmpty()) {
+            Toast.makeText(this, "没有取到作者的反馈通道，已复制到剪贴板", Toast.LENGTH_LONG).show();
+            refreshFeedbackHint();
+            return;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+            refreshFeedbackHint();
+        } catch (Throwable e) {
+            Toast.makeText(this, "打不开反馈通道，已复制到剪贴板：" + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 反馈时附上的环境信息，方便定位。 */
@@ -1997,6 +2072,9 @@ public final class MainActivity extends Activity implements
         final String notes = m.optString("notes", "");
         final String url = m.optString("url", "");
         final String mirror = m.optString("mirror", "");
+        // 顺手把作者配置的反馈通道存下来（离线也能用）
+        JSONObject fb = m.optJSONObject("feedback");
+        if (fb != null) store.setFeedbackCfg(fb.toString());
         if (latest <= mine) {
             String txt = "已是最新版本（v" + myVersionName() + "）";
             updateHint(txt);

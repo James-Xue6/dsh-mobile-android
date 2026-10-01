@@ -53,15 +53,32 @@ if (-not (Test-Path $apk)) { throw '构建没有产出 dist\dsh-mobile.apk' }
 
 # ---------------------------------------------------------------- 更新清单
 $slug = 'James-Xue6/dsh-mobile-android'
+$versionJsonPath = Join-Path $PSScriptRoot 'dist\version.json'
+
+# 保留上一版清单里的手工配置（feedback / page），别被发版冲掉
+$keep = [ordered]@{}
+if (Test-Path $versionJsonPath) {
+  try {
+    $old = Get-Content $versionJsonPath -Raw | ConvertFrom-Json
+    if ($old.feedback) { $keep.feedback = $old.feedback }
+    if ($old.page) { $keep.page = $old.page }
+  } catch { Write-Warning '旧的 version.json 解析失败，将重新生成' }
+}
+
 $manifestJson = [ordered]@{
   versionCode = $newCode
   versionName = $Version
   notes       = $Notes
   url         = "https://cdn.jsdelivr.net/gh/$slug@v$Version/dist/dsh-mobile.apk"
   mirror      = "https://github.com/$slug/raw/v$Version/dist/dsh-mobile.apk"
-  page        = "https://github.com/$slug"
 }
-$manifestJson | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot 'dist\version.json') -Encoding utf8
+if (-not $keep.page) { $keep.page = "https://github.com/$slug" }
+foreach ($k in $keep.Keys) { $manifestJson[$k] = $keep[$k] }
+if (-not $manifestJson.Contains('feedback')) {
+  Write-Warning '清单里没有 feedback 段：App 的「意见反馈」将只能「复制」或「发到用户自己的电脑」'
+}
+
+$manifestJson | ConvertTo-Json -Depth 6 | Set-Content $versionJsonPath -Encoding utf8
 Write-Host "  OK dist/version.json 已更新（versionCode=$newCode）"
 
 # ---------------------------------------------------------------- 同步插件目录
