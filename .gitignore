@@ -19,4 +19,5 @@ desktop.ini
 
 # 真机截图含设备令牌/内网地址，永远不入库
 dist/*.png
+keystore.local.ps1
 

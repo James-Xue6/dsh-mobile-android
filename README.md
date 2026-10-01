@@ -81,7 +81,7 @@ pwsh -File .\build.ps1
 1. **路径不能含中文** —— `aapt2`/`d8`/`zipalign` 是原生工具，在 ANSI 代码页 936 的 Windows 上打不开非 ASCII 路径。脚本先把源码暂存到 `C:\dshbuild` 再构建，最后把产物拷回 `dist\`。
 2. **lambdas 需要 `core-lambda-stubs.jar`** —— `android.jar` 不含 `LambdaMetafactory`，必须把 build-tools 里的 `core-lambda-stubs.jar` 一起放进 `-bootclasspath`。
 
-签名用固定密钥库 `%USERPROFILE%\.dsh-mobile-keys\dshmobile.jks`（口令 `ROTATED-PASSWORD`）。
+签名用固定密钥库 `%USERPROFILE%\.dsh-mobile-keys\dshmobile.jks`。**口令不进仓库**：`build.ps1` 依次读环境变量 `DSH_KS_PASS`、仓库根目录的 `keystore.local.ps1`（已 gitignore）。
 **换签名会导致无法覆盖安装**，请离线备份该文件。
 
 ## 五、安装与配对

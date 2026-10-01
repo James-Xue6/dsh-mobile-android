@@ -155,11 +155,24 @@ Step '7/7' 'apksigner — 签名并校验'
 $ksDir = Join-Path $env:USERPROFILE '.dsh-mobile-keys'
 New-Item -ItemType Directory -Force -Path $ksDir | Out-Null
 $ks = Join-Path $ksDir 'dshmobile.jks'
+
+# 签名口令绝不写进代码：优先环境变量 DSH_KS_PASS，
+# 其次仓库根目录下的 keystore.local.ps1（内含 $KsPass = '...'，已被 .gitignore 忽略）
+$ksPass = $env:DSH_KS_PASS
+$ksLocal = Join-Path $root 'keystore.local.ps1'
+if ((-not $ksPass) -and (Test-Path $ksLocal)) {
+  . $ksLocal
+  $ksPass = $KsPass
+}
+if (-not $ksPass) {
+  throw "缺少签名口令：请设置环境变量 DSH_KS_PASS，或创建 $ksLocal 写入 `$KsPass = '你的口令'"
+}
+
 if (-not (Test-Path $ks)) {
   Write-Host "    生成固定签名密钥库 $ks"
   & $keytool -genkeypair `
     -keystore $ks -alias dshmobile -keyalg RSA -keysize 2048 -validity 10950 `
-    -storepass ROTATED -keypass ROTATED `
+    -storepass $ksPass -keypass $ksPass `
     -dname 'CN=DSH Mobile, OU=Personal, O=DSH Mobile, L=Local, ST=Local, C=CN' | Out-Null
   Assert-Ok 'keytool'
 }
@@ -167,7 +180,7 @@ if (-not (Test-Path $ks)) {
 $signed = Join-Path $out 'dsh-mobile.apk'
 & "$bt\apksigner.bat" sign `
   --ks $ks --ks-key-alias dshmobile `
-  --ks-pass pass:ROTATED --key-pass pass:ROTATED `
+  --ks-pass "pass:$ksPass" --key-pass "pass:$ksPass" `
   --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true `
   --out $signed $aligned
 Assert-Ok 'apksigner sign'
