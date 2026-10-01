@@ -8,7 +8,7 @@
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
     "email": "804544542@qq.com",
-    "webhook": "",
+    "webhook": "https://formsubmit.co/ajax/804544542@qq.com",
     "webhookKind": "generic"
   },
   "page": "https://github.com/James-Xue6/dsh-mobile-android"

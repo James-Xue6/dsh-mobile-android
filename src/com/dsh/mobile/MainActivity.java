@@ -127,6 +127,14 @@ public final class MainActivity extends Activity implements
         setContentView(root);
         root.requestApplyInsets();
 
+        // 支持用 intent 直接传配对串进来（便于自动化测试，也可被其它工具/脚本调用）：
+        //   adb shell am start -n com.dsh.mobile/.MainActivity -e pairing "<Base64URL 配对串>"
+        final String pairFromIntent = getIntent() == null ? null : getIntent().getStringExtra("pairing");
+        if (pairFromIntent != null && !pairFromIntent.trim().isEmpty()) {
+            final String pv = pairFromIntent.trim();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(pv), 1200);
+        }
+
         listScreen = new SessionListView(this, this);
         root.addView(listScreen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -181,6 +189,18 @@ public final class MainActivity extends Activity implements
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    /** 已在运行时再次收到带 pairing 的 intent（am start 复用一个实例时会走这里）。 */
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String pv = intent == null ? null : intent.getStringExtra("pairing");
+        if (pv != null && !pv.trim().isEmpty()) {
+            final String v = pv.trim();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(v), 500);
+        }
     }
 
     @Override
@@ -1877,11 +1897,16 @@ public final class MainActivity extends Activity implements
                     payload.put("title", "DSH 掌上通 意见反馈 v" + myVersionName());
                     payload.put("desp", shortText);
                 } else {
+                    // 通用转发服务（FormSubmit / Formspree 之类）：把内容当表单字段发过去，
+                    // 服务端再转成邮件发给作者。_ 开头的字段是 FormSubmit 的专用开关。
                     payload.put("subject", "DSH 掌上通 意见反馈 v" + myVersionName());
                     payload.put("message", shortText);
                     payload.put("text", shortText);
                     payload.put("version", myVersionName());
                     payload.put("device", android.os.Build.MODEL);
+                    payload.put("_subject", "DSH 掌上通 意见反馈 v" + myVersionName());
+                    payload.put("_template", "table");
+                    payload.put("_captcha", "false");
                 }
                 byte[] data = payload.toString().getBytes("UTF-8");
                 c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
@@ -1891,13 +1916,35 @@ public final class MainActivity extends Activity implements
                 c.setDoOutput(true);
                 c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 c.setRequestProperty("User-Agent", "DSH-Mobile-Android");
+                // FormSubmit 这类「网页表单」服务要求带 Origin/Referer，否则拒收；
+                // App 是原生请求、默认没有这两个头，这里补上作者仓库地址。
+                c.setRequestProperty("Origin", "https://github.com");
+                c.setRequestProperty("Referer", "https://github.com/James-Xue6/dsh-mobile-android");
+                c.setRequestProperty("Accept", "application/json");
                 c.setFixedLengthStreamingMode(data.length);
                 java.io.OutputStream os = c.getOutputStream();
                 os.write(data);
                 os.flush();
                 os.close();
                 int code = c.getResponseCode();
-                if (code < 200 || code >= 300) err = "HTTP " + code;
+                String respBody = "";
+                try {
+                    java.io.InputStream is = code >= 200 && code < 400 ? c.getInputStream() : c.getErrorStream();
+                    if (is != null) {
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[2048];
+                        int n;
+                        while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                        is.close();
+                        respBody = new String(bos.toByteArray(), "UTF-8");
+                    }
+                } catch (Throwable ignored) { }
+                if (code < 200 || code >= 300) {
+                    err = "HTTP " + code;
+                } else if (respBody.contains("\"success\":\"false\"") || respBody.contains("\"success\": false")) {
+                    // FormSubmit 之类会用 200 + success:false 表达「还没激活」等
+                    err = "服务端未接受：" + (respBody.length() > 160 ? respBody.substring(0, 160) : respBody);
+                }
             } catch (Throwable e) {
                 err = e.getMessage() == null ? String.valueOf(e) : e.getMessage();
             } finally {
@@ -1997,6 +2044,32 @@ public final class MainActivity extends Activity implements
      * 网关给的 publicUrl 常常是电脑本机地址（ws://127.0.0.1:…），手机永远连不上；
      * endpoints 里才有隧道 / 局域网等真实可用地址。
      */
+    /**
+     * 手机当前所在网段的前缀（例如 WiFi 是 192.168.2.51 则返回 "192.168.2."）；拿不到返回 ""。
+     * 只认 wlan 接口，避免把 rmnet（移动数据）或虚拟网卡当成本地网段。
+     */
+    private static String localSubnetPrefix() {
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nis =
+                    java.net.NetworkInterface.getNetworkInterfaces();
+            while (nis != null && nis.hasMoreElements()) {
+                java.net.NetworkInterface ni = nis.nextElement();
+                if (ni == null || !ni.isUp() || ni.isLoopback()) continue;
+                String name = ni.getName() == null ? "" : ni.getName();
+                if (!name.startsWith("wlan")) continue;
+                for (java.net.InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    java.net.InetAddress a = ia.getAddress();
+                    if (a == null || a.isLoopbackAddress()) continue;
+                    String ip = a.getHostAddress();
+                    if (ip == null || ip.indexOf(':') >= 0) continue;   // 只要 IPv4
+                    int dot = ip.lastIndexOf('.');
+                    if (dot > 0) return ip.substring(0, dot + 1);
+                }
+            }
+        } catch (Throwable ignored) { }
+        return "";
+    }
+
     private static java.util.List<String> buildPairCandidates(JSONObject payload, String primary) {
         java.util.LinkedHashSet<String> all = new java.util.LinkedHashSet<>();
         if (primary != null && !primary.trim().isEmpty()) all.add(primary.trim());
@@ -2007,15 +2080,22 @@ public final class MainActivity extends Activity implements
                 if (!e.isEmpty()) all.add(e);
             }
         }
+        // 分三档：① 和手机同网段（在家必通、且最快）② 其它内网（可能是虚拟网卡，多半连不上）
+        //        ③ 公网隧道（人在外面时用）。之前不分档，先撞虚拟网卡要白等十几秒超时。
+        final String subnet = localSubnetPrefix();
+        java.util.List<String> sameNet = new java.util.ArrayList<>();
         java.util.List<String> priv = new java.util.ArrayList<>();
         java.util.List<String> pub = new java.util.ArrayList<>();
         for (String u : all) {
             if (isLoopbackUrl(u)) continue;
-            if (Store.isPrivateUrl(u)) priv.add(u);
-            else pub.add(u);
+            if (!Store.isPrivateUrl(u)) { pub.add(u); continue; }
+            String host = hostOf(u);
+            if (!subnet.isEmpty() && host.startsWith(subnet)) sameNet.add(u);
+            else priv.add(u);
         }
-        priv.addAll(pub); // 私有网段优先：在家最快；不行再走公网
-        return priv;
+        sameNet.addAll(priv);
+        sameNet.addAll(pub);
+        return sameNet;
     }
 
     private static boolean isLoopbackUrl(String url) {
@@ -2035,6 +2115,9 @@ public final class MainActivity extends Activity implements
                 settingsView.setStatus("正在配对 " + hostOf(target)
                         + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个地址）…", false);
             }
+            // 配对可能要依次试几个地址，给个可见反馈，别让人以为点了没反应
+            Toast.makeText(this, "正在连接 " + hostOf(target)
+                    + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个）", Toast.LENGTH_SHORT).show();
             gw.pair(target, pendingPairCode, store.deviceId(), store.deviceName());
             return;
         }
@@ -2101,7 +2184,9 @@ public final class MainActivity extends Activity implements
 
     /** 后台拉取版本清单；manual=true 表示用户主动点的（失败/已最新都会提示）。 */
     private void checkUpdate(final boolean manual) {
-        if (!manual && System.currentTimeMillis() - store.lastUpdateCheck() < UPDATE_CHECK_INTERVAL_MS) return;
+        // 不再做「6 小时节流」：这个清单同时承载作者的反馈通道（webhook 等），
+        // 每次启动都拉一次（几百字节）才能保证反馈通道是最新的；
+        // 而更新弹窗另有「同一版本不再弹」的去重，不会因为这里变频繁而打扰用户。
         if (manual) updateHint("正在检查…");
         new Thread(() -> {
             JSONObject m = fetchJson(UPDATE_MANIFEST_CDN);
