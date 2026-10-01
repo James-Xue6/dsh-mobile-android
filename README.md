@@ -3,6 +3,20 @@
 用手机遥控电脑上的 **DeepSeek Harness**。原生 Android 客户端，界面按豆包 / Trae 这类对话产品的形态做：
 会话列表 → 气泡对话 → 实时流式输出 → 内联审批 / 提问卡片；内网扫码配对，外网填你反代的地址。
 
+<p align="center">
+  <img src="dist/evidence-conversation-v2.png" width="250" alt="会话（完整模式）">
+  <img src="dist/evidence-tasks-deliverables.png" width="250" alt="任务提要与交付物卡片">
+  <img src="dist/evidence-question-image.png" width="250" alt="提问卡片与图片">
+  <img src="dist/evidence-settings-collapsed.png" width="250" alt="折叠式设置">
+</p>
+
+<p align="center">
+  <b>会话列表 · 任务与交付物 · 提问卡片 · 折叠式设置</b>（全部为荣耀 PGT-AN10 真机截图）
+</p>
+
+> **当前进度**：Android 13 项功能已真机验证；PC 接入插件（Cordis/DSH）宿主与面板均已实测；
+> 公网访问走网关内置的 Cloudflare 快速隧道（无需开端口/自建反代）。详见文末各节。
+
 ---
 
 ## 一、为什么要自建客户端
