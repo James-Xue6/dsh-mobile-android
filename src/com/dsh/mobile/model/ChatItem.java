@@ -32,6 +32,13 @@ public final class ChatItem {
     public boolean resolved;
     public String resolvedOutcome = "";
     /**
+     * 已发出、正在等电脑端回执（评审 P0-3）。
+     * 这段窗口里卡片显示「已发送，等待电脑确认…」且不出现按钮：既不能显示 ✓
+     * （回执没到 = 可能进了黑洞），也不能让用户重复点。回执到了置 false 并 resolved=true；
+     * 看门狗超时则回滚为未处理。
+     */
+    public boolean pendingConfirm;
+    /**
      * 非空表示这次操作根本没发出去（断线时点了批准/提交）。
      * 卡片会显示这条提示但保留按钮，用户恢复连接后可重试（评审 P0-3）。
      */

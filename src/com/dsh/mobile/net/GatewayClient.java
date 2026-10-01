@@ -90,6 +90,12 @@ public final class GatewayClient {
      * 所以 n>=4 视为"退避已顶格"，此时网络恢复值得让网络回调立刻补一次重连。
      */
     private static final int BACKOFF_MAX_ATTEMPTS = 4;
+    /**
+     * 503「网关没开」时的重连间隔：5 分钟。
+     * 这个场景不该停止重连（"先开 App、后开网关"是常态），但也没必要每 15s 撞一次 ——
+     * 所以间隔拉长、wantConnected 保持 true（评审 P1-4 回归修复）。
+     */
+    private static final long GATEWAY_OFF_RETRY_MS = 300_000L;
 
     private volatile Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -106,7 +112,7 @@ public final class GatewayClient {
      * 形成 ~1.6s 一轮的无限热重连（历史日志里连续出现过 85 次），也让 backoffAtMax() 那道
      * 网络回调闸门形同虚设。改为 READY 连续存活 ≥ READY_STABLE_MS 才清零。
      */
-    private static final long READY_STABLE_MS = 30_000L;
+    private static final long READY_STABLE_MS = 120_000L;
     /** 存活不足这个时长的连接算"短命"，按次数罚时（退避上限 BACKOFF_CEILING_MS）。 */
     private static final long SHORT_LIVED_MS = 5_000L;
     /** 短命连接的退避上限：60s（普通失败仍按 15s 封顶，不牵连正常重连）。 */
@@ -217,13 +223,25 @@ public final class GatewayClient {
     }
 
     /**
+     * 「链路还活着」的判据：最近一次收到任何入站帧距今不超过这么久。
+     * 正常连接每 25s 一个 ping 周期必有 pong 回来，30s 足够宽松；
+     * 但电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 75s 都还是 READY，
+     * 光看 state 会把帧送进黑洞（评审 P0-3 / P1 盲区收口）。
+     */
+    private static final long CAN_SEND_FRESH_MS = 30_000L;
+
+    /**
      * 当前连接是否真的能把帧发出去（UI 在「操作成功」前判断，避免断网时谎报成功）。
      * 除了 ws 非空且未关闭，还要求已经握手完成（READY）：重连窗口里 ws 可能已存在但
      * 还没拿回 hello，这时 sendText 会被静默丢进未就绪的写队列 —— 正是要修的那种"谎报"。
+     * 另外要求「最近 CAN_SEND_FRESH_MS 内有入站帧」：READY 只说明握手成功过，
+     * 半开链路（对端网卡关掉、隧道断掉）在 75s 假连接判定触发之前仍是 READY。
      */
     public boolean canSend() {
         WsClient c = ws;
-        return c != null && !c.isClosed() && state == State.READY;
+        if (c == null || c.isClosed() || state != State.READY) return false;
+        long last = c.lastInboundAt();
+        return last > 0 && System.currentTimeMillis() - last <= CAN_SEND_FRESH_MS;
     }
 
     /** 用户是否还希望保持连接（disconnect() 之后为 false）；供网络变化时判断要不要补一次重连。 */
@@ -235,6 +253,23 @@ public final class GatewayClient {
      * 抖动时退避就永远是最小值。调用方据此只在"已经失败"或"退避已顶格"时才补一次。
      */
     public boolean backoffAtMax() { return reconnectAttempt.get() >= BACKOFF_MAX_ATTEMPTS; }
+
+    /**
+     * 网络变化时补一次重连，**不重置退避**（评审 P1-9）。
+     *
+     * 不能直接用 connect()：它会 reconnectAttempt.set(0)，网络一抖动（onCapabilitiesChanged
+     * 来得很频繁）退避就永远停在最小值，等于把自动退避废掉。
+     *
+     * state==READY 时也允许调用，因为 WiFi→4G 之后旧 socket 看着还活着（TCP 不会立刻
+     * FIN），实际已经发不出帧，只能干等 75s 假连接判定；主动重开一条能立刻恢复。
+     * 调用方负责节流（MainActivity 用 lastNetReconnectAt）。
+     */
+    public void retryNow() {
+        if (!wantConnected || manualClose) return;
+        if (url.isEmpty()) return;
+        if (!guardCleartext(url)) return;   // 与 connect() 同一道明文闸门
+        open();
+    }
 
     public void disconnect() {
         wantConnected = false;
@@ -345,8 +380,16 @@ public final class GatewayClient {
                     String msg = error == null ? "未知错误" : String.valueOf(error.getMessage());
                     if (msg.contains("401")) { wantConnected = false; setState(State.UNAUTHORIZED, msg); return; }
                     if (msg.contains("503")) {
-                        // 网关没开：每 15s 重试一次只会耗电刷日志，明确文案后停下（评审 P1-4）
-                        wantConnected = false;
+                        // 503 = 电脑端网关还没开。真实场景就是"先开 App、后开网关"：
+                        // 把 wantConnected 置 false 会让这个冷启动场景彻底失去自愈能力
+                        // ——连网络回调里的 retryIfWanted() 也会因 !wantConnected() 直接返回
+                        // （评审 P1-4 的回归）。保留 wantConnected=true，只把重连间隔拉长到
+                        // 5 分钟；同时把退避标成"顶格"，让网络变化回调可以立刻补一次
+                        // （用户开完网关常伴随网络抖动，不必干等 5 分钟）。
+                        reconnectAttempt.set(Math.max(reconnectAttempt.get(), BACKOFF_MAX_ATTEMPTS));
+                        scheduleReconnect("网关未开启(503)，稍后自动重试", GATEWAY_OFF_RETRY_MS);
+                        // 放在 scheduleReconnect 之后：两帧都 post 到主线程，后一帧胜出，
+                        // 用户看到的是明确的"网关没开"红字而不是含糊的"正在连接"。
                         setState(State.GATEWAY_OFF, msg);
                         return;
                     }
@@ -363,12 +406,19 @@ public final class GatewayClient {
         }
     }
 
-    private void scheduleReconnect(String detail) {
+    private void scheduleReconnect(String detail) { scheduleReconnect(detail, 0L); }
+
+    /**
+     * @param minDelayMs 本次重连的最短间隔（0 = 只用指数退避）。
+     *        503「网关没开」用它把间隔拉长到 5 分钟。
+     */
+    private void scheduleReconnect(String detail, long minDelayMs) {
         if (!wantConnected || manualClose) return;
         final Listener l2 = listener;
         if (l2 != null) main.post(() -> l2.onReconnectScheduled(detail));
         int n = reconnectAttempt.incrementAndGet();
         long delay = Math.min(15000L, 800L * (1L << Math.min(n, 4)));
+        if (delay < minDelayMs) delay = minDelayMs;
         // 短命连接罚时（评审 P1-2）：网关"接受连接后立刻关"时，光靠 hello 不清零还不够
         // —— 指数只爬到 12.8s 就封顶。这里按累计短命次数继续放大，封顶 60s，
         // 让病态网关的轮询彻底降温；普通失败路径不受影响（shortLivedCount 为 0）。
@@ -464,15 +514,17 @@ public final class GatewayClient {
             // 假连接防护：ping 只发不验 pong 时，电脑休眠/路由重启/隧道断掉都不会有 FIN，
             // 界面会永远显示"已连接"而消息静默丢失。这里用"最近一次收到任何帧的时间"判定，
             // 不用 setSoTimeout（会与阻塞读循环冲突），超时即主动正常关闭走既有重连逻辑。
-            // 关闭码必须是 1000/1001：RFC6455 §7.4.1 把 1005/1006 列为保留码，
-            // 禁止出现在 Close 帧里 —— 写 1006 会被对端 ws 库判成 1002 协议错误，
-            // 面板日志也会记成异常关闭。
+            // 关闭码必须是 RFC6455 定义且非保留的码：1005/1006/1015 是保留码，禁止出现在
+            // Close 帧里。旧代码写 1006，对端 node `ws` 收到会抛未捕获的
+            // RangeError: Invalid WebSocket frame: invalid status code 1006（网关只注册了
+            // message/close，没有 error 处理器，靠宿主兜底才没崩）。这里用 1011（服务端
+            // 遭遇意外情况），而不是 1000：这是失败驱动的关闭，不该被对端读成"正常结束"。
             if (c != null && !c.isClosed()) {
                 long last = c.lastInboundAt();
                 if (last > 0 && System.currentTimeMillis() - last > STALE_INBOUND_MS - STALE_INBOUND_TOLERANCE_MS) {
                     rec("! " + (STALE_INBOUND_MS / 1000) + "s 无入站帧，判定连接已失效");
                     setState(State.CONNECTING, "连接已失效，正在重连");
-                    c.close(1000, "连接已失效，正在重连");
+                    c.close(1011, "连接已失效，正在重连");
                     return;   // 断开由 onClosed 接管并安排重连，ping 由 stopPing 停掉
                 }
             }

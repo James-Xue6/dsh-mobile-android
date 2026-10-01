@@ -98,6 +98,10 @@ public final class MainActivity extends Activity implements
     private String lastFeedbackDraft = "";
     /** 自动切换端点只用一次，连接成功或手动切换后复位。 */
     private boolean failoverUsed = false;
+    /** READY 稳定存活计时任务：只有真的稳住了才解禁端点故障切换（评审 P1-16）。 */
+    private Runnable failoverResetTask;
+    /** READY 连续存活满这么久，才允许下一次「内网/公网」自动切换。 */
+    private static final long FAILOVER_RESET_MS = 60_000L;
     /** 非空表示正在配对；失败会换成下一个候选地址重试。 */
     private String pendingPairCode = null;
     private java.util.List<String> pairCandidates = new java.util.ArrayList<>();
@@ -179,6 +183,8 @@ public final class MainActivity extends Activity implements
     // 不用等退避计时器到点。
     private android.net.ConnectivityManager.NetworkCallback netCallback;
     private long lastNetReconnectAt = 0L;
+    /** 上一次看到的默认网络句柄：只有它真的变了，才认为"网卡换了"（WiFi→4G）。 */
+    private String lastNetworkKey = "";
 
     private void registerNetworkCallback() {
         if (netCallback != null) return;
@@ -188,13 +194,13 @@ public final class MainActivity extends Activity implements
             if (cm == null) return;
             netCallback = new android.net.ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(android.net.Network network) {
-                    retryIfWanted();
+                    onNetworkChanged(network);
                 }
                 @Override public void onCapabilitiesChanged(android.net.Network network,
                                                             android.net.NetworkCapabilities caps) {
                     if (caps != null && caps.hasCapability(
                             android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                        retryIfWanted();
+                        onNetworkChanged(network);
                     }
                 }
             };
@@ -203,26 +209,49 @@ public final class MainActivity extends Activity implements
     }
 
     /**
-     * 网络变了：用户还希望连着、但当前不是 READY → 立刻补一次重连（3s 节流防抖动刷屏）。
-     *
-     * 关键：只在「已经失败」或「自动重连的退避已经顶格」时才补。onCapabilitiesChanged
-     * 触发得非常频繁，而 connect() 会无条件把 reconnectAttempt 清零 —— 照旧写法，
-     * 网络一抖动退避就永远停在最小值（800ms~1.6s），重连风暴反而是自己制造的。
-     * 现状下 state==FAILED 也会同时把 wantConnected 置 false（上面第一道闸就返回了），
-     * 所以真正生效的判据是「退避顶格」；FAILED 分支留着，防止以后 connect() 语义变化。
+     * 网络回调统一入口：先判断"是不是真的换了一张网卡"。
+     * onCapabilitiesChanged 触发极其频繁（信号强弱、带宽变化都会来），
+     * 用它去重连会变成网络一抖就重开连接；而且 READY 时旧 socket 看着还活着，
+     * 只有句柄真的变了（WiFi→4G）才需要主动重开（评审 P1-9）。
      */
-    private void retryIfWanted() {
+    private void onNetworkChanged(android.net.Network network) {
+        String key = network == null ? "" : String.valueOf(network);
+        boolean handleChanged = !key.equals(lastNetworkKey);
+        lastNetworkKey = key;
+        retryIfWanted(handleChanged);
+    }
+
+    /**
+     * 网络变了：用户还希望连着 → 补一次重连。
+     *
+     * 分两条路：
+     *  - 非 READY：只在「已经失败」或「自动重连的退避已经顶格」时才补。照旧写法
+     *    （无条件 connect()）网络一抖动退避就永远停在最小值，重连风暴反而是自己制造的。
+     *  - READY 且**网络句柄真的换了**：旧 socket 看着还活着（TCP 不会立刻 FIN），
+     *    实际已发不出帧，不补就要干等 75s 假连接判定（评审 P1-9）。
+     * 两条路都走 retryNow()（保留退避），不再用 connect()。
+     */
+    private void retryIfWanted(boolean networkHandleChanged) {
         if (gw == null || !store.paired()) return;
         if (!gw.wantConnected()) return;
-        GatewayClient.State st = gw.state();
-        if (st == GatewayClient.State.READY) return;
-        if (st != GatewayClient.State.FAILED && !gw.backoffAtMax()) return;
         if (store.url().isEmpty()) return;
+        GatewayClient.State st = gw.state();
         long now = System.currentTimeMillis();
+        if (st == GatewayClient.State.READY) {
+            // 只有网卡真的换了才值得断开重连；单纯的能力/信号变化不能算（10s 节流兜底）。
+            if (!networkHandleChanged) return;
+            if (now - lastNetReconnectAt < 10000L) return;
+            lastNetReconnectAt = now;
+            gw.retryNow();
+            return;
+        }
+        if (st != GatewayClient.State.FAILED && !gw.backoffAtMax()) return;
         if (now - lastNetReconnectAt < 3000L) return;
         lastNetReconnectAt = now;
-        // 明文校验在 connect() 内部统一拦截，这里不必重复
-        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
+        // 用 retryNow() 而不是 connect()：后者会把 reconnectAttempt 清零，
+        // 网络抖动时退避就退化成固定 3s 重连（评审 P1-9）。
+        // 明文校验在 retryNow() 内部统一拦截，这里不必重复。
+        gw.retryNow();
     }
 
     @Override
@@ -557,11 +586,16 @@ public final class MainActivity extends Activity implements
                 || st == GatewayClient.State.GATEWAY_OFF);
         // 断线（进入任何非 READY 状态）时把在途下载判失败：dlByRequest/dlByTransfer 只在
         // 完成/失败时清理，断线后这两张表再也没人来收，卡片永远停在「下载中 x%」（评审 P1-15）。
-        if (st != GatewayClient.State.READY) failInFlightDownloads("连接已断开");
+        if (st != GatewayClient.State.READY) {
+            failInFlightDownloads("连接已断开");
+            cancelFailoverReset();   // 掉线就撤掉"稳定计时"，别让它替新连接解禁（评审 P1-16）
+        }
         if (st == GatewayClient.State.READY) {
-            // 连上了：允许下一次网络抖动再自动切一次端点，否则一次抖动会把用户永久钉在
-            // 公网或内网（评审 P1-1）。
-            failoverUsed = false;
+            // 连上了就允许下一次网络抖动再自动切一次端点，否则一次抖动会把用户永久钉在
+            // 公网或内网（评审 P1-1）。但不能一 READY 就解禁（评审 P1-16）：
+            // 连接反复"连上就被断"时会在内网/公网之间来回切，每轮都白失败一次。
+            // 改为 READY 稳定存活 FAILOVER_RESET_MS 后才解禁。
+            armFailoverReset();
             // 重连后看门狗要撤（避免按钮永久卡 ■），但"运行中"标记不能无条件复位（评审 N1）：
             // 长工具执行中重连时，快照可能不含 assistantStream.activeAttempt，
             // 旧写法无条件 setRunning(false) 会把「运行中」和停止按钮一起抹掉，
@@ -876,7 +910,9 @@ public final class MainActivity extends Activity implements
         it.rpcId = rpcId;
         it.resolved = false;
         it.resolvedOutcome = "";
+        it.pendingConfirm = false;   // 网关重新推送 = 电脑端还在等：撤掉"等待确认"，按钮重新出现
         it.sendError = "";   // 网关重新推送 = 仍未处理，清掉上次"没发出去"的提示
+        cancelInteractionWatchdog(key);   // 卡片已被网关重新推送 = 这次决策没落地，撤掉待确认看门狗
         it.approvalId = approvalId;
         it.callId = frame.optString("callId", "");
         it.toolName = frame.optString("toolName", "");
@@ -905,6 +941,8 @@ public final class MainActivity extends Activity implements
             existing.sendError = "";
             existing.resolved = false;
             existing.resolvedOutcome = "";
+            existing.pendingConfirm = false;   // 网关重放 = 电脑端还在等，撤掉"等待确认"（评审 P0-3）
+            cancelInteractionWatchdog(key);    // 决策没落地，撤掉待确认看门狗，避免超时误报
             if (convo != null) { convo.setItems(items); convo.refreshNow(); }
             return;
         }
@@ -930,13 +968,21 @@ public final class MainActivity extends Activity implements
                 : approvalCard(rpcId, approvalId);
         if (it == null) return;
         it.sendError = "";
+        it.pendingConfirm = false;   // 回执到了：撤掉「已发送，等待电脑确认…」
         cancelSendWatchdog();
         // 回执到了：按卡片 key 撤看门狗（只撤这一张卡，别误撤别人正在等的那张）。
         // 必须按 key 而不是对象身份：onSnapshot/subscribeCurrent 会 items.clear()+byKey.clear()
         // 重建 ChatItem，对象身份必然失配 → 回执撤不掉看门狗 → 误报"电脑端没有确认"（评审 P0-3）。
         cancelInteractionWatchdog(it.key);
         if ("question-response".equals(kind) || "approval-response".equals(kind)) {
-            if (!frame.optBoolean("accepted", true)) {
+            if (frame.optBoolean("accepted", true)) {
+                // 已受理：这时才把卡片标成完成（评审 P0-3：此前只处理了 accepted=false，
+                // 因为旧实现是"先乐观 ✓"，现在改成等回执，这里必须补上落定）。
+                it.resolved = true;
+                if (it.resolvedOutcome == null || it.resolvedOutcome.isEmpty()) {
+                    it.resolvedOutcome = "question-response".equals(kind) ? "answered" : "";
+                }
+            } else {
                 it.resolved = true;
                 it.resolvedOutcome = frame.optString("reason", "not-pending");
             }
@@ -944,7 +990,11 @@ public final class MainActivity extends Activity implements
             return;
         }
         it.resolved = true;
-        it.resolvedOutcome = frame.optString("outcome", "");
+        // 网关带了权威结论（outcome）就覆盖；没带则保留提交时记下的本地结论
+        // （allowed-once / answered / cancelled）—— 否则卡片会从「✓ 已批准」退化成
+        // 「已由其他端处理」，看起来像是别人处理的。
+        String authoritative = frame.optString("outcome", "");
+        if (!authoritative.isEmpty()) it.resolvedOutcome = authoritative;
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
     }
 
@@ -975,13 +1025,28 @@ public final class MainActivity extends Activity implements
             return;
         }
         cancelSendWatchdog();
-        ChatItem stream = streamAttemptKey == null ? null : byKey.remove(streamAttemptKey);
-        if (stream != null) items.remove(stream);
+        // 保留用户已经看到的输出：只把流式气泡"定型"（停转圈、去掉进行中标记），
+        // 不能整段删除 —— 旧写法把 streamAttemptKey 指向的气泡从 items 里摘掉，
+        // 半截回答直接消失（评审 P1-5）。只有完全没吐出任何内容时才摘掉这个空壳。
+        ChatItem stream = streamAttemptKey == null ? null : byKey.get(streamAttemptKey);
+        if (stream != null) {
+            stream.streaming = false;
+            if (stream.text.trim().isEmpty() && stream.reasoning.trim().isEmpty()) {
+                byKey.remove(streamAttemptKey);
+                items.remove(stream);
+            }
+        }
         streamAttemptKey = null;
         for (ChatItem ci : items) {
             if (ci.kind == ChatItem.ASSISTANT && ci.streaming) ci.streaming = false;
         }
         setRunning(false);
+        // 流被中断不代表订阅还在：补一次 subscribe 让这个会话的实时流自己恢复，
+        // 不然用户得手动切走再切回来才有新消息（评审 P1-5）。
+        // 网关会回一条 replace 语义的 session-snapshot，把列表按权威历史重建。
+        if (!currentSessionId.isEmpty() && gw.wantConnected()) {
+            gw.subscribe(currentSessionId);
+        }
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         String why = (message == null || message.isEmpty())
                 ? (code == null || code.isEmpty() ? "" : code) : message;
@@ -991,6 +1056,9 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onProtocolError(String code, String message, String requestType, String sessionId) {
+        // 网关用 {kind:'error'} 拒绝（而不是回 sent）时，这次发送其实已经有结论了：
+        // 撤掉 30s 发送看门狗，否则错误提示之后还会再叠一句矛盾的"可能没发出去"（评审 P1-8）。
+        cancelSendWatchdog();
         if ("history-format-mismatch".equals(code)) {
             historyFormatVersion = 4;
             nextBeforeSeq = null;
@@ -1217,6 +1285,29 @@ public final class MainActivity extends Activity implements
             try { if (d.temp != null) d.temp.delete(); } catch (Throwable ignored) { }
         }
         Toast.makeText(this, "下载已中断：" + why, Toast.LENGTH_LONG).show();
+    }
+
+    /**
+     * READY 稳定存活 FAILOVER_RESET_MS 之后才解禁端点故障切换（评审 P1-16）。
+     * 旧写法每次收到 hello（READY）就 failoverUsed=false：连接反复"连上就被断"时，
+     * 每一轮都会在内网/公网之间来回切一次，两个端点轮流白失败。
+     */
+    private void armFailoverReset() {
+        cancelFailoverReset();
+        failoverResetTask = new Runnable() {
+            @Override public void run() {
+                failoverResetTask = null;
+                // 到点时还必须是 READY：中间掉过线就不算"稳定存活"
+                if (gw != null && gw.state() == GatewayClient.State.READY) failoverUsed = false;
+            }
+        };
+        uiHandler.postDelayed(failoverResetTask, FAILOVER_RESET_MS);
+    }
+
+    private void cancelFailoverReset() {
+        Runnable r = failoverResetTask;
+        failoverResetTask = null;
+        if (r != null) uiHandler.removeCallbacks(r);
     }
 
     private static byte[] decodeB64(String s) {
@@ -1710,21 +1801,40 @@ public final class MainActivity extends Activity implements
     // 到期仍未收到该会话任何响应 → 复位并明确告诉用户"可能没发出去，可以重试"。
 
     private static final long SEND_WATCHDOG_MS = 30_000L;
+    /**
+     * 图片发送的看门狗时长。单帧 base64 可达 ~4MB（3MB 图片编码后约 4MB），
+     * 慢速上行 30s 内发不完 —— 用 30s 会误报"没发出去"并诱导用户重复发送（评审 P1-9）。
+     * 按负载放大到 120s。
+     */
+    private static final long IMAGE_WATCHDOG_MS = 120_000L;
     private final android.os.Handler uiHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /** 最近一次从输入框发出的原文：看门狗超时时回填（评审 P1-10）。 */
+    private String lastSentText = "";
 
     private final Runnable sendWatchdog = new Runnable() {
         @Override public void run() {
             if (!running) return;
             setRunning(false);
+            // ConversationView 是先 input.setText("") 再 host.onSend(text) 的，所以提示
+            // "可以重试"的那一刻输入框已经空了。这里把原文回填回去（只在输入框仍为空时填，
+            // 不覆盖用户已经敲的新内容）。
+            if (convo != null && lastSentText != null && !lastSentText.isEmpty()
+                    && convo.draftText().trim().isEmpty()) {
+                convo.setDraft(lastSentText);
+                convo.focusInput();
+            }
             Toast.makeText(MainActivity.this, "没收到电脑的回应，可能没发出去，可以重试",
                     Toast.LENGTH_LONG).show();
         }
     };
 
-    private void armSendWatchdog() {
+    private void armSendWatchdog() { armSendWatchdog(SEND_WATCHDOG_MS); }
+
+    private void armSendWatchdog(long ms) {
         uiHandler.removeCallbacks(sendWatchdog);
-        uiHandler.postDelayed(sendWatchdog, SEND_WATCHDOG_MS);
+        uiHandler.postDelayed(sendWatchdog, ms);
     }
 
     private void cancelSendWatchdog() {
@@ -1760,12 +1870,18 @@ public final class MainActivity extends Activity implements
         if (armed == null) return;
         ChatItem live = byKey.get(key);
         if (live == null) return;                     // 卡片已不在列表：没有可回滚的对象
-        if (live != armed) {                          // 重建后迁移迟到：先把乐观状态搬到当前这张
+        if (live != armed) {                          // 重建后迁移迟到：先把待确认状态搬到当前这张
             live.resolved = armed.resolved;
             live.resolvedOutcome = armed.resolvedOutcome;
+            live.pendingConfirm = armed.pendingConfirm;
             live.sendError = armed.sendError;
         }
-        if (!live.resolved) return;                   // 已被回执/网关历史改判，别再回滚
+        // 只有"确实还在等回执"才回滚：
+        //  - 已收到回执 → pendingConfirm 已置 false，不动；
+        //  - 网关重放把卡片复位成了新的待处理卡 → pendingConfirm 也已置 false，不动；
+        //  - 还在等 → 回滚为未处理，按钮重新出现，用户可以再点一次。
+        if (!live.pendingConfirm) return;
+        live.pendingConfirm = false;
         live.resolved = false;                        // 回滚：按钮重新出现，用户可再点一次
         live.resolvedOutcome = "";
         live.sendError = "未确认，请重试";
@@ -1810,6 +1926,7 @@ public final class MainActivity extends Activity implements
             ChatItem old = e.getValue();
             fresh.resolved = old.resolved;
             fresh.resolvedOutcome = old.resolvedOutcome;
+            fresh.pendingConfirm = old.pendingConfirm;
             fresh.sendError = old.sendError;
             e.setValue(fresh);
         }
@@ -1925,7 +2042,14 @@ public final class MainActivity extends Activity implements
                 .setView(input)
                 .setPositiveButton("保存", (d, w) -> {
                     String t = input.getText().toString().trim();
-                    if (!t.isEmpty()) gw.renameSession(s.id, t);
+                    if (t.isEmpty()) return;
+                    // 断网时 sendRaw 是静默失败的：先确认能发再发，别让用户以为改好了（评审 P1-12）
+                    if (!gw.canSend()) {
+                        Toast.makeText(this, "还没连上电脑端，重命名没有发出去；连上后请重试",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    gw.renameSession(s.id, t);
                 })
                 .setNegativeButton("取消", null)
                 .show();
@@ -1933,6 +2057,13 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onArchive(SessionInfo s) {
+        // 断网时 sendRaw 静默失败：既不能谎报成功，也不能动本地的 archivedIds
+        // ——旧写法断网也把行删掉，重启后它又回来（评审 P1-12）。
+        if (!gw.canSend()) {
+            Toast.makeText(this, "还没连上电脑端，这次归档没有发出去；连上后请重试",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
         gw.archiveSession(s.id);
         archivedIds.add(s.id);
         if (listScreen != null) listScreen.setRows(buildRows());
@@ -1953,6 +2084,7 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没连上电脑端，请先在设置里配对/连接", Toast.LENGTH_LONG).show();
             return;
         }
+        lastSentText = text == null ? "" : text;
         if (currentSessionId.isEmpty()) {
             // 新会话：先本地回显，等 sent 回来拿 sessionId
             pendingUserText = text;
@@ -1972,6 +2104,12 @@ public final class MainActivity extends Activity implements
     @Override
     public void onStop() {
         if (currentSessionId.isEmpty()) return;
+        // 断网时"已请求停止"是谎报：停止帧进黑洞，用户以为停了，实际回合还在跑（评审 P1-12）
+        if (!gw.canSend()) {
+            Toast.makeText(this, "还没连上电脑端，停止请求没有发出去；连上后请重试",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
         gw.stopSession(currentSessionId);
         Toast.makeText(this, "已请求停止", Toast.LENGTH_SHORT).show();
     }
@@ -2023,7 +2161,10 @@ public final class MainActivity extends Activity implements
         }
         item.sendError = "";
         gw.approvalResponse(item.rpcId, currentSessionId, item.approvalId, outcome);
-        item.resolved = true;
+        // 先显示「已发送，等待电脑确认…」：收到 approval-resolved / approval-response 回执
+        // 才显示 ✓；6s 内收不到就回滚为未处理。不做乐观 ✓（回执没到就可能是进了黑洞）（评审 P0-3）。
+        item.pendingConfirm = true;
+        item.resolved = false;
         item.resolvedOutcome = outcome;
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         armInteractionWatchdog(item);   // 等 approval-resolved / approval-response 回执，超时回滚
@@ -2040,7 +2181,9 @@ public final class MainActivity extends Activity implements
         }
         item.sendError = "";
         gw.questionAnswer(item.rpcId, currentSessionId, answers);
-        item.resolved = true;
+        // 同审批卡：等 question-response(accepted:true) 回执才显示 ✓（评审 P0-3）
+        item.pendingConfirm = true;
+        item.resolved = false;
         item.resolvedOutcome = "answered";
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         armInteractionWatchdog(item);   // 等 question-response 回执，超时回滚
@@ -2057,7 +2200,9 @@ public final class MainActivity extends Activity implements
         }
         item.sendError = "";
         gw.questionCancel(item.rpcId, currentSessionId);
-        item.resolved = true;
+        // 同审批卡：等 question-response 回执才落定（评审 P0-3）
+        item.pendingConfirm = true;
+        item.resolved = false;
         item.resolvedOutcome = "cancelled";
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         armInteractionWatchdog(item);   // 等 question-response 回执，超时回滚
@@ -2798,7 +2943,9 @@ public final class MainActivity extends Activity implements
                     gw.sendMessageWithImage(currentSessionId, "", mt, b64, name);
                     setRunning(true);
                     if (convo != null) convo.setRunning(true, runningHint());
-                    armSendWatchdog();
+                    // 大负载（base64 单帧可达 ~4MB）：看门狗按负载放大到 120s，
+                    // 别用文本的 30s 去误判"没发出去"（评审 P1-9）。
+                    armSendWatchdog(IMAGE_WATCHDOG_MS);
                 });
             } catch (Throwable e) {
                 final String msg = e.getMessage() == null ? String.valueOf(e) : e.getMessage();

@@ -266,6 +266,12 @@ public final class ChatAdapter extends BaseAdapter {
             TextView done = Ui.text(ctx, label, 13f, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 9), 0, 0);
             card.addView(done);
+        } else if (it.pendingConfirm) {
+            // 已发出、还没等到电脑端回执：不显示 ✓（回执没到就可能是进了黑洞），
+            // 也不显示按钮（避免重复提交）（评审 P0-3）。
+            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", 13f, Ui.INK_SUB, true);
+            waiting.setPadding(0, Ui.dp(ctx, 9), 0, 0);
+            card.addView(waiting);
         } else {
             LinearLayout actions = Ui.row(ctx);
             actions.setLayoutParams(Ui.fill());
@@ -386,6 +392,11 @@ public final class ChatAdapter extends BaseAdapter {
             TextView done = Ui.text(ctx, label, 13f, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 10), 0, 0);
             card.addView(done);
+        } else if (it.pendingConfirm) {
+            // 与审批卡一致：回执没到就不显示 ✓、也不显示按钮（评审 P0-3）。
+            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", 13f, Ui.INK_SUB, true);
+            waiting.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+            card.addView(waiting);
         } else {
             LinearLayout actions = Ui.row(ctx);
             actions.setLayoutParams(Ui.fill());
