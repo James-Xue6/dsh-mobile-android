@@ -2354,6 +2354,41 @@ public final class MainActivity extends Activity implements
         return "";
     }
 
+    /**
+     * 反馈 webhook 的主机白名单（安全评审 P1-17）。
+     *
+     * webhook 地址来自**远端未签名的清单**（仓库 dist/version.json 的 feedback 段，
+     * 经 cdn.jsdelivr.net 或 raw.githubusercontent.com 拉取后存进本地偏好）。
+     * 清单或 CDN 任一处被篡改，App 就会在用户点「发送」时把反馈正文连同环境信息
+     * （版本 / 连接方式 / 网关地址 gw.debugState() / store.url()）POST 到攻击者服务器。
+     *
+     * 这里只放行已知反馈服务商的 https 主机；白名单外一律忽略，自动退回
+     * 「GitHub Issue / 邮件」通道 —— 那条路要用户自己看着页面确认提交，不会被静默外发。
+     * 作者更换服务商时在这里补一个域名即可。
+     */
+    private static final String[] FEEDBACK_WEBHOOK_HOSTS = {
+            "formsubmit.co", "formspree.io", "getform.io", "web3forms.com",
+            "sctapi.ftqq.com", "pushplus.plus",
+            "qyapi.weixin.qq.com", "oapi.dingtalk.com", "open.feishu.cn",
+            "hooks.slack.com", "discord.com", "api.telegram.org",
+    };
+
+    /** 白名单内返回原地址，否则返回空串（调用方据此退回其它通道）。 */
+    private static String allowedFeedbackWebhook(String webhook) {
+        if (webhook == null || webhook.trim().isEmpty()) return "";
+        String w = webhook.trim();
+        try {
+            java.net.URL u = new java.net.URL(w);
+            if (!"https".equalsIgnoreCase(u.getProtocol())) return "";
+            String host = u.getHost() == null ? "" : u.getHost().toLowerCase(java.util.Locale.ROOT);
+            if (host.isEmpty()) return "";
+            for (String allowed : FEEDBACK_WEBHOOK_HOSTS) {
+                if (host.equals(allowed) || host.endsWith("." + allowed)) return w;
+            }
+        } catch (Throwable ignored) { /* 解析不了就按不允许处理 */ }
+        return "";
+    }
+
     private void sendToAuthor(String body) {
         String t = body == null ? "" : body.trim();
         if (t.isEmpty()) {
@@ -2364,7 +2399,9 @@ public final class MainActivity extends Activity implements
         final String full = feedbackText(t);
         copyFeedback(full);   // 先复制一份，任何通道失败都不丢内容
         JSONObject fb = feedbackChannel();
-        String webhook = fb == null ? "" : fb.optString("webhook", "").trim();
+        // 远端清单给的 webhook 必须过白名单（见 allowedFeedbackWebhook）；不在白名单里
+        // 就当没配，退回下面的 Issue/邮件通道，避免被篡改的清单把反馈外发到任意主机。
+        String webhook = fb == null ? "" : allowedFeedbackWebhook(fb.optString("webhook", "").trim());
         if (!webhook.isEmpty()) {
             // 后台通道：App 直接 POST，用户什么都不用装、不用配置
             postFeedback(webhook, fb.optString("webhookKind", "generic"), full);
