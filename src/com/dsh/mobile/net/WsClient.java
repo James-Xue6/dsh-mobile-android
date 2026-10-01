@@ -74,6 +74,11 @@ public final class WsClient {
     private Thread reader;
     private volatile boolean closing;
     /**
+     * 本次关闭是否由「本地主动发起」（close()），而不是对端发来 Close 帧。
+     * 两者都要置 closing=true，但上报给上层的关闭码处理完全不同，见 run() 里的归一化。
+     */
+    private volatile boolean localClose;
+    /**
      * 断线时回报给上层的关闭码。默认 1006 是「本地」语义（没有收到 Close 帧就断了），
      * 只用于上报、绝不写进 Close 帧（见 close() 里的保留码降级）。
      */
@@ -210,7 +215,17 @@ public final class WsClient {
             post(listener::onOpen);
             loop();
 
-            if (closing) { lastCloseCode = 1000; lastCloseReason = "closed"; }
+            // 归一化只在「本地主动关闭」时做：本地 close() 后对端可能只回一个空 Close 帧，
+            // 把上报码统一成 1000/closed 能避免把「本地无 Close 帧即断线」的默认值 1006 报给上层。
+            //
+            // 反过来，**对端主动关闭时绝不能归一化**：真实网关会用 4003（authentication enabled /
+            // device revoked，lib/index.mjs:2742/2788）和 4004（mobile gateway disabled，:2280）主动关闭。
+            // 旧代码这里是 `if (closing)`，把对端语义码一律抹成 1000/"closed"，
+            // 于是 GatewayClient.onClosed 里 `code==4003 → 要求重新配对`、
+            // `code==4004 → GATEWAY_OFF 网关已关闭` 两条分支成了死代码：
+            // 实测（--fault close4003/close4004）网关已明确关闭后，App 仍在 3s→12s→51s 无限重连，
+            // 既不提示重新配对也不提示网关已关。
+            if (closing && localClose) { lastCloseCode = 1000; lastCloseReason = "closed"; }
         } catch (Throwable t) {
             if (!closing) {
                 // 关键：finally 里的 onClosed 会覆盖状态，这里先把真实原因写进去
@@ -307,6 +322,7 @@ public final class WsClient {
     public void close(int code, String reason) {
         if (!closed.compareAndSet(false, true)) return;
         closing = true;
+        localClose = true;
         // RFC6455 §7.4.1：1005/1006/1015 是保留码，只能本地使用，禁止写进 Close 帧。
         // 万一调用方（或对端回声）传进来，统一降级成 1000，避免对端 ws 库回 1002
         // 协议错误、面板记成异常关闭。
