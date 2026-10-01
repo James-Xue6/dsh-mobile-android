@@ -43,6 +43,9 @@ public final class GatewayClient {
 
         /** 文件下载事件：kind 为 file-download-opened / file-download-chunk / file-download-cancelled。 */
         void onDownload(String kind, JSONObject frame);
+
+        /** 因失败而安排重连时回调（用于自动切换内网/公网）。 */
+        default void onReconnectScheduled(String reason) { }
     }
 
     private static final String PROTO = "dsh-mobile-v1";
@@ -194,6 +197,8 @@ public final class GatewayClient {
 
     private void scheduleReconnect(String detail) {
         if (!wantConnected || manualClose) return;
+        final Listener l2 = listener;
+        if (l2 != null) main.post(() -> l2.onReconnectScheduled(detail));
         int n = reconnectAttempt.incrementAndGet();
         long delay = Math.min(15000L, 800L * (1L << Math.min(n, 4)));
         setState(State.CONNECTING, detail + " · " + (delay / 1000) + "s 后重试");

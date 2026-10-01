@@ -79,6 +79,8 @@ public final class MainActivity extends Activity implements
     private final Map<String, Integer> pendingBySession = new HashMap<>();
     /** 反馈草稿：发完不清空，方便继续补充。 */
     private String lastFeedbackDraft = "";
+    /** 自动切换端点只用一次，连接成功或手动切换后复位。 */
+    private boolean failoverUsed = false;
 
     // 当前会话的目标 / 任务提要
     private String planGoal = "";
@@ -1782,6 +1784,69 @@ public final class MainActivity extends Activity implements
         refreshFeedbackHint();
     }
 
+    /** 首次开启公网前的安全免责声明（勾选后才继续）。 */
+    private void confirmPublicAccess(final String lan, final String wan) {
+        android.widget.LinearLayout box = Ui.col(this);
+        int pad = Ui.dp(this, 20);
+        box.setPadding(pad, Ui.dp(this, 8), pad, 0);
+        box.addView(Ui.text(this,
+                "\u26A0 安全免责声明\n\n"
+                        + "开启公网 = 把这台电脑上的 DSH 暴露到互联网。DSH 能执行代码、读写文件，"
+                        + "任何人拿到公网地址和设备令牌，都可能访问甚至操作你的电脑。\n\n"
+                        + "请确认：\n"
+                        + "① 妥善保管设备令牌，别把配对二维码或配对串发给别人；\n"
+                        + "② 不用时及时「关闭公网隧道」，或在手机上切回「用内网」；\n"
+                        + "③ 隧道域名每次重启电脑都会变，变了重新扫一次码即可；\n"
+                        + "④ 公司/涉密网络请先确认合规。",
+                13f, Ui.INK, false));
+        final android.widget.CheckBox cb = new android.widget.CheckBox(this);
+        cb.setText("我已知情，同意开启");
+        cb.setTextSize(14f);
+        cb.setPadding(0, Ui.dp(this, 14), 0, 0);
+        box.addView(cb);
+
+        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+                .setView(box)
+                .setPositiveButton("我已知情，同意开启", null)
+                .setNegativeButton("取消", null)
+                .create();
+        dlg.show();
+        dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (!cb.isChecked()) {
+                Toast.makeText(this, "请先勾选「我已知情」", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            store.setRiskAck(true);
+            dlg.dismiss();
+            applyEndpoint(lan, wan, true);
+        });
+    }
+
+    /** 连不上时自动在「内网 / 公网」之间切一次（只切一次，避免来回跳）。 */
+    private boolean tryFailover() {
+        if (failoverUsed) return false;
+        String lan = store.lanUrl(), wan = store.wanUrl();
+        if (lan.isEmpty() || wan.isEmpty()) return false;
+        failoverUsed = true;
+        boolean toWan = !store.useWan();
+        store.setUseWan(toWan);
+        if (settingsView != null) settingsView.setUseWan(toWan);
+        Toast.makeText(this, toWan ? "内网连不上，自动改用公网…" : "公网连不上，自动改用内网…",
+                Toast.LENGTH_SHORT).show();
+        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
+        return true;
+    }
+
+    @Override
+    public void onReconnectScheduled(String reason) {
+        if (tryFailover()) return;
+        String active = store.url();
+        if (active.contains("trycloudflare.com") || reason.contains("404")) {
+            Toast.makeText(this, "公网地址可能已失效（隧道域名每次重启电脑都会变）\n"
+                    + "请在电脑面板重新「生成配对二维码」扫一次", Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void refreshFeedbackHint() {
         if (settingsView == null) return;
         int n = store.feedbackCount();
@@ -1813,6 +1878,12 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没填公网地址，请先在「公网地址」里填写", Toast.LENGTH_LONG).show();
             return;
         }
+        if (useWan && !store.riskAck()) { confirmPublicAccess(lan, wan); return; }
+        applyEndpoint(lan, wan, useWan);
+    }
+
+    /** 安全声明确认后（或切到内网时）真正执行切换。 */
+    private void applyEndpoint(String lan, String wan, boolean useWan) {
         store.setLanUrl(lan);
         store.setWanUrl(wan);
         store.setUseWan(useWan);
@@ -1946,7 +2017,25 @@ public final class MainActivity extends Activity implements
                 return;
             }
             store.setUrl(url);
-            gw.pair(url, code, store.deviceId(), store.deviceName());
+            // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
+              // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
+              String lan = "", wan = "";
+              JSONArray eps = payload.optJSONArray("endpoints");
+              if (eps != null) {
+                  for (int i = 0; i < eps.length(); i++) {
+                      String e = eps.optString(i, "").trim();
+                      if (e.isEmpty()) continue;
+                      if (Store.isPrivateUrl(e)) { if (lan.isEmpty()) lan = e; }
+                      else if (wan.isEmpty()) wan = e;
+                  }
+              }
+              if (Store.isPrivateUrl(url)) { if (lan.isEmpty()) lan = url; }
+              else if (wan.isEmpty()) wan = url;
+              if (!lan.isEmpty()) store.setLanUrl(lan);
+              if (!wan.isEmpty()) store.setWanUrl(wan);
+              store.setUseWan(lan.isEmpty() && !wan.isEmpty());
+              failoverUsed = false;
+              gw.pair(url, code, store.deviceId(), store.deviceName());
             settingsView.setStatus("正在配对 " + hostOf(url) + " …", false);
         } catch (Throwable t) {
             Toast.makeText(this, "配对串无法解析：" + t.getMessage(), Toast.LENGTH_LONG).show();

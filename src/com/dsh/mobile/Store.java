@@ -22,6 +22,7 @@ public final class Store {
     private static final String K_USE_WAN = "use_wan";
     private static final String K_INSECURE_TLS = "insecure_tls";
     private static final String K_FEEDBACK = "feedback_log";
+    private static final String K_RISK_ACK = "risk_ack";
 
     private final SharedPreferences sp;
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
@@ -73,6 +74,10 @@ public final class Store {
         while ((i = all.indexOf("\n---\n", i)) >= 0) { n++; i += 5; }
         return n;
     }
+
+    /** 是否已确认过「开启公网」的安全声明。 */
+    public boolean riskAck() { return sp.getBoolean(K_RISK_ACK, false); }
+    public void setRiskAck(boolean v) { sp.edit().putBoolean(K_RISK_ACK, v).apply(); }
 
     public boolean useWan() { return sp.getBoolean(K_USE_WAN, false); }
     public void setUseWan(boolean v) { sp.edit().putBoolean(K_USE_WAN, v).apply(); }

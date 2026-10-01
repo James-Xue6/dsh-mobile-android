@@ -133,6 +133,8 @@ window.__ModuleLoader__.load({
       var deviceName = nameState[0]
       var setDeviceName = nameState[1]
       var urlState = React.useState('')
+    var riskState = React.useState(false)
+    var riskOkState = React.useState(false)
       var manualUrl = urlState[0]
       var setManualUrl = urlState[1]
 
@@ -166,7 +168,8 @@ window.__ModuleLoader__.load({
           .then(function () { setBusy('') })
       }
 
-      function tunnel(action) {
+      function tunnel(action, confirmed) {
+          if (action === 'on' && !confirmed) { setRiskOk(false); setRiskOpen(true); return }
           setBusy('tunnel'); setError(''); setMessage('')
           var path = action === 'restart' ? '/tunnel/restart' : '/tunnel'
           var body = action === 'on' ? { enabled: true, mode: 'quick' }
@@ -393,7 +396,51 @@ window.__ModuleLoader__.load({
       if (message) children.push(React.createElement('div', { className: 'dsma-ok', key: 'msg' }, message))
       if (error) children.push(React.createElement('div', { className: 'dsma-error', key: 'err' }, error))
 
-      return React.createElement('div', { className: 'dsma-root' }, children)
+      // ---- 开启公网前的安全免责声明（每次都要勾选，和 dsh-pocket 一致）
+        if (riskOpen) {
+          children.push(React.createElement('div', {
+            key: 'risk',
+            style: { position: 'fixed', inset: '0', background: 'rgba(0,0,0,.45)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' },
+          },
+            React.createElement('div', {
+              style: { background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+                borderRadius: '14px', padding: '20px 22px', maxWidth: '560px', width: '100%',
+                boxShadow: '0 12px 40px rgba(0,0,0,.35)' },
+            },
+              React.createElement('div', { style: { fontSize: '15px', fontWeight: 600, marginBottom: '10px' } },
+                '⚠ 安全免责声明'),
+              React.createElement('div', { style: { fontSize: '13px', lineHeight: '21px' } },
+                '开启公网 = 把这台电脑上的 DSH 暴露到互联网。DSH 能执行代码、读写文件，'
+                + '任何人拿到公网地址和设备令牌，都可能访问甚至操作你的电脑。'),
+              React.createElement('div', { style: { fontSize: '13px', lineHeight: '21px', marginTop: '10px' } },
+                '请确认：① 妥善保管设备令牌，别把配对二维码/配对串发给别人；② 不用时立即「关闭公网隧道」；'
+                + '③ 隧道域名每次重启电脑都会变，变了在手机上重新扫一次码；④ 公司/涉密网络请先确认合规。'),
+              React.createElement('label', {
+                style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px',
+                  fontSize: '13px', cursor: 'pointer' },
+              },
+                React.createElement('input', {
+                  type: 'checkbox', checked: riskOk,
+                  onChange: function (e) { setRiskOk(e.target.checked) },
+                }),
+                '我已知情，同意开启'),
+              React.createElement('div', {
+                style: { display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' },
+              },
+                React.createElement('button', {
+                  type: 'button', className: 'dsma-btn',
+                  onClick: function () { setRiskOpen(false); setRiskOk(false) },
+                }, '取消'),
+                React.createElement('button', {
+                  type: 'button', className: 'dsma-btn dsma-btn-primary',
+                  onClick: function () {
+                    if (!riskOk) { setError('请勾选「我已知情」后再开启公网'); return }
+                    setRiskOpen(false); setRiskOk(false); tunnel('on', true)
+                  },
+                }, '我已知情，同意开启')))))
+        }
+        return React.createElement('div', { className: 'dsma-root' }, children)
     }
 
     // ------------------------------------------------------------------ 插件体
