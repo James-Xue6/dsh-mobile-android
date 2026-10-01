@@ -1829,6 +1829,20 @@ public final class MainActivity extends Activity implements
             startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)));
             refreshFeedbackHint();
         } catch (Throwable e) {
+            // 手机没装邮件 App 时 mailto 会打不开：改开 GitHub Issue 页（浏览器一定有）
+            String issues = fb == null ? "" : fb.optString("issues", "");
+            if (url.startsWith("mailto:") && !issues.isEmpty()) {
+                try {
+                    String q = issues + (issues.contains("?") ? "&" : "?")
+                            + "title=" + android.net.Uri.encode("【DSH 掌上通】意见反馈 v" + myVersionName())
+                            + "&body=" + android.net.Uri.encode(full);
+                    startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(q)));
+                    Toast.makeText(this, "本机没有邮件 App，已改用网页提交（内容也已复制）",
+                            Toast.LENGTH_LONG).show();
+                    refreshFeedbackHint();
+                    return;
+                } catch (Throwable ignored2) { /* 继续走复制兜底 */ }
+            }
             Toast.makeText(this, "打不开反馈通道，已复制到剪贴板：" + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
