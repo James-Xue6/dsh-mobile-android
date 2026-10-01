@@ -82,6 +82,13 @@ public final class MainActivity extends Activity implements
     private boolean hasMore = false;
     private boolean running = false;
     private long turnStartedAt = 0L;
+    /** 上一次 onState 的状态：重连时要区分"此前确实断线"与重复 READY（评审 N1）。 */
+    private GatewayClient.State lastGatewayState = GatewayClient.State.DISCONNECTED;
+    /**
+     * 重连时因"不敢断言回合已结束"而保守保留了 running：等网关的 sessions 权威标志
+     * 到达后再补判一次（评审 N1），否则停止按钮可能永久卡 ■。
+     */
+    private boolean runningUncertain = false;
     private String pendingUserText = null;
     private String streamAttemptKey = null;
     private String lastStateText = "";
@@ -195,11 +202,21 @@ public final class MainActivity extends Activity implements
         } catch (Throwable ignored) { /* 没有权限/老系统：不影响主流程 */ }
     }
 
-    /** 网络变了：用户还希望连着、但当前不是 READY → 立刻补一次重连（3s 节流防抖动刷屏）。 */
+    /**
+     * 网络变了：用户还希望连着、但当前不是 READY → 立刻补一次重连（3s 节流防抖动刷屏）。
+     *
+     * 关键：只在「已经失败」或「自动重连的退避已经顶格」时才补。onCapabilitiesChanged
+     * 触发得非常频繁，而 connect() 会无条件把 reconnectAttempt 清零 —— 照旧写法，
+     * 网络一抖动退避就永远停在最小值（800ms~1.6s），重连风暴反而是自己制造的。
+     * 现状下 state==FAILED 也会同时把 wantConnected 置 false（上面第一道闸就返回了），
+     * 所以真正生效的判据是「退避顶格」；FAILED 分支留着，防止以后 connect() 语义变化。
+     */
     private void retryIfWanted() {
         if (gw == null || !store.paired()) return;
         if (!gw.wantConnected()) return;
-        if (gw.state() == GatewayClient.State.READY) return;
+        GatewayClient.State st = gw.state();
+        if (st == GatewayClient.State.READY) return;
+        if (st != GatewayClient.State.FAILED && !gw.backoffAtMax()) return;
         if (store.url().isEmpty()) return;
         long now = System.currentTimeMillis();
         if (now - lastNetReconnectAt < 3000L) return;
@@ -533,16 +550,32 @@ public final class MainActivity extends Activity implements
     @Override
     public void onState(GatewayClient.State st, String detail) {
         lastStateText = detail == null ? "" : detail;
+        GatewayClient.State prevState = lastGatewayState;
+        lastGatewayState = st;
         boolean err = (st == GatewayClient.State.UNAUTHORIZED
                 || st == GatewayClient.State.FAILED
                 || st == GatewayClient.State.GATEWAY_OFF);
+        // 断线（进入任何非 READY 状态）时把在途下载判失败：dlByRequest/dlByTransfer 只在
+        // 完成/失败时清理，断线后这两张表再也没人来收，卡片永远停在「下载中 x%」（评审 P1-15）。
+        if (st != GatewayClient.State.READY) failInFlightDownloads("连接已断开");
         if (st == GatewayClient.State.READY) {
             // 连上了：允许下一次网络抖动再自动切一次端点，否则一次抖动会把用户永久钉在
             // 公网或内网（评审 P1-1）。
             failoverUsed = false;
-            // 重连后不再有"发送中"的回合：把看门狗和运行中标记一起复位，避免按钮永久卡 ■（评审 P0-2）
+            // 重连后看门狗要撤（避免按钮永久卡 ■），但"运行中"标记不能无条件复位（评审 N1）：
+            // 长工具执行中重连时，快照可能不含 assistantStream.activeAttempt，
+            // 旧写法无条件 setRunning(false) 会把「运行中」和停止按钮一起抹掉，
+            // 而后续 tool/* 事件不会重新置 running。仅在"此前确实断线"且能确认回合已结束时复位。
             cancelSendWatchdog();
-            if (running) setRunning(false);
+            if (running && prevState != GatewayClient.State.READY) {
+                if (turnRunningOnGateway()) {
+                    // 会话仍标着 running / 列表里还没有这个会话：先不够条件复位，
+                    // 交给 onSessions() 用权威 running 标志补判（否则按钮会永久卡 ■）。
+                    runningUncertain = true;
+                } else {
+                    setRunning(false);
+                }
+            }
             gw.requestSessions();
             // 断线会丢掉网关侧的订阅，重连后必须重新订阅，否则当前会话不再实时更新
             if (!currentSessionId.isEmpty()) {
@@ -559,6 +592,20 @@ public final class MainActivity extends Activity implements
             settingsView.setDiagnostics(gw.debugState() + "\n" + gw.traceText());
         }
         refreshListStatus();
+    }
+
+    /**
+     * 断线重连后判断当前会话的回合是否还在跑（评审 N1）。
+     * 用 sessions 列表里当前会话的 running 兜底；列表里还没有这个会话时返回 true
+     * （"不敢断言已结束"）—— 宁可多留一次停止按钮，也不要把正在跑的长工具抹掉。
+     * 只有当前根本没绑定会话（新对话）时才返回 false，允许按期复位。
+     */
+    private boolean turnRunningOnGateway() {
+        if (currentSessionId.isEmpty()) return false;
+        for (SessionInfo s : sessions) {
+            if (s != null && currentSessionId.equals(s.id)) return s.running;
+        }
+        return true;
     }
 
     @Override
@@ -626,6 +673,10 @@ public final class MainActivity extends Activity implements
         }
         if (listScreen != null) listScreen.setRows(buildRows());
         refreshListStatus();
+        // 重连时保守保留的"运行中"，用会话说里的权威 running 补判一次（评审 N1）：
+        // 快照的历史窗口可能不含 turn/end，只靠快照回放会漏掉"回合已在断线期间结束"，
+        // 那样停止按钮会一直卡着。这里只在网关明确说该会话已不在跑时才复位。
+        if (runningUncertain && !turnRunningOnGateway()) setRunning(false);
     }
 
     @Override
@@ -721,6 +772,8 @@ public final class MainActivity extends Activity implements
             }
         }
         rebuildOrder();
+        // items/byKey 刚刚整体重建：把"等在回执上"的卡片状态迁移到新对象（评审 P0-3）
+        migratePendingInteractions();
         if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
     }
 
@@ -844,8 +897,15 @@ public final class MainActivity extends Activity implements
         }
         String rpcId = frame.optString("rpcId", "");
         String key = "question:" + rpcId;
-        if (byKey.containsKey(key)) {
-            byKey.get(key).sendError = "";
+        ChatItem existing = byKey.get(key);
+        if (existing != null) {
+            // 网关重放提问 = 电脑端仍在等这次回答。必须和审批卡一样无条件复位 resolved：
+            // 半开连接窗口里被乐观标成「✓ 已回答」的卡片，如果只清 sendError 不复位，
+            // 重连 + 网关重放之后仍显示已回答，而电脑端还在等 → 回合僵死（评审 P0-3）。
+            existing.sendError = "";
+            existing.resolved = false;
+            existing.resolvedOutcome = "";
+            if (convo != null) { convo.setItems(items); convo.refreshNow(); }
             return;
         }
         cancelSendWatchdog();   // 网关还能推提问 = 连接是活的
@@ -867,10 +927,14 @@ public final class MainActivity extends Activity implements
         String approvalId = frame.optString("approvalId", "");
         ChatItem it = kind.startsWith("question")
                 ? byKey.get("question:" + rpcId)
-                : byKey.get("approval:" + (approvalId.isEmpty() ? rpcId : approvalId));
+                : approvalCard(rpcId, approvalId);
         if (it == null) return;
         it.sendError = "";
         cancelSendWatchdog();
+        // 回执到了：按卡片 key 撤看门狗（只撤这一张卡，别误撤别人正在等的那张）。
+        // 必须按 key 而不是对象身份：onSnapshot/subscribeCurrent 会 items.clear()+byKey.clear()
+        // 重建 ChatItem，对象身份必然失配 → 回执撤不掉看门狗 → 误报"电脑端没有确认"（评审 P0-3）。
+        cancelInteractionWatchdog(it.key);
         if ("question-response".equals(kind) || "approval-response".equals(kind)) {
             if (!frame.optBoolean("accepted", true)) {
                 it.resolved = true;
@@ -897,10 +961,19 @@ public final class MainActivity extends Activity implements
     /**
      * 网关中断了会话流（session-stream-reset）。不处理的话流式气泡会永远转圈、
      * 计时不停，用户以为卡死（评审 P1-5）。
+     *
+     * retrying=true 表示这只是瞬时中断：网关侧 follower 会自动重开流并在 1s 后推新
+     * snapshot（lib/index.mjs:2874 带 retrying / session-follower.mjs:123）。这时摘气泡 +
+     * setRunning(false) + Toast「输出被中断了」是误报，用户会看到气泡闪一下又回来，
+     * 所以只做轻提示、保持现状等新 snapshot 覆盖。
      */
     @Override
-    public void onStreamReset(String sessionId, String code, String message) {
+    public void onStreamReset(String sessionId, String code, String message, boolean retrying) {
         if (sessionId != null && !sessionId.isEmpty() && !sessionId.equals(currentSessionId)) return;
+        if (retrying) {
+            Toast.makeText(this, "连接抖动，正在恢复…", Toast.LENGTH_SHORT).show();
+            return;
+        }
         cancelSendWatchdog();
         ChatItem stream = streamAttemptKey == null ? null : byKey.remove(streamAttemptKey);
         if (stream != null) items.remove(stream);
@@ -1125,6 +1198,25 @@ public final class MainActivity extends Activity implements
         dlByRequest.remove(d.requestId);
         dlByTransfer.remove(d.transferId);
         try { d.temp.delete(); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 断线时清理在途下载（评审 P1-15）。dlByRequest/dlByTransfer 只在完成/失败时清理，
+     * 连接一断就再也没人来收这两张表 —— 卡片永远停在「下载中 x%」，用户只能干等。
+     * 断线后 transferId 已失效、续传也不可能，所以直接判失败并删掉半截临时文件。
+     */
+    private void failInFlightDownloads(String why) {
+        if (dlByRequest.isEmpty() && dlByTransfer.isEmpty()) return;
+        java.util.Set<Dl> pending = new java.util.LinkedHashSet<>();
+        pending.addAll(dlByRequest.values());
+        pending.addAll(dlByTransfer.values());
+        dlByRequest.clear();
+        dlByTransfer.clear();
+        for (Dl d : pending) {
+            setDownloadState(d, "下载失败：" + why);
+            try { if (d.temp != null) d.temp.delete(); } catch (Throwable ignored) { }
+        }
+        Toast.makeText(this, "下载已中断：" + why, Toast.LENGTH_LONG).show();
     }
 
     private static byte[] decodeB64(String s) {
@@ -1605,6 +1697,7 @@ public final class MainActivity extends Activity implements
 
     private void setRunning(boolean value) {
         running = value;
+        runningUncertain = false;   // 有明确结论了，清掉"待补判"标记（评审 N1）
         if (convo != null) {
             convo.setRunning(value, runningHint());
         }
@@ -1638,6 +1731,102 @@ public final class MainActivity extends Activity implements
         uiHandler.removeCallbacks(sendWatchdog);
     }
 
+    // ---- 审批/提问的"回执看门狗"（评审 P0-3 补齐）
+    // canSend() 只保证 state==READY；电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 75s
+    // 都还是 READY → 卡片被乐观标成「✓ 已批准」，帧其实进了黑洞。
+    // 网关对 approval-response / question-answer 都有回执帧（approval-resolved /
+    // question-response，见 tools/mock-gateway.mjs 的对应分支），所以等不到回执就把卡片
+    // 回滚为未处理（按钮重新出现）并提示重试。
+
+    private static final long INTERACTION_WATCHDOG_MS = 6_000L;
+    /**
+     * 正在等回执的卡片：按卡片 key 一一对应（评审 P0-3）。
+     * 原来是单槽 pendingInteraction，先点「批准」再在 6s 内点「提交」时，
+     * armInteractionWatchdog 会 cancel 前一个 → 批准帧若丢在黑洞里，那张卡就永远停在
+     * 「✓ 已批准」。改成 map 后每张待确认的卡各自一个看门狗。
+     */
+    private final Map<String, ChatItem> pendingInteractions = new HashMap<>();
+    /** key -> 该卡片的看门狗任务，用于按 key 精确取消。 */
+    private final Map<String, Runnable> interactionWatchdogs = new HashMap<>();
+
+    /**
+     * 到期回滚：按 key 取"当前在列表里的那张卡"再回滚。
+     * 不持有 arm 时的对象引用 —— 重建后（onSnapshot/subscribeCurrent）旧对象已不在 items 里，
+     * 回滚它会没人看得见，还会误弹"电脑端没有确认这次操作"（实际已批准）。
+     */
+    private void rollbackInteraction(final String key) {
+        interactionWatchdogs.remove(key);
+        ChatItem armed = pendingInteractions.remove(key);
+        if (armed == null) return;
+        ChatItem live = byKey.get(key);
+        if (live == null) return;                     // 卡片已不在列表：没有可回滚的对象
+        if (live != armed) {                          // 重建后迁移迟到：先把乐观状态搬到当前这张
+            live.resolved = armed.resolved;
+            live.resolvedOutcome = armed.resolvedOutcome;
+            live.sendError = armed.sendError;
+        }
+        if (!live.resolved) return;                   // 已被回执/网关历史改判，别再回滚
+        live.resolved = false;                        // 回滚：按钮重新出现，用户可再点一次
+        live.resolvedOutcome = "";
+        live.sendError = "未确认，请重试";
+        if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        Toast.makeText(MainActivity.this, "电脑端没有确认这次操作，请重试", Toast.LENGTH_LONG).show();
+    }
+
+    private void armInteractionWatchdog(final ChatItem item) {
+        if (item == null || item.key == null || item.key.isEmpty()) return;
+        final String key = item.key;
+        cancelInteractionWatchdog(key);
+        Runnable task = new Runnable() {
+            @Override public void run() { rollbackInteraction(key); }
+        };
+        pendingInteractions.put(key, item);
+        interactionWatchdogs.put(key, task);
+        uiHandler.postDelayed(task, INTERACTION_WATCHDOG_MS);
+    }
+
+    private void cancelInteractionWatchdog(String key) {
+        if (key == null || key.isEmpty()) return;
+        Runnable task = interactionWatchdogs.remove(key);
+        if (task != null) uiHandler.removeCallbacks(task);
+        pendingInteractions.remove(key);
+    }
+
+    /**
+     * 卡片重建后迁移待确认状态（评审 P0-3）。
+     * onSnapshot 会 items.clear()+byKey.clear() 重建 ChatItem，旧对象从此不在列表里；
+     * 这里把乐观的「已批准/已回答」搬到新建的同 key 卡片上，并更新看门狗的落点：
+     *   - 新卡上已有 resolved（网关历史里存在 approval/decided 等）= 回执等价物 → 撤看门狗；
+     *   - 否则把旧的乐观状态复制过去，让「✓ 已批准」在重建后不闪回按钮；
+     *   - 新卡不存在时保留条目：看门狗到期会按 key 找不到对象而安静退出，不会误报。
+     */
+    private void migratePendingInteractions() {
+        if (pendingInteractions.isEmpty()) return;
+        java.util.List<String> received = new java.util.ArrayList<>();
+        for (Map.Entry<String, ChatItem> e : pendingInteractions.entrySet()) {
+            ChatItem fresh = byKey.get(e.getKey());
+            if (fresh == null || fresh == e.getValue()) continue;
+            if (fresh.resolved) { received.add(e.getKey()); continue; }
+            ChatItem old = e.getValue();
+            fresh.resolved = old.resolved;
+            fresh.resolvedOutcome = old.resolvedOutcome;
+            fresh.sendError = old.sendError;
+            e.setValue(fresh);
+        }
+        for (String key : received) cancelInteractionWatchdog(key);
+    }
+
+    /**
+     * 找审批卡：优先按 approvalId（真实网关的 approval-resolved 一定带，见
+     * dsh-plugin-mobile-gateway/lib/index.mjs:2454），缺失时退回 rpcId。
+     * 回执匹配不上就会被回执看门狗误判成"没确认"而回滚，所以这里宁松勿严。
+     */
+    private ChatItem approvalCard(String rpcId, String approvalId) {
+        ChatItem it = approvalId.isEmpty() ? null : byKey.get("approval:" + approvalId);
+        if (it == null && !rpcId.isEmpty()) it = byKey.get("approval:" + rpcId);
+        return it;
+    }
+
     private void subscribeCurrent() {
         if (currentSessionId.isEmpty()) return;
         items.clear();
@@ -1647,6 +1836,10 @@ public final class MainActivity extends Activity implements
         hasMore = false;
         nextBeforeSeq = null;
         planGoal = ""; planPhase = ""; planTodos = "";
+        // 重订阅是把列表清空、等回 snapshot 再重建（重建在 onSnapshot 里完成）。
+        // 此刻 byKey 为空，migratePendingInteractions() 只做"保留待确认条目"这件事：
+        // 卡片不会丢状态，等 snapshot 到达后再按 key 迁移到新对象（评审 P0-3）。
+        migratePendingInteractions();
         gw.subscribe(currentSessionId);
         gw.requestTasks(currentSessionId);
         gw.requestGoal(currentSessionId);
@@ -1833,6 +2026,7 @@ public final class MainActivity extends Activity implements
         item.resolved = true;
         item.resolvedOutcome = outcome;
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        armInteractionWatchdog(item);   // 等 approval-resolved / approval-response 回执，超时回滚
     }
 
     @Override
@@ -1849,6 +2043,7 @@ public final class MainActivity extends Activity implements
         item.resolved = true;
         item.resolvedOutcome = "answered";
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        armInteractionWatchdog(item);   // 等 question-response 回执，超时回滚
     }
 
     @Override
@@ -1865,6 +2060,7 @@ public final class MainActivity extends Activity implements
         item.resolved = true;
         item.resolvedOutcome = "cancelled";
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        armInteractionWatchdog(item);   // 等 question-response 回执，超时回滚
     }
 
     // ============================================================ SettingsView.Host

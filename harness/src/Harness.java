@@ -26,6 +26,9 @@ public final class Harness implements GatewayClient.Listener {
     private static String token = "";
     private static String deviceId = "jvm-harness-0001";
     private static boolean phase2Started = false;
+    /** 已用设备 token 重新发起连接（阶段3 必须等这一步之后才开始，否则消息会被阶段2 的断开打断）。 */
+    private static volatile boolean phase2Reconnected = false;
+    private static volatile boolean phase3Started = false;
     private static boolean messageSent = false;
     private static String sessionId = "";
 
@@ -35,6 +38,9 @@ public final class Harness implements GatewayClient.Listener {
     private static int errors = 0;
     private static int approvals = 0;
     private static int questions = 0;
+    private static int helloCount = 0;
+    private static int reconnectScheduled = 0;
+    private static int streamResets = 0;
     private static final StringBuilder streamText = new StringBuilder();
     private static String lastEventType = "";
 
@@ -65,8 +71,11 @@ public final class Harness implements GatewayClient.Listener {
 
         // 看门狗：到点收尾并输出统计。必须是非 daemon，
         // 否则 main() 返回后 JVM 会因只剩 daemon 线程而直接退出。
+        // 时长可用 -Dharness.maxMs=45000 覆盖（故障注入时逐档调整，避免每档都等 150s）。
+        long maxMs = Long.getLong("harness.maxMs", 150_000L);
+        log("看门狗 " + (maxMs / 1000) + "s");
         Thread watchdog = new Thread(() -> {
-            try { Thread.sleep(150_000L); } catch (InterruptedException ignored) { }
+            try { Thread.sleep(maxMs); } catch (InterruptedException ignored) { }
             summary();
             System.exit(errors > 0 ? 1 : 0);
         });
@@ -79,6 +88,9 @@ public final class Harness implements GatewayClient.Listener {
     private static void summary() {
         System.out.println();
         System.out.println("================ 联调结果 ================");
+        System.out.println("hello 次数             : " + helloCount);
+        System.out.println("安排重连次数           : " + reconnectScheduled);
+        System.out.println("session-stream-reset   : " + streamResets);
         System.out.println("assistant-stream 增量帧 : " + chunkCount);
         System.out.println("持久 event 帧          : " + eventCount + " (最后: " + lastEventType + ")");
         System.out.println("tool/call 次数         : " + toolCalls);
@@ -102,7 +114,8 @@ public final class Harness implements GatewayClient.Listener {
 
     @Override
     public void onHello(JSONObject hello) {
-        log("HELLO protocol=" + hello.optInt("protocol")
+        helloCount++;
+        log("HELLO#" + helloCount + " protocol=" + hello.optInt("protocol")
                 + " dshVersion=" + hello.optString("dshVersion", "-")
                 + " historyFormatVersion=" + hello.optInt("historyFormatVersion", -1)
                 + " authenticated=" + hello.optBoolean("authenticated")
@@ -113,6 +126,14 @@ public final class Harness implements GatewayClient.Listener {
         log("capabilities: " + sb);
         JSONObject dev = hello.optJSONObject("device");
         if (dev != null) log("device: id=" + dev.optString("id") + " name=" + dev.optString("name"));
+        // 阶段2：配对成功后立刻断开、改用设备 token 重连，验证 App 日常走的鉴权路径。
+        // 阶段3（订阅/发消息）必须等 token 连接握手完成后才开始。
+        if (!phase2Reconnected) {
+            log("  （配对连接的首个 hello：先不进入阶段3，等阶段2 用 token 重连）");
+            return;
+        }
+        if (phase3Started) return;
+        phase3Started = true;
         gw.requestSessions();
     }
 
@@ -127,13 +148,26 @@ public final class Harness implements GatewayClient.Listener {
         if (!phase2Started) {
             phase2Started = true;
             new Thread(() -> {
-                sleep(600);
+                sleep(200);
                 log("阶段2：断开，改用设备 token 重连");
                 gw.disconnect();
-                sleep(600);
+                sleep(500);
+                phase2Reconnected = true;
                 gw.connect(gw.url(), token, deviceId, "JVM Harness");
             }).start();
         }
+    }
+
+    @Override
+    public void onStreamReset(String sid, String code, String message) {
+        streamResets++;
+        log("!! STREAM-RESET session=" + sid + " code=" + code + " message=" + message);
+    }
+
+    @Override
+    public void onReconnectScheduled(String reason) {
+        reconnectScheduled++;
+        log(">> 安排重连 #" + reconnectScheduled + " · " + reason);
     }
 
     @Override
@@ -232,6 +266,17 @@ public final class Harness implements GatewayClient.Listener {
         questions++;
         log("!! QUESTION 请求 rpcId=" + frame.optString("rpcId")
                 + " questions=" + frame.optJSONArray("questions"));
+        if (autoApprove) {
+            JSONArray answers = new JSONArray();
+            JSONObject a = new JSONObject();
+            try {
+                a.put("id", "q1");
+                a.put("selected", new JSONArray().put("A"));
+            } catch (Exception ignored) { }
+            answers.put(a);
+            log("   → 提交 question-answer（App 提问卡片的路径）selected=[A]");
+            gw.questionAnswer(frame.optString("rpcId"), frame.optString("sessionId"), answers);
+        }
     }
 
     @Override
@@ -246,6 +291,71 @@ public final class Harness implements GatewayClient.Listener {
         log("SENT sessionId=" + sid + " mode=" + raw.optString("mode"));
         log("阶段3b：订阅该会话（assistantStream=true）");
         gw.subscribe(sid);
+        log("阶段4：请求文件下载（file-download-open → read 循环 → eof+sha256）");
+        gw.fileDownloadOpen(sid, "/mock/big.bin", "req-mock-1");
+    }
+
+    // ============================================================ 文件下载链路
+    private static final java.io.ByteArrayOutputStream dlBuf = new java.io.ByteArrayOutputStream();
+    private static String dlTransferId = "";
+    private static String dlExpectedSha = null;
+    private static int dlChunks = 0;
+    private static boolean dlDone = false;
+
+    @Override
+    public void onDownload(String kind, JSONObject frame) {
+        switch (kind) {
+            case "file-download-opened":
+                dlTransferId = frame.optString("transferId");
+                log("DOWNLOAD opened transferId=" + dlTransferId
+                        + " name=" + frame.optString("name")
+                        + " size=" + frame.optLong("size")
+                        + " chunkBytes=" + frame.optLong("chunkBytes"));
+                gw.fileDownloadRead(dlTransferId, 0);
+                break;
+            case "file-download-chunk": {
+                dlChunks++;
+                try {
+                    byte[] b = java.util.Base64.getDecoder().decode(frame.optString("data", ""));
+                    dlBuf.write(b);
+                } catch (Exception e) {
+                    log("!! DOWNLOAD 分块 base64 解码失败: " + e);
+                }
+                long offset = frame.optLong("offset");
+                if (dlChunks <= 3 || frame.optBoolean("eof")) {
+                    log("DOWNLOAD chunk#" + dlChunks + " offset=" + offset
+                            + " bytes=" + dlBuf.size() + " eof=" + frame.optBoolean("eof"));
+                }
+                if (frame.optBoolean("eof")) {
+                    dlDone = true;
+                    dlExpectedSha = frame.optString("sha256", null);
+                    String actual = sha256(dlBuf.toByteArray());
+                    boolean ok = dlExpectedSha == null || dlExpectedSha.isEmpty() || dlExpectedSha.equalsIgnoreCase(actual);
+                    log("DOWNLOAD 完成 共 " + dlChunks + " 块 / " + dlBuf.size() + " 字节 · sha256 校验="
+                            + (dlExpectedSha == null || dlExpectedSha.isEmpty() ? "无期望值(跳过)" : (ok ? "通过" : "失败")));
+                    if (!ok) { errors++; log("!! 期望 " + dlExpectedSha + " 实际 " + actual); }
+                } else {
+                    gw.fileDownloadRead(dlTransferId, offset + 0);
+                }
+                break;
+            }
+            case "file-download-cancelled":
+                log("DOWNLOAD 已取消 transferId=" + frame.optString("transferId"));
+                break;
+            default:
+                log("DOWNLOAD " + kind + " " + frame);
+        }
+    }
+
+    private static String sha256(byte[] data) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest(data)) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Override
@@ -257,11 +367,6 @@ public final class Harness implements GatewayClient.Listener {
     @Override
     public void onAttachment(String sessionId, String attachmentId, String mediaType, String base64) {
         log("ATTACHMENT " + attachmentId + " " + mediaType);
-    }
-
-    @Override
-    public void onDownload(String kind, JSONObject frame) {
-        log("DOWNLOAD " + kind + " " + frame);
     }
 
     @Override

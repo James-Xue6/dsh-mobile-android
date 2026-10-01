@@ -73,6 +73,10 @@ public final class WsClient {
     private OutputStream out;
     private Thread reader;
     private volatile boolean closing;
+    /**
+     * 断线时回报给上层的关闭码。默认 1006 是「本地」语义（没有收到 Close 帧就断了），
+     * 只用于上报、绝不写进 Close 帧（见 close() 里的保留码降级）。
+     */
     private volatile int lastCloseCode = 1006;
     private volatile String lastCloseReason = "connection lost";
     /** 自建反向代理常用自签名证书，开启后不校验（默认关闭）。 */
@@ -174,7 +178,6 @@ public final class WsClient {
 
     private void run() {
         try {
-            lastInboundAt = System.currentTimeMillis();
             if (tls) {
                 SSLSocketFactory f = trustAll
                         ? trustAllFactory()
@@ -200,6 +203,10 @@ public final class WsClient {
             out = socket.getOutputStream();
 
             handshake();
+            // 这里才是"链路可用"的起点：TCP 连上不等于握手成功，把存活时间戳从
+            // socket.connect() 之前挪到握手成功之后，语义才与 lastInboundAt() 的注释一致
+            // （评审 P1-6）。握手之前若完全没有入站帧，由 GatewayClient 的 10s 握手看门狗兜底。
+            lastInboundAt = System.currentTimeMillis();
             post(listener::onOpen);
             loop();
 
@@ -300,6 +307,10 @@ public final class WsClient {
     public void close(int code, String reason) {
         if (!closed.compareAndSet(false, true)) return;
         closing = true;
+        // RFC6455 §7.4.1：1005/1006/1015 是保留码，只能本地使用，禁止写进 Close 帧。
+        // 万一调用方（或对端回声）传进来，统一降级成 1000，避免对端 ws 库回 1002
+        // 协议错误、面板记成异常关闭。
+        if (isReservedCloseCode(code)) code = 1000;
         lastCloseCode = code;
         lastCloseReason = reason == null ? "" : reason;
         byte[] r;
@@ -317,6 +328,11 @@ public final class WsClient {
     }
 
     public boolean isClosed() { return closed.get(); }
+
+    /** 1005/1006/1015 是保留码：只能本地使用，禁止出现在 Close 帧里（RFC6455 §7.4.1）。 */
+    private static boolean isReservedCloseCode(int code) {
+        return code == 1005 || code == 1006 || code == 1015;
+    }
 
     private void closeQuietly() {
         try { if (socket != null) socket.close(); } catch (Throwable ignored) { }
@@ -397,7 +413,9 @@ public final class WsClient {
                     lastCloseCode = code;
                     lastCloseReason = reason;
                     closing = true;
-                    try { writeFrame(0x8, new byte[] { (byte) (code >>> 8), (byte) code }); } catch (Throwable ignored) { }
+                    // 回声也不能把保留码原样写回去（对端违规时我们不能跟着违规）
+                    int echo = isReservedCloseCode(code) ? 1000 : code;
+                    try { writeFrame(0x8, new byte[] { (byte) (echo >>> 8), (byte) echo }); } catch (Throwable ignored) { }
                     break;
                 }
                 case 0x1:

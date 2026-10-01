@@ -49,6 +49,18 @@ public final class GatewayClient {
 
         /** 网关中断了正在进行的会话流（session-stream-reset）：摘掉流式气泡并复位"运行中"。 */
         default void onStreamReset(String sessionId, String code, String message) { }
+
+        /**
+         * 带 retrying 的版本（新调用方实现这个，优先回调它）：retrying=true 表示网关只是
+         * 瞬时中断，follower 会自动重开流并在 1s 后推新 snapshot（lib/index.mjs:2874 带
+         * retrying / session-follower.mjs:123），不能按终态处理（评审 P1-5）。
+         *
+         * 上面 3 参重载保留为兼容桥：harness 要用同一份 Harness.java 编译新旧两版 net
+         * 源码（harness/snapshot/ce7afd8 与工作区 src），只实现 3 参版本仍然可用。
+         */
+        default void onStreamReset(String sessionId, String code, String message, boolean retrying) {
+            onStreamReset(sessionId, code, message);
+        }
     }
 
     private static final String PROTO = "dsh-mobile-v1";
@@ -58,6 +70,26 @@ public final class GatewayClient {
      * 就认为链路已死。手机侧仍显示"已连接"但对端早就不在了，是评审 P0-1 的核心症状。
      */
     private static final long STALE_INBOUND_MS = 75_000L;
+    /**
+     * 假连接判定的容差。lastInboundAt 已改到「握手成功后」置位（见 WsClient.run），
+     * 它与 ping 的固定 25s 网格之间只剩毫秒级先后差，而收到 hello 时还会再刷新一次 ——
+     * 于是第 3 个 ping 周期上的判定正好落在 75000ms 边界外侧，实测拖到第 4 个周期
+     * （100.8s）才断开（对照：旧代码 75.8s）。留 1s 容差把边界收回第 3 个周期内；
+     * 1s 远小于一个 ping 周期，不会把活着的连接误判成假连接（第 2 个周期才 50s）。
+     */
+    private static final long STALE_INBOUND_TOLERANCE_MS = 1_000L;
+    /**
+     * 握手看门狗：服务端接受 Upgrade 后可能永不发 hello，但仍然会回 pong ——
+     * 这时 lastInboundAt 被 pong 持续刷新，75s 假连接判定永远不触发，UI 就永远停在
+     * 「已连接，等待握手」（评审 P0-1 覆盖不全的缺口）。进入 AUTHENTICATING 起计时，
+     * 超时未收到 hello 即主动按正常关闭断开并走既有重连。
+     */
+    private static final long HANDSHAKE_TIMEOUT_MS = 10_000L;
+    /**
+     * 退避顶格的判定档位。delay = min(15000, 800 * 2^min(n,4))：n=4 起就到 12800ms 封顶，
+     * 所以 n>=4 视为"退避已顶格"，此时网络恢复值得让网络回调立刻补一次重连。
+     */
+    private static final int BACKOFF_MAX_ATTEMPTS = 4;
 
     private volatile Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -67,6 +99,28 @@ public final class GatewayClient {
     public void setListener(Listener l) { this.listener = l; }
     public Listener listener() { return listener; }
     private final AtomicInteger reconnectAttempt = new AtomicInteger(0);
+
+    /**
+     * hello 到了不等于连接稳定（评审 P1-2）。网关"接受连接后立刻关"时每轮都会发 hello，
+     * 旧写法在 dispatch("hello") 里无条件 reconnectAttempt.set(0)，退避被永久钉在最小值，
+     * 形成 ~1.6s 一轮的无限热重连（历史日志里连续出现过 85 次），也让 backoffAtMax() 那道
+     * 网络回调闸门形同虚设。改为 READY 连续存活 ≥ READY_STABLE_MS 才清零。
+     */
+    private static final long READY_STABLE_MS = 30_000L;
+    /** 存活不足这个时长的连接算"短命"，按次数罚时（退避上限 BACKOFF_CEILING_MS）。 */
+    private static final long SHORT_LIVED_MS = 5_000L;
+    /** 短命连接的退避上限：60s（普通失败仍按 15s 封顶，不牵连正常重连）。 */
+    private static final long BACKOFF_CEILING_MS = 60_000L;
+    /** 短命连接累计次数；READY 稳定存活 READY_STABLE_MS 后清零。 */
+    private final AtomicInteger shortLivedCount = new AtomicInteger(0);
+    /** "READY 稳定存活"计时任务（到点才清零退避）。 */
+    private Runnable readyStableTask;
+    /** onOpen 成功时刻 / 收到 hello 时刻，用于判定"短命连接"。 */
+    private long openedAtMs;
+    private long helloAtMs;
+    /** guardCleartext 写入拒绝原因的时刻：短窗口内不被旧连接的 DISCONNECTED 覆盖。 */
+    private volatile long cleartextDeniedAt;
+    private static final long DENY_HOLD_MS = 4_000L;
 
     private WsClient ws;
     private String url = "";
@@ -79,6 +133,9 @@ public final class GatewayClient {
     private long pingTimer;
 
     private volatile State state = State.DISCONNECTED;
+
+    /** 握手看门狗任务：进了 AUTHENTICATING 后 10s 内没等到 hello 就断开重连。 */
+    private Runnable handshakeWatchdog;
 
     private boolean trustAllCerts = false;
 
@@ -104,6 +161,7 @@ public final class GatewayClient {
         this.manualClose = false;
         this.wantConnected = false;
         reconnectAttempt.set(0);
+        shortLivedCount.set(0);   // 用户主动重连：清掉上一轮攒下的短命罚分
         if (!guardCleartext(this.url)) return;
         this.wantConnected = true;
         open();
@@ -119,6 +177,7 @@ public final class GatewayClient {
         this.manualClose = false;
         this.wantConnected = false;
         reconnectAttempt.set(0);
+        shortLivedCount.set(0);   // 用户主动重连：清掉上一轮攒下的短命罚分
         if (!guardCleartext(this.url)) return;
         this.wantConnected = true;
         open();
@@ -133,12 +192,28 @@ public final class GatewayClient {
         String problem = cleartextProblem(target);
         if (problem == null) return true;
         stopPing();
+        stopHandshakeWatchdog();
+        stopReadyStable();
         main.removeCallbacks(reconnectTask);
         WsClient c = ws;
         ws = null;
         if (c != null) c.close(1000, "cleartext denied");
+        // 旧连接的 onClosed 是异步的：它会走 !wantConnected 分支写 DISCONNECTED「已断开」，
+        // 把这里刚设的"公网明文被拒"原因覆盖掉 → 用户只看到 Toast 看不到理由（N-E）。
+        // 记下时刻，短窗口内由 holdDenyState() 挡住那次覆盖。
+        cleartextDeniedAt = System.currentTimeMillis();
         setState(State.FAILED, problem);
         return false;
+    }
+
+    /**
+     * 刚因明文被拒置了 FAILED 时，返回 true 表示旧连接迟到的 onClosed 不该把状态
+     * 覆盖成 DISCONNECTED「已断开」（N-E）。窗口很小（DENY_HOLD_MS），
+     * 用户随后重新连接会正常走 CONNECTING → READY，不受影响。
+     */
+    private boolean holdDenyState() {
+        if (state != State.FAILED) return false;
+        return System.currentTimeMillis() - cleartextDeniedAt < DENY_HOLD_MS;
     }
 
     /**
@@ -154,12 +229,21 @@ public final class GatewayClient {
     /** 用户是否还希望保持连接（disconnect() 之后为 false）；供网络变化时判断要不要补一次重连。 */
     public boolean wantConnected() { return wantConnected; }
 
+    /**
+     * 自动重连的退避是否已经爬到顶。网络回调（尤其 onCapabilitiesChanged，来得很频繁）
+     * 不该在退避计时器还在正常工作时插一脚 —— connect() 会把 reconnectAttempt 清零，
+     * 抖动时退避就永远是最小值。调用方据此只在"已经失败"或"退避已顶格"时才补一次。
+     */
+    public boolean backoffAtMax() { return reconnectAttempt.get() >= BACKOFF_MAX_ATTEMPTS; }
+
     public void disconnect() {
         wantConnected = false;
         manualClose = true;
         generation++;
         main.removeCallbacks(reconnectTask);
         stopPing();
+        stopHandshakeWatchdog();
+        stopReadyStable();
         WsClient c = ws;
         ws = null;
         if (c != null) c.close(1000, "bye");
@@ -172,11 +256,18 @@ public final class GatewayClient {
 
     private void open() {
         stopPing();
+        stopHandshakeWatchdog();
+        stopReadyStable();
         main.removeCallbacks(reconnectTask);
+        openedAtMs = System.currentTimeMillis();
+        helloAtMs = 0;
         final int gen = ++generation;
         // 每代只收尾一次：WsClient 在"异常断开"时会先 onFailure 再在 finally 里 onClosed，
         // 两者都调 scheduleReconnect 会把退避直接翻倍并弹两次提示（评审 P1-3）。
-        final boolean[] settled = new boolean[1];
+        // 用 AtomicBoolean 而不是 boolean[1]：harness 的 Handler 垫片是多线程池，
+        // 两个回调有可能并发进入，CAS 才能保证"每代只收尾一次"这条不变量。
+        final java.util.concurrent.atomic.AtomicBoolean settled =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
         WsClient old = ws;
         ws = null;
         if (old != null) old.close(1000, "reconnect");
@@ -199,11 +290,18 @@ public final class GatewayClient {
         }
 
         try {
+            // 匿名监听器里要用到"这条连接"本身（握手看门狗到点要 close 它），而
+            // 局部变量 client 在 new 的那一刻还没完成赋值 —— 直接引用会编译不过
+            // （variable client might not have been initialized），故用单元素数组过渡。
+            final WsClient[] clientRef = new WsClient[1];
             final WsClient client = new WsClient(url, protos, headers, new WsClient.Listener() {
                 @Override public void onOpen() {
                     if (gen != generation) return;
+                    openedAtMs = System.currentTimeMillis();
                     setState(State.AUTHENTICATING, "已连接，等待握手");
                     startPing();
+                    // 服务端接受 Upgrade 却永不发 hello（但会回 pong）时，只有看门狗能救场
+                    armHandshakeWatchdog(gen, clientRef[0]);
                 }
 
                 @Override public void onText(String text) {
@@ -213,10 +311,15 @@ public final class GatewayClient {
 
                 @Override public void onClosed(int code, String reason) {
                     if (gen != generation) return;
-                    if (settled[0]) return;     // onFailure 已经收尾，避免二次调度重连（P1-3）
-                    settled[0] = true;
+                    if (!settled.compareAndSet(false, true)) return;   // 已收尾过，避免二次调度重连（P1-3）
+                    stopHandshakeWatchdog();
+                    stopReadyStable();
                     stopPing();
-                    if (manualClose || !wantConnected) { setState(State.DISCONNECTED, "已断开"); return; }
+                    if (manualClose || !wantConnected) {
+                        // 明文被拒时刚置的 FAILED 不能被这次迟到回调覆盖成「已断开」（N-E）
+                        if (!holdDenyState()) setState(State.DISCONNECTED, "已断开");
+                        return;
+                    }
                     if (code == 4004) { wantConnected = false; setState(State.GATEWAY_OFF, "网关已关闭（请在电脑端开启移动网关）"); return; }
                     if (code == 4003) {
                         // 4003 = 服务端重新开启了鉴权，现有 token 已作废：必须重新配对，
@@ -228,13 +331,15 @@ public final class GatewayClient {
                     }
                     String detail = (reason == null || reason.isEmpty() || "connection lost".equals(reason))
                             ? ("连接断开(" + code + ")") : reason;
+                    noteShortLived();   // 存活 <5s 记一次短命罚分（P1-2）
                     scheduleReconnect(detail + " · 准备重连");
                 }
 
                 @Override public void onFailure(Throwable error) {
                     if (gen != generation) return;
-                    if (settled[0]) return;     // onClosed 已经收尾，避免二次调度重连（P1-3）
-                    settled[0] = true;
+                    if (!settled.compareAndSet(false, true)) return;  // 已收尾过，避免二次调度重连（P1-3）
+                    stopHandshakeWatchdog();
+                    stopReadyStable();
                     stopPing();
                     if (manualClose || !wantConnected) return;
                     String msg = error == null ? "未知错误" : String.valueOf(error.getMessage());
@@ -245,9 +350,11 @@ public final class GatewayClient {
                         setState(State.GATEWAY_OFF, msg);
                         return;
                     }
+                    noteShortLived();   // 存活 <5s 记一次短命罚分（P1-2）
                     scheduleReconnect(msg);
                 }
             }, trustAllCerts);
+            clientRef[0] = client;
             ws = client;
             client.connect();
         } catch (IOException e) {
@@ -262,9 +369,55 @@ public final class GatewayClient {
         if (l2 != null) main.post(() -> l2.onReconnectScheduled(detail));
         int n = reconnectAttempt.incrementAndGet();
         long delay = Math.min(15000L, 800L * (1L << Math.min(n, 4)));
+        // 短命连接罚时（评审 P1-2）：网关"接受连接后立刻关"时，光靠 hello 不清零还不够
+        // —— 指数只爬到 12.8s 就封顶。这里按累计短命次数继续放大，封顶 60s，
+        // 让病态网关的轮询彻底降温；普通失败路径不受影响（shortLivedCount 为 0）。
+        int shortLived = shortLivedCount.get();
+        if (shortLived > 0) {
+            long penalty = Math.min(BACKOFF_CEILING_MS, 800L * (1L << Math.min(n + shortLived, 7)));
+            if (penalty > delay) delay = penalty;
+        }
         setState(State.CONNECTING, detail + " · " + (delay / 1000) + "s 后重试");
         main.removeCallbacks(reconnectTask);
         main.postDelayed(reconnectTask, delay);
+    }
+
+    /**
+     * 连接存活不足 SHORT_LIVED_MS 就断开 = 病态网关的"接受后立刻关"：累计一次罚分。
+     * 判据用收到 hello 的时刻（有 hello 才说明它确实"接受"过这次连接），
+     * 没收到 hello 就用 socket onOpen 的时刻兜底。READY 稳定存活 30s 后清零（见 armReadyStable）。
+     */
+    private void noteShortLived() {
+        long since = helloAtMs > 0 ? helloAtMs : openedAtMs;
+        helloAtMs = 0;
+        if (since > 0 && System.currentTimeMillis() - since < SHORT_LIVED_MS) {
+            shortLivedCount.incrementAndGet();
+        }
+    }
+
+    /**
+     * hello 到了才开始计时：只有这条连接保持 READY 满 READY_STABLE_MS，
+     * 才认为它"稳"，这时才清零退避与短命罚分（评审 P1-2）。
+     * 只记时限、不马上清零是本次修复的核心：去掉旧的无条件 set(0)。
+     */
+    private void armReadyStable(final WsClient conn) {
+        stopReadyStable();
+        readyStableTask = new Runnable() {
+            @Override public void run() {
+                readyStableTask = null;
+                if (conn == null || ws != conn || conn.isClosed()) return;
+                if (state != State.READY) return;
+                reconnectAttempt.set(0);
+                shortLivedCount.set(0);
+            }
+        };
+        main.postDelayed(readyStableTask, READY_STABLE_MS);
+    }
+
+    private void stopReadyStable() {
+        Runnable r = readyStableTask;
+        readyStableTask = null;
+        if (r != null) main.removeCallbacks(r);
     }
 
     private void startPing() {
@@ -278,18 +431,48 @@ public final class GatewayClient {
         main.removeCallbacks(pingRunnable);
     }
 
+    /**
+     * 起一个 10s 的握手看门狗：到点还没 READY（仍是 AUTHENTICATING）就按「正常关闭」断开，
+     * 由 onClosed 接管重连。之所以不用 75s 的假连接判定替代：服务端若在回 pong，
+     * lastInboundAt 会一直被刷新，那条判定永远不会触发。
+     */
+    private void armHandshakeWatchdog(final int gen, final WsClient client) {
+        stopHandshakeWatchdog();
+        handshakeWatchdog = new Runnable() {
+            @Override public void run() {
+                if (gen != generation) return;          // 已经换代
+                if (ws != client) return;               // 已经不是这条连接
+                if (state != State.AUTHENTICATING) return;   // 已收到 hello / 已断开
+                rec("! " + (HANDSHAKE_TIMEOUT_MS / 1000) + "s 未收到 hello，判定握手超时");
+                setState(State.CONNECTING, "握手超时，正在重连");
+                // 1000 = 正常关闭。RFC6455 §7.4.1 禁止在 Close 帧里出现 1005/1006/1015
+                client.close(1000, "握手超时");
+            }
+        };
+        main.postDelayed(handshakeWatchdog, HANDSHAKE_TIMEOUT_MS);
+    }
+
+    private void stopHandshakeWatchdog() {
+        Runnable r = handshakeWatchdog;
+        handshakeWatchdog = null;
+        if (r != null) main.removeCallbacks(r);
+    }
+
     private final Runnable pingRunnable = new Runnable() {
         @Override public void run() {
             WsClient c = ws;
             // 假连接防护：ping 只发不验 pong 时，电脑休眠/路由重启/隧道断掉都不会有 FIN，
             // 界面会永远显示"已连接"而消息静默丢失。这里用"最近一次收到任何帧的时间"判定，
-            // 不用 setSoTimeout（会与阻塞读循环冲突），超时即主动 close(1006) 走既有重连逻辑。
+            // 不用 setSoTimeout（会与阻塞读循环冲突），超时即主动正常关闭走既有重连逻辑。
+            // 关闭码必须是 1000/1001：RFC6455 §7.4.1 把 1005/1006 列为保留码，
+            // 禁止出现在 Close 帧里 —— 写 1006 会被对端 ws 库判成 1002 协议错误，
+            // 面板日志也会记成异常关闭。
             if (c != null && !c.isClosed()) {
                 long last = c.lastInboundAt();
-                if (last > 0 && System.currentTimeMillis() - last > STALE_INBOUND_MS) {
+                if (last > 0 && System.currentTimeMillis() - last > STALE_INBOUND_MS - STALE_INBOUND_TOLERANCE_MS) {
                     rec("! " + (STALE_INBOUND_MS / 1000) + "s 无入站帧，判定连接已失效");
                     setState(State.CONNECTING, "连接已失效，正在重连");
-                    c.close(1006, "连接已失效，正在重连");
+                    c.close(1000, "连接已失效，正在重连");
                     return;   // 断开由 onClosed 接管并安排重连，ping 由 stopPing 停掉
                 }
             }
@@ -568,10 +751,18 @@ public final class GatewayClient {
     private void dispatch(String kind, JSONObject f) {
         final Listener l = listener;
         rec("← " + kind + (l == null ? "   [无监听，丢弃]" : ""));
+        // hello 一到就撤握手看门狗：放在 listener 判空之前，
+        // 否则没有监听者时看门狗会误杀一条已经握手成功的连接。
+        if ("hello".equals(kind)) {
+            stopHandshakeWatchdog();
+            helloAtMs = System.currentTimeMillis();
+            // 不再无条件 reconnectAttempt.set(0)（评审 P1-2，那会造成 1.6s 一轮的无限热重连）：
+            // 改为 READY 稳定存活 READY_STABLE_MS 后才清零。
+            armReadyStable(ws);
+        }
         if (l == null) return;
         switch (kind) {
             case "hello":
-                reconnectAttempt.set(0);
                 setState(State.READY, "已连接");
                 l.onHello(f);
                 break;
@@ -591,9 +782,11 @@ public final class GatewayClient {
                 l.onAssistantStream(f);
                 break;
             case "session-stream-reset":
-                // 网关在流被中断时发这个帧；不处理的话流式气泡会永远转圈、计时不停（评审 P1-5）
+                // 网关在流被中断时发这个帧；不处理的话流式气泡会永远转圈、计时不停（评审 P1-5）。
+                // retrying=true 表示 follower 会自动重开流（lib/index.mjs:2874 / session-follower.mjs:123），
+                // 交给上层按"瞬时抖动"处理，而不是当终态摘气泡。
                 l.onStreamReset(f.optString("sessionId", ""), f.optString("code", ""),
-                        f.optString("message", ""));
+                        f.optString("message", ""), f.optBoolean("retrying", false));
                 break;
             case "event":
                 l.onEvent(f.optString("sessionId"), f.optJSONObject("event"),
