@@ -78,6 +78,15 @@ public final class WsClient {
     /** 自建反向代理常用自签名证书，开启后不校验（默认关闭）。 */
     private final boolean trustAll;
     private volatile Throwable failure;
+    /**
+     * 最近一次收到「完整帧」的时刻（毫秒）。用于识别"看起来已连接、实际已死"的假连接：
+     * 电脑休眠 / 路由重启 / 隧道断开都不会发 FIN，阻塞读会一直挂着。
+     * 任何帧都算（文本 / ping / pong / close），0 表示还没收到过。
+     */
+    private volatile long lastInboundAt = 0L;
+
+    /** 最近一次收到完整帧的时刻；配合 GatewayClient 的 ping 做假连接判定。 */
+    public long lastInboundAt() { return lastInboundAt; }
 
     public String failureReason() { return failure == null ? null : describe(failure); }
 
@@ -165,6 +174,7 @@ public final class WsClient {
 
     private void run() {
         try {
+            lastInboundAt = System.currentTimeMillis();
             if (tls) {
                 SSLSocketFactory f = trustAll
                         ? trustAllFactory()
@@ -368,6 +378,8 @@ public final class WsClient {
             if (maskKey != null) {
                 for (int i = 0; i < data.length; i++) data[i] ^= maskKey[i & 3];
             }
+            // 一个完整帧已落袋：刷新存活时间戳（假连接防护用，见 lastInboundAt()）
+            lastInboundAt = System.currentTimeMillis();
 
             switch (opcode) {
                 case 0x9: // ping

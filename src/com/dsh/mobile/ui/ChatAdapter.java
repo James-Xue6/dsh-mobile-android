@@ -251,6 +251,12 @@ public final class ChatAdapter extends BaseAdapter {
             card.addView(r);
         }
 
+        if (it.sendError != null && !it.sendError.isEmpty()) {
+            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, 12.5f, Ui.ERR, false);
+            warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+            card.addView(warn);
+        }
+
         if (it.resolved) {
             String label;
             if ("allowed-once".equals(it.resolvedOutcome)) label = "✓ 已批准";
@@ -365,6 +371,12 @@ public final class ChatAdapter extends BaseAdapter {
             custom.setLayoutParams(clp);
             customs.add(custom);
             card.addView(custom);
+        }
+
+        if (it.sendError != null && !it.sendError.isEmpty()) {
+            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, 12.5f, Ui.ERR, false);
+            warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+            card.addView(warn);
         }
 
         if (it.resolved) {

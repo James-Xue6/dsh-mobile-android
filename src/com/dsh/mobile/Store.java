@@ -115,7 +115,8 @@ public final class Store {
         else setWanUrl(u);
     }
 
-    /** 私有地址判定：无点的主机名、10./127./169.254./192.168./172.16-31、.local/.lan。 */
+    /** 私有地址判定：localhost/.local/.lan/.ts.net、10./127./169.254./192.168./172.16-31、
+     *  100.64/10，以及 IPv6 里的 ::1、fc00::/7、fe80::/10；其余 IPv6 与公网 IPv4/域名都不是。 */
     public static boolean isPrivateUrl(String url) {
         String s = url == null ? "" : url.trim();
         String rest;
@@ -130,12 +131,17 @@ public final class Store {
         if (at >= 0) hostPort = hostPort.substring(at + 1);
         String host = hostPort;
         if (host.startsWith("[")) { int e = host.indexOf(']'); if (e > 0) host = host.substring(1, e); }
-        else { int c = host.indexOf(':'); if (c >= 0) host = host.substring(0, c); }
-        host = host.toLowerCase(java.util.Locale.ROOT);
+        else {
+            int c = host.indexOf(':');
+            // 同 GatewayClient：没有方括号的 IPv6 字面量不能被截成单标签主机名放行
+            if (c >= 0 && c == host.lastIndexOf(':')) host = host.substring(0, c);
+        }
+        host = host.toLowerCase(java.util.Locale.ROOT).trim();
         if (host.isEmpty()) return true;
         if ("localhost".equals(host) || host.endsWith(".local") || host.endsWith(".lan")
                 || host.endsWith(".ts.net")) return true;
-        if (host.indexOf('.') < 0) return true;
+        // 同 GatewayClient：IPv6 必须先单独判定，否则「无点号即内网」会放过公网 IPv6 字面量
+        if (host.indexOf(':') >= 0) return isPrivateIpv6(host);
         String[] p = host.split("\\.");
         if (p.length == 4) {
             try {
@@ -147,6 +153,28 @@ public final class Store {
                 if (a == 100 && b >= 64 && b <= 127) return true; // CGNAT / Tailscale
                 return false;
             } catch (NumberFormatException e) { return false; }
+        }
+        if (host.indexOf('.') < 0) return true;   // 单标签主机名，保持原有放行行为
+        return false;
+    }
+
+    /** IPv6 只有 ::1 / fc00::/7 / fe80::/10 算内网，其余一律不是。 */
+    private static boolean isPrivateIpv6(String h) {
+        String s = h;
+        int pct = s.indexOf('%');
+        if (pct >= 0) s = s.substring(0, pct);
+        if ("::1".equals(s) || "0:0:0:0:0:0:0:1".equals(s)) return true;
+        String head = s;
+        int firstColon = head.indexOf(':');
+        if (firstColon >= 0) head = head.substring(0, firstColon);
+        if (head.length() < 2) return false;
+        String two = head.substring(0, 2);
+        if ("fc".equals(two) || "fd".equals(two)) return true;
+        if (head.length() >= 4 && head.startsWith("fe")) {
+            try {
+                int b = Integer.parseInt(head.substring(2, 4), 16);
+                if (b >= 0x80 && b <= 0xbf) return true;
+            } catch (NumberFormatException ignored) { }
         }
         return false;
     }

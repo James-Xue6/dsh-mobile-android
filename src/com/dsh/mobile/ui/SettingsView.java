@@ -107,6 +107,9 @@ public final class SettingsView extends LinearLayout {
 
         card.addView(label("设备令牌"));
         tokenField = field("扫码配对后自动填入", false);
+        // 令牌是长期凭证：明文渲染等于把它摆在任何一张截屏里。
+        // 这里始终掩码（本页没有「显示」开关，就不做明暗切换）。
+        tokenField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         card.addView(tokenField);
 
         card.addView(label("设备名称"));

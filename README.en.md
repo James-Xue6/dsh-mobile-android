@@ -9,7 +9,8 @@ session list → bubble chat → real-time streaming output → inline approval 
 > public access goes through the gateway's built-in Cloudflare quick tunnel (no port forwarding, no self-hosted reverse proxy). See the sections at the end of this document.
 >
 > **This repository contains no screenshots**: real-device verification screenshots contain sensitive information such as device tokens and LAN addresses,
-> so they are kept locally only (`dist/*.png` is in .gitignore); the repository holds only source code and build artifacts.
+> so they are kept outside the repository directory (`.gitignore` ignores `*.png` anywhere, allowing only the `res/**` app icon);
+> the repository holds only source code and build artifacts.
 
 ---
 

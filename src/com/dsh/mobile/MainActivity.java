@@ -43,6 +43,16 @@ public final class MainActivity extends Activity implements
     private static final int REQ_VOICE = 1002;
     private static final int REQ_IMAGE = 1003;
 
+    /**
+     * 是否允许用外部 Intent 的 pairing extra 直接触发配对（自动化测试/脚本联调用）：
+     *   adb shell am start -n com.dsh.mobile/.MainActivity -e pairing "<Base64URL 配对串>"
+     *
+     * 必须保持 false：MainActivity 是 exported="true" 的，本机任意 App 都能用这条
+     * 命令把手机悄悄指向它自己的网关并覆盖令牌，而用户以为在连自己的电脑（评审 P0-4）。
+     * 将来要联调时只改这一行为 true 再出调试包，正式包不要开。
+     */
+    private static final boolean ALLOW_TEST_PAIRING_INTENT = false;
+
     private enum Screen { LIST, CHAT, SETTINGS }
     private Screen screen = Screen.LIST;
 
@@ -127,10 +137,9 @@ public final class MainActivity extends Activity implements
         setContentView(root);
         root.requestApplyInsets();
 
-        // 支持用 intent 直接传配对串进来（便于自动化测试，也可被其它工具/脚本调用）：
-        //   adb shell am start -n com.dsh.mobile/.MainActivity -e pairing "<Base64URL 配对串>"
+        // 仅当 ALLOW_TEST_PAIRING_INTENT 打开时才接受外部 Intent 里的配对串（默认关闭，见常量注释）
         final String pairFromIntent = getIntent() == null ? null : getIntent().getStringExtra("pairing");
-        if (pairFromIntent != null && !pairFromIntent.trim().isEmpty()) {
+        if (ALLOW_TEST_PAIRING_INTENT && pairFromIntent != null && !pairFromIntent.trim().isEmpty()) {
             final String pv = pairFromIntent.trim();
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(pv), 1200);
         }
@@ -154,12 +163,63 @@ public final class MainActivity extends Activity implements
             showSettings();
         }
         refreshListStatus();
+        registerNetworkCallback();
+    }
+
+    // ---- 网络变化感知（评审 P0-1 第三条）
+    // 手机从 WiFi 切到移动数据、或断网恢复时，原来的长连接不会自己知道；
+    // 这里在默认网络可用/切换时补一次重连（wantConnected 且当前非 READY 才动），
+    // 不用等退避计时器到点。
+    private android.net.ConnectivityManager.NetworkCallback netCallback;
+    private long lastNetReconnectAt = 0L;
+
+    private void registerNetworkCallback() {
+        if (netCallback != null) return;
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    getSystemService(android.net.ConnectivityManager.class);
+            if (cm == null) return;
+            netCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(android.net.Network network) {
+                    retryIfWanted();
+                }
+                @Override public void onCapabilitiesChanged(android.net.Network network,
+                                                            android.net.NetworkCapabilities caps) {
+                    if (caps != null && caps.hasCapability(
+                            android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        retryIfWanted();
+                    }
+                }
+            };
+            cm.registerDefaultNetworkCallback(netCallback);
+        } catch (Throwable ignored) { /* 没有权限/老系统：不影响主流程 */ }
+    }
+
+    /** 网络变了：用户还希望连着、但当前不是 READY → 立刻补一次重连（3s 节流防抖动刷屏）。 */
+    private void retryIfWanted() {
+        if (gw == null || !store.paired()) return;
+        if (!gw.wantConnected()) return;
+        if (gw.state() == GatewayClient.State.READY) return;
+        if (store.url().isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (now - lastNetReconnectAt < 3000L) return;
+        lastNetReconnectAt = now;
+        // 明文校验在 connect() 内部统一拦截，这里不必重复
+        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
     }
 
     @Override
     protected void onDestroy() {
         // 连接是进程级的：Activity 销毁（重建/任务切换）只解绑监听，不断开连接。
         if (gw != null && gw.listener() == this) gw.setListener(null);
+        if (netCallback != null) {
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                        getSystemService(android.net.ConnectivityManager.class);
+                if (cm != null) cm.unregisterNetworkCallback(netCallback);
+            } catch (Throwable ignored) { }
+            netCallback = null;
+        }
         super.onDestroy();
     }
 
@@ -197,7 +257,7 @@ public final class MainActivity extends Activity implements
         super.onNewIntent(intent);
         setIntent(intent);
         String pv = intent == null ? null : intent.getStringExtra("pairing");
-        if (pv != null && !pv.trim().isEmpty()) {
+        if (ALLOW_TEST_PAIRING_INTENT && pv != null && !pv.trim().isEmpty()) {
             final String v = pv.trim();
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(v), 500);
         }
@@ -477,6 +537,12 @@ public final class MainActivity extends Activity implements
                 || st == GatewayClient.State.FAILED
                 || st == GatewayClient.State.GATEWAY_OFF);
         if (st == GatewayClient.State.READY) {
+            // 连上了：允许下一次网络抖动再自动切一次端点，否则一次抖动会把用户永久钉在
+            // 公网或内网（评审 P1-1）。
+            failoverUsed = false;
+            // 重连后不再有"发送中"的回合：把看门狗和运行中标记一起复位，避免按钮永久卡 ■（评审 P0-2）
+            cancelSendWatchdog();
+            if (running) setRunning(false);
             gw.requestSessions();
             // 断线会丢掉网关侧的订阅，重连后必须重新订阅，否则当前会话不再实时更新
             if (!currentSessionId.isEmpty()) {
@@ -579,6 +645,7 @@ public final class MainActivity extends Activity implements
             pumpTitleQueue();
         }
         if (!sessionId.equals(currentSessionId)) return;
+        cancelSendWatchdog();   // 该会话的历史回来了 = 连接与回合都是活的
 
         if (tailRefetchPending) {
             tailRefetchPending = false;
@@ -616,6 +683,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onSnapshot(String sessionId, JSONObject snap) {
         if (!sessionId.equals(currentSessionId)) return;
+        cancelSendWatchdog();
         historyFormatVersion = snap.optInt("historyFormatVersion", historyFormatVersion);
         hasMore = snap.optBoolean("hasMore", false);
         nextBeforeSeq = snap.has("nextBeforeSeq") ? snap.optLong("nextBeforeSeq") : null;
@@ -639,6 +707,8 @@ public final class MainActivity extends Activity implements
         if (as != null) {
             JSONObject active = as.optJSONObject("activeAttempt");
             if (active != null) {
+                // 快照里还有进行中的输出：重新裁定为"运行中"（重连/onState(READY) 复位过 running）
+                setRunning(true);
                 String attemptId = active.optString("attemptId", "active");
                 String text = streamTextOf(active);
                 if (!text.isEmpty()) {
@@ -657,6 +727,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onAssistantStream(JSONObject frame) {
         if (!frame.optString("sessionId", "").equals(currentSessionId)) return;
+        cancelSendWatchdog();
         JSONObject f = frame.optJSONObject("frame");
         if (f == null) return;
         String type = f.optString("type", "");
@@ -724,6 +795,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onEvent(String sessionId, JSONObject event, Object seq, Object time) {
         if (!sessionId.equals(currentSessionId) || event == null) return;
+        cancelSendWatchdog();   // 该会话有动静 = 这次发送有着落
         applyEvent(event.optString("type", ""), event, seq, time, false);
         rebuildOrder();
         if (convo != null) { convo.setItems(items); convo.refresh(); }
@@ -737,6 +809,7 @@ public final class MainActivity extends Activity implements
             notifyPending(sid, 2, "有待审批");
             return;
         }
+        cancelSendWatchdog();   // 网关还能推审批 = 连接是活的
         String rpcId = frame.optString("rpcId", "");
         String approvalId = frame.optString("approvalId", "");
         // 与历史事件 approval/asked 用同一把键（approvalId），避免同一条审批出现两张卡
@@ -750,6 +823,7 @@ public final class MainActivity extends Activity implements
         it.rpcId = rpcId;
         it.resolved = false;
         it.resolvedOutcome = "";
+        it.sendError = "";   // 网关重新推送 = 仍未处理，清掉上次"没发出去"的提示
         it.approvalId = approvalId;
         it.callId = frame.optString("callId", "");
         it.toolName = frame.optString("toolName", "");
@@ -770,7 +844,11 @@ public final class MainActivity extends Activity implements
         }
         String rpcId = frame.optString("rpcId", "");
         String key = "question:" + rpcId;
-        if (byKey.containsKey(key)) return;
+        if (byKey.containsKey(key)) {
+            byKey.get(key).sendError = "";
+            return;
+        }
+        cancelSendWatchdog();   // 网关还能推提问 = 连接是活的
         ChatItem it = ChatItem.of(ChatItem.QUESTION, key, "");
         it.rpcId = rpcId;
         it.questions = frame.optJSONArray("questions");
@@ -791,6 +869,8 @@ public final class MainActivity extends Activity implements
                 ? byKey.get("question:" + rpcId)
                 : byKey.get("approval:" + (approvalId.isEmpty() ? rpcId : approvalId));
         if (it == null) return;
+        it.sendError = "";
+        cancelSendWatchdog();
         if ("question-response".equals(kind) || "approval-response".equals(kind)) {
             if (!frame.optBoolean("accepted", true)) {
                 it.resolved = true;
@@ -806,10 +886,34 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onSent(String sessionId, JSONObject raw) {
+        // 电脑端已回执：这次发送确实出去了，撤掉看门狗
+        cancelSendWatchdog();
         if (currentSessionId.isEmpty() && sessionId != null && !sessionId.isEmpty()) {
             currentSessionId = sessionId;
             subscribeCurrent();
         }
+    }
+
+    /**
+     * 网关中断了会话流（session-stream-reset）。不处理的话流式气泡会永远转圈、
+     * 计时不停，用户以为卡死（评审 P1-5）。
+     */
+    @Override
+    public void onStreamReset(String sessionId, String code, String message) {
+        if (sessionId != null && !sessionId.isEmpty() && !sessionId.equals(currentSessionId)) return;
+        cancelSendWatchdog();
+        ChatItem stream = streamAttemptKey == null ? null : byKey.remove(streamAttemptKey);
+        if (stream != null) items.remove(stream);
+        streamAttemptKey = null;
+        for (ChatItem ci : items) {
+            if (ci.kind == ChatItem.ASSISTANT && ci.streaming) ci.streaming = false;
+        }
+        setRunning(false);
+        if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        String why = (message == null || message.isEmpty())
+                ? (code == null || code.isEmpty() ? "" : code) : message;
+        Toast.makeText(this, why.isEmpty() ? "输出被中断了" : ("输出被中断了：" + why),
+                Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -1507,6 +1611,33 @@ public final class MainActivity extends Activity implements
         if (!value) turnStartedAt = 0;
     }
 
+    // ---- 发送确认看门狗（评审 P0-2）
+    // 现状：onSend 之后只有少数事件会复位 running，断线/丢包时按钮会永久变 ■，
+    // 消息发不出去且切会话/重连都不解除。这里发送后起一个 30s 看门狗，
+    // 到期仍未收到该会话任何响应 → 复位并明确告诉用户"可能没发出去，可以重试"。
+
+    private static final long SEND_WATCHDOG_MS = 30_000L;
+    private final android.os.Handler uiHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+
+    private final Runnable sendWatchdog = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            setRunning(false);
+            Toast.makeText(MainActivity.this, "没收到电脑的回应，可能没发出去，可以重试",
+                    Toast.LENGTH_LONG).show();
+        }
+    };
+
+    private void armSendWatchdog() {
+        uiHandler.removeCallbacks(sendWatchdog);
+        uiHandler.postDelayed(sendWatchdog, SEND_WATCHDOG_MS);
+    }
+
+    private void cancelSendWatchdog() {
+        uiHandler.removeCallbacks(sendWatchdog);
+    }
+
     private void subscribeCurrent() {
         if (currentSessionId.isEmpty()) return;
         items.clear();
@@ -1642,6 +1773,7 @@ public final class MainActivity extends Activity implements
         }
         setRunning(true);
         if (convo != null) convo.setRunning(true, runningHint());
+        armSendWatchdog();
     }
 
     @Override
@@ -1687,6 +1819,16 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onApprove(ChatItem item, String outcome) {
+        // 断网时 sendRaw 是静默失败的：先确认真的能发，再把卡片置为已处理，
+        // 否则卡片显示"✓ 已批准"而电脑端永远收不到，回合僵死（评审 P0-3）。
+        if (!gw.canSend()) {
+            item.sendError = "未发送（未连接），恢复后请重试";
+            if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+            Toast.makeText(this, "还没连上电脑端，这次批准没有发出去；连上后请再点一次",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        item.sendError = "";
         gw.approvalResponse(item.rpcId, currentSessionId, item.approvalId, outcome);
         item.resolved = true;
         item.resolvedOutcome = outcome;
@@ -1695,6 +1837,14 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onQuestionSubmit(ChatItem item, JSONArray answers) {
+        if (!gw.canSend()) {
+            item.sendError = "未发送（未连接），恢复后请重试";
+            if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+            Toast.makeText(this, "还没连上电脑端，这次回答没有发出去；连上后请再点一次提交",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        item.sendError = "";
         gw.questionAnswer(item.rpcId, currentSessionId, answers);
         item.resolved = true;
         item.resolvedOutcome = "answered";
@@ -1703,6 +1853,14 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onQuestionCancel(ChatItem item) {
+        if (!gw.canSend()) {
+            item.sendError = "未发送（未连接），恢复后请重试";
+            if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+            Toast.makeText(this, "还没连上电脑端，这次跳过没有发出去；连上后请再点一次",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        item.sendError = "";
         gw.questionCancel(item.rpcId, currentSessionId);
         item.resolved = true;
         item.resolvedOutcome = "cancelled";
@@ -2131,8 +2289,16 @@ public final class MainActivity extends Activity implements
         if (failoverUsed) return false;
         String lan = store.lanUrl(), wan = store.wanUrl();
         if (lan.isEmpty() || wan.isEmpty()) return false;
-        failoverUsed = true;
         boolean toWan = !store.useWan();
+        // 明文校验已经在 GatewayClient.connect() 内部统一拦截；这里再挡一层，
+        // 不合法就不切，免得把用户钉在一个注定被拒绝的端点上（评审 P0-6 ②）。
+        String problem = GatewayClient.cleartextProblem(toWan ? wan : lan);
+        if (problem != null) {
+            failoverUsed = true;
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            return false;
+        }
+        failoverUsed = true;
         store.setUseWan(toWan);
         if (settingsView != null) settingsView.setUseWan(toWan);
         Toast.makeText(this, toWan ? "内网连不上，自动改用公网…" : "公网连不上，自动改用内网…",
@@ -2436,6 +2602,7 @@ public final class MainActivity extends Activity implements
                     gw.sendMessageWithImage(currentSessionId, "", mt, b64, name);
                     setRunning(true);
                     if (convo != null) convo.setRunning(true, runningHint());
+                    armSendWatchdog();
                 });
             } catch (Throwable e) {
                 final String msg = e.getMessage() == null ? String.valueOf(e) : e.getMessage();

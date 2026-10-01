@@ -31,6 +31,11 @@ public final class ChatItem {
     public String reason = "";
     public boolean resolved;
     public String resolvedOutcome = "";
+    /**
+     * 非空表示这次操作根本没发出去（断线时点了批准/提交）。
+     * 卡片会显示这条提示但保留按钮，用户恢复连接后可重试（评审 P0-3）。
+     */
+    public String sendError = "";
     public org.json.JSONArray questions;
     /** FILES 卡片的文件列表：[{description, path}] */
     public org.json.JSONArray files;

@@ -46,10 +46,18 @@ public final class GatewayClient {
 
         /** 因失败而安排重连时回调（用于自动切换内网/公网）。 */
         default void onReconnectScheduled(String reason) { }
+
+        /** 网关中断了正在进行的会话流（session-stream-reset）：摘掉流式气泡并复位"运行中"。 */
+        default void onStreamReset(String sessionId, String code, String message) { }
     }
 
     private static final String PROTO = "dsh-mobile-v1";
     private static final long PING_INTERVAL_MS = 25_000L;
+    /**
+     * 假连接判定阈值：连续 3 个 ping 周期（75s）没有收到任何入站帧（含 pong / 服务端 ping）
+     * 就认为链路已死。手机侧仍显示"已连接"但对端早就不在了，是评审 P0-1 的核心症状。
+     */
+    private static final long STALE_INBOUND_MS = 75_000L;
 
     private volatile Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -94,8 +102,10 @@ public final class GatewayClient {
         this.deviceId = devId == null ? "" : devId;
         this.deviceName = devName == null ? "" : devName;
         this.manualClose = false;
-        this.wantConnected = true;
+        this.wantConnected = false;
         reconnectAttempt.set(0);
+        if (!guardCleartext(this.url)) return;
+        this.wantConnected = true;
         open();
     }
 
@@ -107,10 +117,42 @@ public final class GatewayClient {
         this.deviceId = devId == null ? "" : devId;
         this.deviceName = devName == null ? "" : devName;
         this.manualClose = false;
-        this.wantConnected = true;
+        this.wantConnected = false;
         reconnectAttempt.set(0);
+        if (!guardCleartext(this.url)) return;
+        this.wantConnected = true;
         open();
     }
+
+    /**
+     * 明文放行的统一闸门：所有连接入口（手动保存、端点切换、故障切换、配对候选）
+     * 都要经过这里。不合法就不连、也不安排自动重连，只把原因写进状态给 UI。
+     * 正常的内网 ws://192.168.x / ws://localhost 仍会被 cleartextProblem 放行。
+     */
+    private boolean guardCleartext(String target) {
+        String problem = cleartextProblem(target);
+        if (problem == null) return true;
+        stopPing();
+        main.removeCallbacks(reconnectTask);
+        WsClient c = ws;
+        ws = null;
+        if (c != null) c.close(1000, "cleartext denied");
+        setState(State.FAILED, problem);
+        return false;
+    }
+
+    /**
+     * 当前连接是否真的能把帧发出去（UI 在「操作成功」前判断，避免断网时谎报成功）。
+     * 除了 ws 非空且未关闭，还要求已经握手完成（READY）：重连窗口里 ws 可能已存在但
+     * 还没拿回 hello，这时 sendText 会被静默丢进未就绪的写队列 —— 正是要修的那种"谎报"。
+     */
+    public boolean canSend() {
+        WsClient c = ws;
+        return c != null && !c.isClosed() && state == State.READY;
+    }
+
+    /** 用户是否还希望保持连接（disconnect() 之后为 false）；供网络变化时判断要不要补一次重连。 */
+    public boolean wantConnected() { return wantConnected; }
 
     public void disconnect() {
         wantConnected = false;
@@ -171,7 +213,14 @@ public final class GatewayClient {
                     stopPing();
                     if (manualClose || !wantConnected) { setState(State.DISCONNECTED, "已断开"); return; }
                     if (code == 4004) { wantConnected = false; setState(State.GATEWAY_OFF, "网关已关闭（请在电脑端开启移动网关）"); return; }
-                    if (code == 4003) { setState(State.UNAUTHORIZED, "服务端已重新开启鉴权，请重新连接"); }
+                    if (code == 4003) {
+                        // 4003 = 服务端重新开启了鉴权，现有 token 已作废：必须重新配对，
+                        // 无脑重连每 15s 撞一次没有意义（评审 P1-4）。wantConnected 一并置 false，
+                        // 否则网络变化回调还会把这条注定失败的连接再拉起来。
+                        wantConnected = false;
+                        setState(State.UNAUTHORIZED, "服务端已重新开启鉴权，请重新连接");
+                        return;
+                    }
                     String detail = (reason == null || reason.isEmpty() || "connection lost".equals(reason))
                             ? ("连接断开(" + code + ")") : reason;
                     scheduleReconnect(detail + " · 准备重连");
@@ -183,7 +232,12 @@ public final class GatewayClient {
                     if (manualClose || !wantConnected) return;
                     String msg = error == null ? "未知错误" : String.valueOf(error.getMessage());
                     if (msg.contains("401")) { wantConnected = false; setState(State.UNAUTHORIZED, msg); return; }
-                    if (msg.contains("503")) { setState(State.GATEWAY_OFF, msg); }
+                    if (msg.contains("503")) {
+                        // 网关没开：每 15s 重试一次只会耗电刷日志，明确文案后停下（评审 P1-4）
+                        wantConnected = false;
+                        setState(State.GATEWAY_OFF, msg);
+                        return;
+                    }
                     scheduleReconnect(msg);
                 }
             }, trustAllCerts);
@@ -219,6 +273,19 @@ public final class GatewayClient {
 
     private final Runnable pingRunnable = new Runnable() {
         @Override public void run() {
+            WsClient c = ws;
+            // 假连接防护：ping 只发不验 pong 时，电脑休眠/路由重启/隧道断掉都不会有 FIN，
+            // 界面会永远显示"已连接"而消息静默丢失。这里用"最近一次收到任何帧的时间"判定，
+            // 不用 setSoTimeout（会与阻塞读循环冲突），超时即主动 close(1006) 走既有重连逻辑。
+            if (c != null && !c.isClosed()) {
+                long last = c.lastInboundAt();
+                if (last > 0 && System.currentTimeMillis() - last > STALE_INBOUND_MS) {
+                    rec("! " + (STALE_INBOUND_MS / 1000) + "s 无入站帧，判定连接已失效");
+                    setState(State.CONNECTING, "连接已失效，正在重连");
+                    c.close(1006, "连接已失效，正在重连");
+                    return;   // 断开由 onClosed 接管并安排重连，ping 由 stopPing 停掉
+                }
+            }
             try {
                 JSONObject o = new JSONObject();
                 o.put("type", "ping");
@@ -516,6 +583,11 @@ public final class GatewayClient {
             case "assistant-stream":
                 l.onAssistantStream(f);
                 break;
+            case "session-stream-reset":
+                // 网关在流被中断时发这个帧；不处理的话流式气泡会永远转圈、计时不停（评审 P1-5）
+                l.onStreamReset(f.optString("sessionId", ""), f.optString("code", ""),
+                        f.optString("message", ""));
+                break;
             case "event":
                 l.onEvent(f.optString("sessionId"), f.optJSONObject("event"),
                         f.opt("seq"), f.opt("time"));
@@ -585,7 +657,9 @@ public final class GatewayClient {
             if (e > 0) host = host.substring(1, e);
         } else {
             int c = host.indexOf(':');
-            if (c >= 0) host = host.substring(0, c);
+            // 没有方括号却含多个冒号 = 写成 IPv6 字面量：整体按 IPv6 判定，
+            // 不能截成 "2001" 这种单标签主机名而被当成内网放行
+            if (c >= 0 && c == host.lastIndexOf(':')) host = host.substring(0, c);
         }
         host = host.trim().toLowerCase(Locale.ROOT);
         if (host.isEmpty()) return null;
@@ -594,10 +668,19 @@ public final class GatewayClient {
     }
 
     private static boolean isPrivateHost(String host) {
-        if ("localhost".equals(host) || host.endsWith(".local") || host.endsWith(".lan")
-                || host.endsWith(".ts.net")) return true;
-        if (host.indexOf('.') < 0) return true;
-        String[] p = host.split("\\.");
+        if (host == null) return false;
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        // 地址里的 IPv6 常带方括号（ws://[2001:db8::1]:3091/…），先脱掉再判定
+        if (h.startsWith("[")) {
+            int e = h.indexOf(']');
+            if (e > 0) h = h.substring(1, e).trim();
+        }
+        if (h.isEmpty()) return false;
+        if ("localhost".equals(h) || h.endsWith(".local") || h.endsWith(".lan")
+                || h.endsWith(".ts.net")) return true;
+        // IPv6 必须单独判：旧写法「无点号即内网」会把公网 IPv6 字面量当成内网放行（评审 P0-6）
+        if (h.indexOf(':') >= 0) return isPrivateIpv6(h);
+        String[] p = h.split("\\.");
         if (p.length == 4) {
             try {
                 int a = Integer.parseInt(p[0]);
@@ -612,8 +695,31 @@ public final class GatewayClient {
                 return false;
             }
         }
-        if (host.indexOf(':') >= 0) {
-            return "::1".equals(host) || host.startsWith("fe80") || host.startsWith("fc") || host.startsWith("fd");
+        // 无点号又不是 IPv6：单标签主机名（家庭路由器名之类），保持原有放行行为
+        if (h.indexOf('.') < 0) return true;
+        return false;
+    }
+
+    /**
+     * IPv6 里只有回环 ::1、唯一本地 fc00::/7（fc/fd 开头）、链路本地 fe80::/10 算内网；
+     * 其余 IPv6 字面量（如公网 2001:db8::1）一律不是内网 —— 明文 ws:// 不得放行。
+     */
+    private static boolean isPrivateIpv6(String h) {
+        String s = h;
+        int pct = s.indexOf('%');            // fe80::1%wlan0 这种带 scope id 的写法
+        if (pct >= 0) s = s.substring(0, pct);
+        if ("::1".equals(s) || "0:0:0:0:0:0:0:1".equals(s)) return true;
+        String head = s;
+        int firstColon = head.indexOf(':');
+        if (firstColon >= 0) head = head.substring(0, firstColon);
+        if (head.length() < 2) return false;
+        String two = head.substring(0, 2);
+        if ("fc".equals(two) || "fd".equals(two)) return true;   // fc00::/7
+        if (head.length() >= 4 && head.startsWith("fe")) {        // fe80::/10 => fe80..febf
+            try {
+                int b = Integer.parseInt(head.substring(2, 4), 16);
+                if (b >= 0x80 && b <= 0xbf) return true;
+            } catch (NumberFormatException ignored) { }
         }
         return false;
     }
