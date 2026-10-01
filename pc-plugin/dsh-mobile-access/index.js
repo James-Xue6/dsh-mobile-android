@@ -37,13 +37,22 @@ function appVersion() {
   } catch { /* 没这个文件就退回下面的兜底 */ }
   return '0.2'
 }
-/** 公开发布地址：默认走 CDN（国内通常比 GitHub 稳），并给出 GitHub 兜底 */
+/** 公开发布地址：给出多条线路，手机在哪个网络都能挑到通的那条 */
 function publicUrls() {
   const v = appVersion()
+  const gh = 'https://github.com/' + REPO_SLUG + '/raw/v' + v + '/dist/dsh-mobile.apk'
+  const cdn = 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + v + '/dist/dsh-mobile.apk'
   return {
     version: v,
-    cdn: 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + v + '/dist/dsh-mobile.apk',
-    github: 'https://github.com/' + REPO_SLUG + '/raw/v' + v + '/dist/dsh-mobile.apk',
+    cdn,
+    github: gh,
+    // 国内直连 GitHub 常常打不开；这两个是常用的 GitHub 加速镜像
+    mirrors: [
+      { name: 'jsDelivr CDN', url: cdn },
+      { name: 'ghproxy 镜像', url: 'https://ghproxy.net/' + gh },
+      { name: 'gh-proxy 镜像', url: 'https://gh-proxy.com/' + gh },
+      { name: 'GitHub 原始', url: gh },
+    ],
   }
 }
 
@@ -235,22 +244,23 @@ export function apply(ctx) {
             const info = apkInfo()
             const lan = lanIPv4()
             const urls = lan.map((ip) => 'http://' + ip + ':' + APP_PORT + '/app.apk')
-            // 默认二维码指向「公开发布地址」：安装包从 CDN/GitHub 走，不依赖任何人的本机网络。
-            // 局域网直连只是备选（离线、或公网慢的时候）。
-            const lanPage = urls.length ? urls[0] : ''
-            let qrSvg = null
             const pub = publicUrls()
-            const qrTarget = pub.cdn
             const QRCode = loadQrCode()
-            if (QRCode) {
-              try { qrSvg = await QRCode.toString(qrTarget, { type: 'svg', margin: 1, width: 220 }) } catch { qrSvg = null }
+            const mkQr = async (text) => {
+              if (!QRCode || !text) return null
+              try { return await QRCode.toString(text, { type: 'svg', margin: 1, width: 200 }) } catch { return null }
             }
+            // 两个二维码：
+            //   局域网直发 —— 手机和电脑同一 WiFi 时必通，安装包从本机直接发出
+            //   公网镜像   —— 人在外面时用（jsDelivr 常被墙，面板里还能挑 ghproxy / gh-proxy）
+            const lanUrl = urls.length ? urls[0] : ''
             sendJson(res, 200, {
               version: pub.version,
               available: info.available, size: info.size, name: info.name, port: APP_PORT,
-              lanUrls: urls, lanPage,
-              publicUrl: pub.cdn, githubUrl: pub.github,
-              qrUrl: qrTarget, qrSvg,
+              lanUrls: urls, lanPage: lanUrl,
+              publicUrl: pub.cdn, githubUrl: pub.github, mirrors: pub.mirrors,
+              qrUrl: pub.cdn, qrSvg: await mkQr(pub.cdn),
+              qrLanUrl: lanUrl, qrLanSvg: await mkQr(lanUrl),
               apkPath: APK_PATH,
             })
             return

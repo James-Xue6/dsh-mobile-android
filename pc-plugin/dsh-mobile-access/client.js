@@ -386,39 +386,45 @@ window.__ModuleLoader__.load({
         var az = []
         az.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '手机 App 安装包'))
         az.push(React.createElement('div', { className: 'dsma-desc', key: 'd' },
-          '手机扫码下载安装包（从公开仓库/CDN 取，不依赖任何人的本机网络）；'
-          + '手机和电脑在同一 WiFi 时可改用下面的「局域网直发」秒下。装好后回到上面「生成配对二维码」扫一次即可接入。'))
+          '两个码按你的网络挑一个扫：同一 WiFi 用①「局域网直发」必通；人在外面用②「公网下载」。'
+          + '装好后回到上面「生成配对二维码」扫一次即可接入。'))
         if (ap && ap.available) {
-          if (ap.qrSvg) {
+          var pushQr = function (svg, url, label, key) {
+            if (!svg) return
+            az.push(React.createElement('div', { key: key + 'l', className: 'dsma-line' }, label))
             az.push(React.createElement('div', {
-              key: 'qr', className: 'dsma-qr',
-              dangerouslySetInnerHTML: { __html: ap.qrSvg },
+              key: key, className: 'dsma-qr',
+              dangerouslySetInnerHTML: { __html: svg },
             }))
+            if (url) az.push(React.createElement('div', { key: key + 'u', className: 'dsma-dev-meta' }, url))
           }
-          if (ap.qrUrl) az.push(React.createElement('div', { className: 'dsma-token', key: 'u' }, ap.qrUrl))
+          pushQr(ap.qrLanSvg, ap.qrLanUrl, '① 手机和电脑在同一 WiFi：扫这个（安装包从本机直发，必通）', 'ql')
+          pushQr(ap.qrSvg, ap.qrUrl, '② 人在外面：扫这个（走公网线路，见下面多个镜像）', 'qp')
+
           az.push(React.createElement('div', { className: 'dsma-row', key: 'r1' },
             React.createElement('button', {
-              type: 'button', className: 'dsma-btn', disabled: !ap.qrUrl,
-              onClick: function () { copy(ap.qrUrl, 'CDN 地址') },
-            }, '复制 CDN 链接'),
-            React.createElement('button', {
-              type: 'button', className: 'dsma-btn', disabled: !ap.githubUrl,
-              onClick: function () { copy(ap.githubUrl, 'GitHub 地址') },
-            }, '复制 GitHub 直链')))
+              type: 'button', className: 'dsma-btn',
+              disabled: !ap.lanUrls || !ap.lanUrls.length,
+              onClick: function () { if (ap.lanUrls && ap.lanUrls.length) copy(ap.lanUrls[0], '局域网地址') },
+            }, '复制局域网直发地址')))
           if (ap.lanUrls && ap.lanUrls.length) {
-            az.push(React.createElement('div', { className: 'dsma-row', key: 'r2' },
-              React.createElement('button', {
-                type: 'button', className: 'dsma-btn', disabled: !ap.lanUrls[0],
-                onClick: function () { copy(ap.lanUrls[0], '局域网地址') },
-              }, '复制局域网直发地址')))
             az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'lan' },
-              '局域网直发（同一 WiFi 秒下）：' + ap.lanUrls[0]))
+              '局域网直发：' + ap.lanUrls[0]))
+          }
+          if (ap.mirrors && ap.mirrors.length) {
+            az.push(React.createElement('div', { className: 'dsma-line', key: 'mh' },
+              '公网线路（哪个通用哪个，点一下复制；jsDelivr 在国内时通时断）：'))
+            az.push(React.createElement('div', { className: 'dsma-row', key: 'mr' },
+              ap.mirrors.map(function (m) {
+                return React.createElement('button', {
+                  key: m.name, type: 'button', className: 'dsma-btn',
+                  onClick: function () { copy(m.url, m.name) },
+                }, m.name)
+              })))
           }
           az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
             'v' + (ap.version || '?') + ' · ' + (ap.size / 1024).toFixed(1) + ' KB · ' + ap.name
-            + '（扫码 → 浏览器下载 → 点安装，允许未知来源即可）'))
-          az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'gh' },
-            'GitHub 直链（CDN 不通时用）：' + (ap.githubUrl || '')))
+            + '（下载后点安装，允许未知来源即可）'))
         } else if (ap) {
           az.push(React.createElement('div', { className: 'dsma-line', key: 'na' },
             '插件目录里还没有安装包。把 dsh-mobile.apk 放到：' + ap.apkPath))
