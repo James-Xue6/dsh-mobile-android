@@ -605,3 +605,32 @@ quick 隧道做不到（协议里它是随机域名）。两条路：
    建 Tunnel 拿 token/hostname，再 `POST /mgw/cloudflare {"enabled":true,"mode":"named","hostname":…,"token":…}`
 2. **Tailscale**：手机与电脑加入同一 tailnet，App 填 `ws://100.x.x.x:3091/ws/mobile`
    （App 已把 100.64/10 与 `*.ts.net` 视为内网，不受明文限制；地址永不变、且不暴露公网）
+
+---
+
+## 十八、发版与更新提醒（维护者）
+
+App 内置版本更新提醒：启动时后台拉取更新清单，发现新版本弹窗提示（可「立即更新 / 复制链接 / 以后再说」），
+**设置 → 关于** 里也能手动「检查更新」。
+
+清单是仓库里的 `dist/version.json`：
+
+```json
+{ "versionCode": 4, "versionName": "0.4", "notes": "本次改了什么",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.4/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.4/dist/dsh-mobile.apk" }
+```
+
+App 从 `@main` 读它（所以永远指向最新），CDN 优先、GitHub raw 兜底。
+
+### 一条命令发版
+
+```powershell
+pwsh -File .\release.ps1 -Version 0.5 -Notes "修复 xxx；新增 yyy"
+```
+
+它会：校验版本号 → 改 `AndroidManifest`（versionName=x.y，**versionCode 自动 +1**）→ 构建 →
+更新 `dist/version.json` → 同步本机插件目录（局域网直发用）→ `git commit` + `tag vX.Y` + push →
+**刷新 jsDelivr 缓存**（让老客户端立刻看到新版本）。
+
+> `versionCode` 必须递增，否则安卓拒绝覆盖安装 —— 脚本会自动处理。

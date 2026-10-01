@@ -607,3 +607,32 @@ The quick tunnel cannot do it (in the protocol it is a random domain). Two optio
    create a Tunnel to get token/hostname, then `POST /mgw/cloudflare {"enabled":true,"mode":"named","hostname":…,"token":…}`
 2. **Tailscale**: join the phone and the PC to the same tailnet and enter `ws://100.x.x.x:3091/ws/mobile` in the app
    (the app already treats 100.64/10 and `*.ts.net` as LAN, so the cleartext restriction does not apply; the address never changes, and it does not expose the public internet)
+
+---
+
+## 18. Releasing and the in-app update prompt (maintainers)
+
+The app checks for updates in the background on launch and shows a dialog when a newer version exists
+(update now / copy link / remind me later). You can also check manually under **Settings → About**.
+
+The manifest is `dist/version.json` in this repository:
+
+```json
+{ "versionCode": 4, "versionName": "0.4", "notes": "what changed",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.4/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.4/dist/dsh-mobile.apk" }
+```
+
+The app reads it from `@main` (so it always points at the latest release), CDN first with a GitHub raw fallback.
+
+### One-command release
+
+```powershell
+pwsh -File .\release.ps1 -Version 0.5 -Notes "fixed X; added Y"
+```
+
+It validates the version, edits `AndroidManifest` (versionName=x.y, **versionCode auto-incremented**),
+builds, updates `dist/version.json`, syncs the local plugin directory (for LAN direct delivery),
+runs `git commit` + `tag vX.Y` + push, and **purges the jsDelivr cache** so existing clients see the new version immediately.
+
+> `versionCode` must strictly increase or Android refuses to over-install — the script handles that for you.
