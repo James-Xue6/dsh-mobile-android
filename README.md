@@ -452,7 +452,7 @@ POST /dsh-mobile-access/tunnel/restart  → /mgw/cloudflare/restart
 ### 稳定性说明
 
 quick 模式的域名**每次重启都会变**。要固定域名有两条路：
-1. **命名隧道**：域名 NS 迁到 Cloudflare → 建 Tunnel 拿 token → 面板/网关配 `mode=named` + hostname + token（用户域名当前托管在阿里云 `hichina.com`，需先迁 NS）；
+1. **命名隧道**：域名 NS 迁到 Cloudflare → 建 Tunnel 拿 token → 面板/网关配 `mode=named` + hostname + token（用户域名当前托管在阿里云 `<your-dns-provider>`，需先迁 NS）；
 2. **Tailscale**：手机装 Tailscale，用 `ws://100.x.x.x:3091/ws/mobile`（应用已把 100.64/10 与 `*.ts.net` 视为内网，不受明文限制）。
 
 ---
@@ -576,7 +576,7 @@ App 里存着旧域名，自然连不上，`connectedClients = 0`。
 
 quick 隧道做不到（协议里它是随机域名）。两条路：
 
-1. **命名隧道**：把 `example.com` 的 NS 从阿里云（`hichina.com`）迁到 Cloudflare，
+1. **命名隧道**：把 `example.com` 的 NS 从阿里云（`<your-dns-provider>`）迁到 Cloudflare，
    建 Tunnel 拿 token/hostname，再 `POST /mgw/cloudflare {"enabled":true,"mode":"named","hostname":…,"token":…}`
 2. **Tailscale**：手机与电脑加入同一 tailnet，App 填 `ws://100.x.x.x:3091/ws/mobile`
    （App 已把 100.64/10 与 `*.ts.net` 视为内网，不受明文限制；地址永不变、且不暴露公网）
