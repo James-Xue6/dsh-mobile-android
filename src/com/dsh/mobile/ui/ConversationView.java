@@ -56,6 +56,12 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private boolean compact;
     private List<ChatItem> full = new ArrayList<>();
     private boolean atBottom = true;
+    /**
+     * 手指是否按在列表上。流式输出时内容每 60ms 刷新一次，
+     * 若刷新时仍按 atBottom 自动滚到底，会和用户的上滑手势互相打架
+     * （手指刚按下、还没产生滚动事件时 atBottom 仍是 true，于是被硬拽回底部）。
+     */
+    private boolean userTouching = false;
     private boolean refreshPending;
     private boolean running;
     private String runningHint = "";
@@ -129,10 +135,30 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setOnScrollListener(new AbsListView.OnScrollListener() {
             @Override public void onScrollStateChanged(AbsListView view, int scrollState) { }
             @Override public void onScroll(AbsListView view, int first, int visible, int total) {
-                atBottom = (first + visible) >= total - 1;
+                atBottom = computeAtBottom();
                 if (toBottom != null) toBottom.setVisibility(atBottom ? GONE : VISIBLE);
                 if (first == 0 && total > 0 && view.canScrollVertically(-1)) host.onLoadMore();
             }
+        });
+
+        // 手指按住期间不自动滚动；抬手时重新判断是否贴底（决定按钮显隐）
+        list.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    userTouching = true;
+                    break;
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    userTouching = false;
+                    list.post(() -> {
+                        atBottom = computeAtBottom();
+                        if (toBottom != null) toBottom.setVisibility(atBottom ? GONE : VISIBLE);
+                    });
+                    break;
+                default:
+                    break;
+            }
+            return false; // 不消费事件，滚动仍交给 ListView 自己处理
         });
 
         // 套一层 FrameLayout，用来悬浮「回到底部」按钮
@@ -283,8 +309,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             refreshPending = false;
             applyFilter();
             adapter.notifyDataSetChanged();
-            if (atBottom) scrollToBottom();
+            if (atBottom && !userTouching) scrollToBottom();
         }, 60);
+    }
+
+    /** 像素级判断是否真的贴底：比 first+visible 更准，免得残留一行也算贴底。 */
+    private boolean computeAtBottom() {
+        int count = list.getCount();
+        if (count == 0) return true;
+        if (list.getLastVisiblePosition() < count - 1) return false;
+        android.view.View last = list.getChildAt(list.getChildCount() - 1);
+        if (last == null) return true;
+        return last.getBottom() <= list.getHeight() + Ui.dp(ctx, 4);
     }
 
     public void refreshNow() {

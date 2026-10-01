@@ -25,12 +25,27 @@ const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
 const APK_PATH = path.join(PLUGIN_DIR, 'app', 'dsh-mobile.apk')
 /** 局域网发安装包的端口（只发这一个文件，不做目录服务） */
 const APP_PORT = Number(process.env.DSH_MOBILE_APP_PORT || 8099)
-/** App 版本（发版时与 AndroidManifest 的 versionName 一起改） */
-const APP_VERSION = '0.1'
 const REPO_SLUG = 'James-Xue6/dsh-mobile-android'
+/**
+ * App 版本：优先读插件目录里的 app/version.txt（与 APK 一起更新），
+ * 这样换版本只要替换文件、不用重启 DSH。
+ */
+function appVersion() {
+  try {
+    const v = fs.readFileSync(path.join(PLUGIN_DIR, 'app', 'version.txt'), 'utf8').trim()
+    if (v) return v
+  } catch { /* 没这个文件就退回下面的兜底 */ }
+  return '0.2'
+}
 /** 公开发布地址：默认走 CDN（国内通常比 GitHub 稳），并给出 GitHub 兜底 */
-const GITHUB_URL = 'https://github.com/' + REPO_SLUG + '/raw/v' + APP_VERSION + '/dist/dsh-mobile.apk'
-const CDN_URL = 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + APP_VERSION + '/dist/dsh-mobile.apk'
+function publicUrls() {
+  const v = appVersion()
+  return {
+    version: v,
+    cdn: 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + v + '/dist/dsh-mobile.apk',
+    github: 'https://github.com/' + REPO_SLUG + '/raw/v' + v + '/dist/dsh-mobile.apk',
+  }
+}
 
 /** 复用网关依赖里的 qrcode 生成二维码；解析不到就退化为纯链接（面板自动降级） */
 function loadQrCode() {
@@ -224,16 +239,17 @@ export function apply(ctx) {
             // 局域网直连只是备选（离线、或公网慢的时候）。
             const lanPage = urls.length ? urls[0] : ''
             let qrSvg = null
-            const qrTarget = CDN_URL
+            const pub = publicUrls()
+            const qrTarget = pub.cdn
             const QRCode = loadQrCode()
             if (QRCode) {
               try { qrSvg = await QRCode.toString(qrTarget, { type: 'svg', margin: 1, width: 220 }) } catch { qrSvg = null }
             }
             sendJson(res, 200, {
-              version: APP_VERSION,
+              version: pub.version,
               available: info.available, size: info.size, name: info.name, port: APP_PORT,
               lanUrls: urls, lanPage,
-              publicUrl: CDN_URL, githubUrl: GITHUB_URL,
+              publicUrl: pub.cdn, githubUrl: pub.github,
               qrUrl: qrTarget, qrSvg,
               apkPath: APK_PATH,
             })
