@@ -1,12 +1,32 @@
 // mock-gateway.mjs —— 脱离 DSH 调试「DSH 掌上通」的模拟网关
 // 用法: node mock-gateway.mjs --port 3091 --fault none
-//   --fault none|nohello|silent|emptyclose|resetstream|proto4|nocaps|gatewayoff
+//   --fault none|nohello|silent|emptyclose|resetstream|retrytrue|retryfalse|proto4|nocaps|gatewayoff|close4003|close4004
+//   --retrying true|false   （只在 resetstream 档生效；retrytrue/retryfalse 档名优先）
 // 启动即打印 PAIRING_STRING=<base64url>，把它写进 pairing.txt 即可喂给现有 harness：
 //   java -cp "harness/out;harness/lib/json-20240303.jar" Harness pairing.txt "只回复四个字：联调成功"
 // 每帧收发与每次 close（含方向/码/原因）都会追加到 mock-gateway.jsonl —— 这是定性 R-C2 的关键证据。
+//
+// [本轮增补] session-stream-reset 的 retrying 字段：
+//   retrytrue  = 帧里带 retrying:true（瞬时抖动，follower 会重开流）→ 300ms 后补发一条
+//                assistant-stream 续流（start→chunk→end）模拟 follower 重开，用于验证
+//                "retrying=true 时不该按终态处理、已输出文本不丢"。
+//   retryfalse = 帧里带 retrying:false（终态中断）→ 不再续流。
+//   原来的 resetstream 档不带 retrying 字段（保持旧行为，验证缺省=false 的兼容路径）。
 import http from 'node:http'; import crypto from 'node:crypto'; import fs from 'node:fs'
 const arg=(k,d)=>{const i=process.argv.indexOf('--'+k);return i>0?process.argv[i+1]:d}
 const PORT=Number(arg('port',3091)), FAULT=arg('fault','none')
+// session-stream-reset 是否带 retrying：档名优先，其次 --retrying，都没有则不带该字段
+const RETRYING = FAULT==='retrytrue' ? 'true'
+  : FAULT==='retryfalse' ? 'false'
+  : String(arg('retrying','')).toLowerCase()
+const IS_RESET = FAULT==='resetstream' || FAULT==='retrytrue' || FAULT==='retryfalse'
+// [本轮增补] 真实网关会用 4003/4004 主动关连接（dsh-plugin-mobile-gateway/lib/index.mjs:2742/2788/2280）：
+//   4003 = authentication enabled / device revoked（应停止重连、要求重新配对）
+//   4004 = mobile gateway disabled（应进 GATEWAY_OFF，不再无脑重连）
+// 这两档用于验证 App 是否真的能读到服务端主动关闭的语义码。
+const CLOSE_CODE = FAULT==='close4003' ? 4003 : FAULT==='close4004' ? 4004 : 0
+const CLOSE_REASON = CLOSE_CODE===4004 ? 'mobile gateway disabled'
+  : CLOSE_CODE===4003 ? 'authentication enabled' : ''
 // [落盘增补③] --host：配对串里 publicUrl 用的主机名。默认 127.0.0.1 只适合「App 与网关同在
 // 本机」的 JVM harness；跑安卓模拟器要填 10.0.2.2（模拟器里访问宿主机的专用地址），
 // 真机走局域网则填电脑的 192.168.x.y。不填就会让 App 连它自己的 localhost 而永远连不上。
@@ -70,7 +90,23 @@ function onMsg(m){
       P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'start',attemptId:'a1'}})
       P.send({kind:'approval-requested',sessionId:sid,rpcId:'rpc-a1',approvalId:'ap-a1',toolName:'pwsh',reason:'（mock）沙箱升权'})
       P.send({kind:'question-requested',sessionId:sid,rpcId:'rpc-q1',questions:[{id:'q1',header:'（mock）选一个',options:[{label:'A'},{label:'B'}]}]})
-      if(FAULT==='resetstream'){ P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'chunk',attemptId:'a1',chunk:{type:'text',text:'（mock）半个字'}}}); return setTimeout(()=>P.send({kind:'session-stream-reset',sessionId:sid,code:'stream-interrupted',message:'（mock）跟随失败'}),300) }
+      if(IS_RESET){
+        P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'chunk',attemptId:'a1',chunk:{type:'text',text:'（mock）半个字'}}})
+        return setTimeout(()=>{
+          const reset={kind:'session-stream-reset',sessionId:sid,code:'stream-interrupted',message:'（mock）跟随失败'}
+          if(RETRYING==='true'||RETRYING==='false') reset.retrying=(RETRYING==='true')
+          P.send(reset)
+          // retrying=true：follower 会自动重开流（真实网关 1s 后推新 snapshot，这里 300ms 补续流）
+          if(RETRYING==='true') setTimeout(()=>{
+            P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'start',attemptId:'a2'}})
+            P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'chunk',attemptId:'a2',chunk:{type:'text',text:'（mock）后半句'}}})
+            P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'end',attemptId:'a2',outcome:{kind:'committed'}}})
+            P.send({kind:'event',sessionId:sid,seq:3,time:Math.floor(Date.now()/1000),event:{type:'assistant/message',turn:1,step:0,text:'（mock）半个字（mock）后半句'}})
+            P.send({kind:'event',sessionId:sid,seq:4,time:Math.floor(Date.now()/1000),event:{type:'turn/end',turn:1,step:0}})
+            P.send({kind:'session-queues',queues:{}})
+          },300)
+        },300)
+      }
       let i=0; const t=setInterval(()=>{ i++
         P.send({kind:'assistant-stream',sessionId:sid,frame:{type:'chunk',attemptId:'a1',chunk:{type:'text',text:'（mock）块'+i+' '}}})
         if(i>=4){clearInterval(t)
@@ -132,6 +168,8 @@ server.on('upgrade',(req,sock)=>{
   if(FAULT==='nohello'){log({note:'FAULT nohello: 不发 hello'});return}
   setTimeout(()=>{ ctx.send({kind:'hello',protocol:FAULT==='proto4'?4:3,dshVersion:'0.2.0-rc.2(mock)',historyFormatVersion:4,authenticated:true,port:PORT,clients:1,gatewayId:'mock-gateway',gatewayName:'mock',capabilities:FAULT==='nocaps'?['session-cancel']:CAPS})
     if(FAULT==='emptyclose'){const t=setInterval(()=>{try{c.closeEmpty()}catch{clearInterval(t)}},1500);sock.on('close',()=>clearInterval(t))}
+    // 服务端主动关闭（4003/4004）：等配对/token 阶段都走完再关，避免打断配对流程
+    if(CLOSE_CODE)setTimeout(()=>{ log({note:'FAULT '+FAULT+': 服务端主动 Close '+CLOSE_CODE+' "'+CLOSE_REASON+'"'}); try{c.close(CLOSE_CODE,CLOSE_REASON)}catch{} },600)
   },20)
   if(FAULT==='silent'){log({note:'FAULT silent: hello(仍会发)后完全静默，不回 pong、不应答'})}
 })

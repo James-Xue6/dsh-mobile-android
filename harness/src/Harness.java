@@ -41,6 +41,8 @@ public final class Harness implements GatewayClient.Listener {
     private static int helloCount = 0;
     private static int reconnectScheduled = 0;
     private static int streamResets = 0;
+    private static int streamResetsRetrying = 0;
+    private static int streamResetsTerminal = 0;
     private static final StringBuilder streamText = new StringBuilder();
     private static String lastEventType = "";
 
@@ -90,7 +92,8 @@ public final class Harness implements GatewayClient.Listener {
         System.out.println("================ 联调结果 ================");
         System.out.println("hello 次数             : " + helloCount);
         System.out.println("安排重连次数           : " + reconnectScheduled);
-        System.out.println("session-stream-reset   : " + streamResets);
+        System.out.println("session-stream-reset   : " + streamResets
+                + " (retrying=true " + streamResetsRetrying + " / 其余 " + streamResetsTerminal + ")");
         System.out.println("assistant-stream 增量帧 : " + chunkCount);
         System.out.println("持久 event 帧          : " + eventCount + " (最后: " + lastEventType + ")");
         System.out.println("tool/call 次数         : " + toolCalls);
@@ -158,10 +161,28 @@ public final class Harness implements GatewayClient.Listener {
         }
     }
 
+    /**
+     * 兼容桥：旧版 net 源码（harness/snapshot/ce7afd8）的 Listener 只有这个 3 参方法。
+     * 故意不加 @Override —— 这样同一份 Harness 既能编当前 src（4 参是真覆盖），
+     * 也能编旧快照（这里的 4 参只是多出来的普通方法，不会编译失败）。
+     */
     @Override
     public void onStreamReset(String sid, String code, String message) {
         streamResets++;
-        log("!! STREAM-RESET session=" + sid + " code=" + code + " message=" + message);
+        streamResetsTerminal++;
+        log("!! STREAM-RESET session=" + sid + " code=" + code + " message=" + message
+                + " retrying=(旧签名/未提供)");
+    }
+
+    /**
+     * 带 retrying 的 4 参重载（当前 src 的 dispatch 走这条）。retrying=true 表示网关只是
+     * 瞬时中断、follower 会自动重开流；false 才是终态。两条分支都必须被真正测到。
+     */
+    public void onStreamReset(String sid, String code, String message, boolean retrying) {
+        streamResets++;
+        if (retrying) streamResetsRetrying++; else streamResetsTerminal++;
+        log("!! STREAM-RESET session=" + sid + " code=" + code + " message=" + message
+                + " retrying=" + retrying);
     }
 
     @Override
@@ -215,6 +236,8 @@ public final class Harness implements GatewayClient.Listener {
         JSONObject f = frame.optJSONObject("frame");
         if (f == null) return;
         String type = f.optString("type", "");
+        if (streamResets > 0) log("  （断流后）流帧 #" + chunkCount + " " + type
+                + " attemptId=" + f.optString("attemptId", "-"));
         if ("chunk".equals(type)) {
             JSONObject chunk = f.optJSONObject("chunk");
             if (chunk != null) {

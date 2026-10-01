@@ -1,8 +1,11 @@
 // tools/run-e2e.mjs —— 用 mock 网关驱动 JVM harness 跑端到端 / 故障注入
 // 用法：
-//   node tools/run-e2e.mjs                       # 跑全部 8 档（none + 7 故障）
-//   node tools/run-e2e.mjs --fault silent --port 3091 --maxms 120000
-// 产物：tools/logs/<fault>-<时间戳>.gw.log / .harness.log / .summary.txt
+//   node tools/run-e2e.mjs                       # 跑全部 10 档（none + 9 故障）
+//   node tools/run-e2e.mjs --fault silent --port 3191 --maxms 120000
+//   node tools/run-e2e.mjs --classdir harness/out-ce7afd8   # 拿冻结快照做对照
+// 用法说明：默认 classDir = harness/out（当前源码，见 harness/build.ps1 默认 -NetRoot src）。
+// 产物：tools/runs/<fault>-<时间戳>/gateway.log / mock-gateway.jsonl / harness.log
+//       tools/logs/<fault>.summary.txt
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -49,7 +52,10 @@ async function runOne(fault, port, maxMs) {
   const pairingFile = path.join(runDir, 'pairing.txt');
   fs.writeFileSync(pairingFile, pairing, 'ascii');   // 无换行，harness 会 trim
 
-  const classDir = path.join(ROOT, 'harness', 'out-ce7afd8');
+  // 默认用「当前源码」编出来的 harness/out（对应 harness/build.ps1 默认 -NetRoot src）。
+  // 旧版硬编码 out-ce7afd8（冻结快照），会让所有档位测的是旧代码、结论无效。
+  // 需要拿快照做对照时：--classdir harness/out-ce7afd8。
+  const classDir = path.resolve(ROOT, arg('classdir', path.join('harness', 'out')));
   if (!fs.existsSync(path.join(classDir, 'Harness.class'))) {
     throw new Error('缺少 ' + classDir + '\\Harness.class —— 先跑 pwsh -File harness/build.ps1');
   }
@@ -70,19 +76,24 @@ async function runOne(fault, port, maxMs) {
   try { gw.kill(); } catch { }
   await sleep(300);
   return {
-    fault, ok: true, runDir, elapsedMs: Date.now() - t0, exit: done,
+    fault, ok: true, runDir, classDir, elapsedMs: Date.now() - t0, exit: done,
     pairing, gwLog, hsLog,
     harness: fs.existsSync(hsLog) ? fs.readFileSync(hsLog, 'utf8') : '',
     gateway: fs.existsSync(gwLog) ? fs.readFileSync(gwLog, 'utf8') : '',
   };
 }
 
-const FAULTS = ['none', 'nohello', 'silent', 'emptyclose', 'resetstream', 'proto4', 'nocaps', 'gatewayoff'];
+const FAULTS = ['none', 'nohello', 'silent', 'emptyclose', 'resetstream', 'retrytrue', 'retryfalse',
+  'proto4', 'nocaps', 'gatewayoff', 'close4003', 'close4004'];
 const only = arg('fault', null);
 // 注意：3091 在本机被 DSH 宿主进程占用（EADDRINUSE），默认改用 3191
 const port = Number(arg('port', process.env.HARNESS_PORT || 3191));
 const list = only ? only.split(',') : FAULTS;
-const DEFAULT_MAX = { none: 40000, nohello: 45000, silent: 120000, emptyclose: 40000, resetstream: 40000, proto4: 40000, nocaps: 40000, gatewayoff: 40000 };
+const DEFAULT_MAX = {
+  none: 40000, nohello: 45000, silent: 120000, emptyclose: 40000, resetstream: 40000,
+  retrytrue: 40000, retryfalse: 40000, proto4: 40000, nocaps: 40000, gatewayoff: 40000,
+  close4003: 40000, close4004: 40000,
+};
 
 const outDir = path.join(ROOT, 'tools', 'logs');
 fs.mkdirSync(outDir, { recursive: true });
@@ -93,13 +104,15 @@ for (const f of list) {
   console.log('\n########## fault=' + f + '  port=' + port + '  maxMs=' + maxMs + ' ##########');
   const r = await runOne(f, port, maxMs);
   report.push(r);
-  const summary = ['fault=' + f, 'runDir=' + r.runDir, 'exit=' + r.exit, 'elapsedMs=' + r.elapsedMs,
+  const summary = ['fault=' + f, 'runDir=' + r.runDir, 'classDir=' + (r.classDir || '(n/a)'),
+    'exit=' + r.exit, 'elapsedMs=' + r.elapsedMs,
     r.error ? 'error=' + r.error : '', '--- harness ---', r.harness || '(no output)'].join('\n');
   fs.writeFileSync(path.join(outDir, f + '.summary.txt'), summary, 'utf8');
   console.log(r.error ? ('ERROR: ' + r.error) : (r.harness || '(no output)'));
   await sleep(600);
 }
 fs.writeFileSync(path.join(outDir, 'last-run.json'), JSON.stringify(report.map(r => ({
-  fault: r.fault, exit: r.exit, elapsedMs: r.elapsedMs, runDir: r.runDir, error: r.error || null,
+  fault: r.fault, exit: r.exit, elapsedMs: r.elapsedMs, runDir: r.runDir,
+  classDir: r.classDir || null, error: r.error || null,
 })), null, 2), 'utf8');
 console.log('\n全部完成，摘要见 tools/logs/*.summary.txt');

@@ -1,10 +1,13 @@
 # 编译 JVM harness（复用 App 真实 net 层源码 + Android 垫片），不需要 Gradle/Android SDK
 # 用法:
-#   pwsh -File harness/build.ps1                      # 默认用冻结快照 harness/snapshot/ce7afd8（P0 批次）
-#   pwsh -File harness/build.ps1 -NetRoot ..\src       # 用工作区当前 src（会被并行编辑，谨慎）
+#   pwsh -File harness/build.ps1                                    # 默认用工作区当前源码 src/ -> harness/out
+#   pwsh -File harness/build.ps1 -NetRoot harness/snapshot/ce7afd8  # 显式指定冻结快照做对照 -> harness/out-ce7afd8
+#
+# 重要：默认必须是「当前源码」，否则 e2e 结果测的是旧快照、结论无效。
+# （旧版默认走 snapshot\ce7afd8，注释示例还写成仓库外的 ..\src，两处都已修正。）
 param(
-  [string]$NetRoot = '',
-  [string]$OutName = 'out-ce7afd8'
+  [string]$NetRoot = 'src',
+  [string]$OutName = ''
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,14 +18,18 @@ $javac = Join-Path $javaHome 'bin\javac.exe'
 $java = Join-Path $javaHome 'bin\java.exe'
 if (-not (Test-Path $javac)) { throw "找不到 javac：$javac（请设置 JAVA_HOME）" }
 
-# 源码根：默认用冻结快照，避免并行编辑中的 src/ 让测试结果不可复现
-if ([string]::IsNullOrWhiteSpace($NetRoot)) {
-  $netBase = Join-Path $here 'snapshot\ce7afd8'
-  $tag = 'snapshot/ce7afd8'
-} else {
-  $netBase = Join-Path $root $NetRoot
-  $tag = $NetRoot
+# 源码根：默认 src（当前源码）；显式传 harness/snapshot/<sha> 可编出对照用的旧版产物。
+if ([string]::IsNullOrWhiteSpace($NetRoot)) { $NetRoot = 'src' }
+$netBase = Join-Path $root $NetRoot
+$tag = $NetRoot
+if (-not (Test-Path $netBase)) { throw "找不到源码根：$netBase（相对仓库根 $root）" }
+
+# 输出目录：src -> out；其他（快照）-> out-<叶子名>，保持"同一次运行同时保留新旧产物"的对照能力。
+if ([string]::IsNullOrWhiteSpace($OutName)) {
+  $leaf = Split-Path -Leaf $NetRoot
+  $OutName = if ($leaf -eq 'src') { 'out' } else { 'out-' + $leaf }
 }
+
 $gw = Join-Path $netBase 'com\dsh\mobile\net\GatewayClient.java'
 $ws = Join-Path $netBase 'com\dsh\mobile\net\WsClient.java'
 if (-not (Test-Path $gw) -or -not (Test-Path $ws)) { throw "找不到 net 源码：$netBase" }
