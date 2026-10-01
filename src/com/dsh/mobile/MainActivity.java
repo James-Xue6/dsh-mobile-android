@@ -1161,7 +1161,7 @@ public final class MainActivity extends Activity implements
             Dl d = dlByRequest.get(frame.optString("requestId", ""));
             if (d == null) return;
             d.transferId = frame.optString("transferId", "");
-            d.name = frame.optString("name", "file");
+            d.name = safeDownloadName(frame.optString("name", "file"));
             d.mediaType = frame.optString("mediaType", "application/octet-stream");
             d.size = frame.optLong("size", 0);
             dlByTransfer.put(d.transferId, d);
@@ -1221,6 +1221,32 @@ public final class MainActivity extends Activity implements
                 try { d.temp.delete(); } catch (Throwable ignored) { }
             });
         });
+    }
+
+    /**
+     * 净化服务端帧给的文件名（安全评审 B5）。
+     *
+     * name 来自网关的 file-download-opened 帧，会被直接当成 MediaStore 的 DISPLAY_NAME，
+     * 在 API&lt;29 上还会拼进 new File(dir, name) —— 一旦含 ".." 或路径分隔符，就能越出
+     * 「下载」目录把内容写到任意可写位置（例如 /sdcard 根或应用私有目录）。
+     * 这里只保留最后一段基本名，并剔除控制字符与 Windows 保留字符。
+     */
+    private static String safeDownloadName(String raw) {
+        String n = raw == null ? "" : raw.trim();
+        // 只取最后一段：同时干掉 ".."、"/" 与 "\"（Windows 上 File 把两者都当分隔符）
+        int cut = Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\'));
+        if (cut >= 0) n = n.substring(cut + 1);
+        // 控制字符与 Windows 保留字符：避免非法文件名与隐藏/特殊名
+        n = n.replaceAll("[\\x00-\\x1f\\x7f<>:\"|?*]", "_").trim();
+        // 开头的点去掉：".", "..", ".nomedia" 这类要么无意义要么是特殊名
+        while (n.startsWith(".")) n = n.substring(1);
+        if (n.isEmpty()) return "file";
+        if (n.length() > 120) {
+            int dot = n.lastIndexOf('.');
+            String ext = (dot > 0 && n.length() - dot <= 12) ? n.substring(dot) : "";
+            n = n.substring(0, Math.min(dot > 0 ? dot : n.length(), 120 - ext.length())) + ext;
+        }
+        return n;
     }
 
     /** API 29+ 走 MediaStore「下载」目录（在文件管理里可见）；更低版本存应用目录。 */
