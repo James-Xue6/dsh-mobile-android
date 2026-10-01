@@ -2162,10 +2162,19 @@ public final class MainActivity extends Activity implements
         store.setUseWan(useWan);
         if (settingsView != null) settingsView.setUseWan(useWan);
         if (store.token().isEmpty()) {
-            Toast.makeText(this, "还没配对，请先「扫码配对」或「粘贴配对串」再切换", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "还没配对（设备令牌是空的）。\n"
+                    + "地址本身没问题、内网地址也不会变，只差一次配对：\n"
+                    + "扫一下电脑面板的「生成配对二维码」，配对后内网/公网地址与令牌会一起填好。",
+                    Toast.LENGTH_LONG).show();
             return;
         }
         String active = store.url();
+        if (active.isEmpty()) {
+            Toast.makeText(this, (useWan ? "公网地址" : "内网地址") + "还是空的。\n"
+                    + "扫一下电脑面板的「生成配对二维码」，两个地址会自动填好，不用手输。",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
         String problem = GatewayClient.cleartextProblem(active);
         if (problem != null) {
             Toast.makeText(this, problem, Toast.LENGTH_LONG).show();

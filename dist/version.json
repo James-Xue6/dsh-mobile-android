@@ -1,9 +1,9 @@
 {
-  "versionCode": 5,
-  "versionName": "0.5",
-  "notes": "意见反馈改为发给作者（GitHub Issue 一键提交，可复制兜底）；流式滚动冲突修复；扫码配对自动跳过 127.0.0.1；版本更新提醒",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.5/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.5/dist/dsh-mobile.apk",
+  "versionCode": 6,
+  "versionName": "0.6",
+  "notes": "配对与连接提示更清楚：区分「地址为空」和「设备令牌为空」，并说明内网地址不会变、一次配对即自动填好两个地址；输入框灰字提示写明「扫码后自动填」；发版脚本支持同步 Gitee",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.6/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.6/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

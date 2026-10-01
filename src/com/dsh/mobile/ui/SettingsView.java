@@ -75,11 +75,11 @@ public final class SettingsView extends LinearLayout {
         card.addView(hint("电脑端 DSH 安装并开启「移动设备」网关后，用这里的地址连过来。"));
 
         card.addView(label("内网地址（同一个 WiFi）"));
-        lanField = field("ws://192.168.1.100:3091/ws/mobile", false);
+        lanField = field("扫码后自动填 · ws://192.168.x.x:3091/ws/mobile", false);
         card.addView(lanField);
 
         card.addView(label("公网地址（反代之后填这里，可留空）"));
-        wanField = field("wss://你的域名/ws/mobile", false);
+        wanField = field("扫码后自动填 · wss://你的域名/ws/mobile", false);
         card.addView(wanField);
 
         LinearLayout epRow = Ui.row(ctx);

@@ -100,7 +100,21 @@ Write-Host "  OK 已提交并打 tag v$Version"
 if (-not $SkipPush) {
   & git push
   & git push origin "v$Version"
-  Write-Host "  OK 已推送分支与 tag"
+  Write-Host "  OK 已推送分支与 tag（GitHub）"
+
+  # 如果配了 gitee 远程，一并同步：国内用户从 Gitee 拉代码/下安装包更快
+  $remotes = @(& git remote)
+  if ($remotes -contains 'gitee') {
+    try {
+      & git push gitee HEAD:main
+      & git push gitee "v$Version"
+      Write-Host "  OK 已同步到 Gitee"
+    } catch {
+      Write-Warning "同步 Gitee 失败（不影响 GitHub）：$($_.Exception.Message)"
+    }
+  } else {
+    Write-Host "  （未配置 gitee 远程，跳过同步；配好后自动会带上）"
+  }
 } else {
   Write-Host "  (--SkipPush：未推送)"
 }
