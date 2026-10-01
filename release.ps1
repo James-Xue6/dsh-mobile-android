@@ -1,18 +1,26 @@
 <#
 一条命令发版：DSH 掌上通
 
+发版节奏（重要）：
+  **攒够改动再发版**，不要每改一点就发。每次发版都会让所有已安装的用户收到更新提示，
+  发太勤会打扰人。建议一个「有一件值得说的事」的批次发一次。
+  版本号按 0.8 -> 0.81 -> 0.82 -> ... 递增；
+  versionCode 由脚本自动 +1，负责真正的「新旧」判断（版本号只是给人看的）。
+
 用法（仓库根目录）：
-    pwsh -File .\release.ps1 -Version 0.5 -Notes "修复 xxx；新增 yyy"
-    pwsh -File .\release.ps1 -Version 0.5 -Notes "..." -SkipPush     # 只做本地
+    pwsh -File .\release.ps1 -Version 0.81 -Notes "这次改了什么"
+    pwsh -File .\release.ps1 -Version 0.81 -Notes "..." -SkipPush     # 只做本地
+
+注意：**普通的 git 提交不会触发更新提示** —— 只有本脚本（改 version.json + 打 tag）才会。
+所以平时随便提交，想发版时再跑这个。
 
 它会依次做：
- 1. 校验版本号格式（x.y），并与当前 AndroidManifest 比对
+ 1. 校验版本号格式（0.81 / 0.8.1 这种都行），并与当前 AndroidManifest 比对
  2. 改 AndroidManifest：versionName=x.y，versionCode=当前+1
-    （versionCode 必须递增，否则安卓拒绝覆盖安装）
  3. 构建 APK（build.ps1）
  4. 更新 dist/version.json 更新清单（App 的「检查更新」就是读它）
  5. 把新 APK 与 version.txt 同步进本机插件目录（局域网直发用）
- 6. git commit + tag vX.Y + push（含 tag）
+ 6. git commit + tag vX.Y + push（含 tag）；若配了 gitee 远程则一并同步
  7. 刷新 jsDelivr 对 version.json 与 APK 的缓存，让老客户端立刻看到新版本
 
 发完之后：老版本 App 启动时会自动提示更新（6 小时内只查一次），
@@ -28,7 +36,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-if ($Version -notmatch '^\d+\.\d+$') { throw "版本号要形如 0.5（收到：$Version）" }
+# 允许 0.81 这种两位、也允许 0.8.1 这种三段
+if ($Version -notmatch '^\d+(\.\d+)+$') { throw "版本号要形如 0.81 或 0.8.1（收到：$Version）" }
 
 $manifestPath = Join-Path $PSScriptRoot 'AndroidManifest.xml'
 $manifest = Get-Content $manifestPath -Raw
