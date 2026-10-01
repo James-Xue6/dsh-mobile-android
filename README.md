@@ -1,5 +1,8 @@
 # DSH 掌上通（DSH Mobile for Android）
 
+[English](README.en.md) | **简体中文**
+
+
 用手机遥控电脑上的 **DeepSeek Harness**。原生 Android 客户端，界面按豆包 / Trae 这类对话产品的形态做：
 会话列表 → 气泡对话 → 实时流式输出 → 内联审批 / 提问卡片；内网扫码配对，外网填你反代的地址。
 
@@ -542,8 +545,8 @@ App: 已下载 ✓ 下载/DSH 掌上通/dsh-mobile.apk
 **根因不是代码错，而是 quick 隧道的域名每次重启都会变**：
 
 ```
-重启前（App 里存的）: condo-walnut-palestinian-did.trycloudflare.com   ← 已失效
-重启后（网关在线）:   weblogs-impose-park-corpus.trycloudflare.com
+重启前（App 里存的）: example-tunnel.trycloudflare.com   ← 已失效
+重启后（网关在线）:   example-tunnel.trycloudflare.com
 （实测新地址握手正常：hello / auth=true）
 ```
 
@@ -573,7 +576,7 @@ App 里存着旧域名，自然连不上，`connectedClients = 0`。
 
 quick 隧道做不到（协议里它是随机域名）。两条路：
 
-1. **命名隧道**：把 `3260571.xyz` 的 NS 从阿里云（`hichina.com`）迁到 Cloudflare，
+1. **命名隧道**：把 `example.com` 的 NS 从阿里云（`hichina.com`）迁到 Cloudflare，
    建 Tunnel 拿 token/hostname，再 `POST /mgw/cloudflare {"enabled":true,"mode":"named","hostname":…,"token":…}`
 2. **Tailscale**：手机与电脑加入同一 tailnet，App 填 `ws://100.x.x.x:3091/ws/mobile`
    （App 已把 100.64/10 与 `*.ts.net` 视为内网，不受明文限制；地址永不变、且不暴露公网）
