@@ -115,6 +115,42 @@ function isLoopback(req) {
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1'
 }
 
+/**
+ * 盲 CSRF 闸门（安全评审 B6）。
+ *
+ * 网关 /mgw/* 自己的防护是「只允许 loopback + 写请求要同源」，但本代理是以
+ * 127.0.0.1 身份转发的，而且**自己补了 `origin: http://127.0.0.1:<port>`**
+ * 去满足网关的 isSameOrigin 检查 —— 这层转发网络关的同源校验失效了。
+ * 于是同一台电脑的浏览器里，任意网页（含 https 的恶意站）只要用**简单请求**
+ * POST 到 http://127.0.0.1:<webPort>/dsh-mobile-access/<path>，就能盲打 /mgw 的写接口：
+ * 开启 Cloudflare 隧道（把用户 DSH 直接暴露到公网）、关闭设备鉴权、生成配对码等。
+ * 浏览器不给读响应，但副作用已经发生。
+ *
+ * 关键闸门：简单请求只允许三种 Content-Type，想带 application/json 必须**先发 CORS 预检**，
+ * 而本服务从不回预检（无 Access-Control-* 头）→ 浏览器直接拦掉真实请求。
+ * 面板自身是同源 fetch，一直用 application/json，不受影响。
+ * 另外拒绝「带了 Origin 且与 Host 不符」的写请求，作为第二道闸（防预检被宿主放行的场景）。
+ */
+const JSON_CONTENT_TYPE = 'application/json'
+
+function isTrustedMutation(req) {
+  const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (ct !== JSON_CONTENT_TYPE) return false
+  const origin = req.headers.origin
+  // origin 缺失 = 非浏览器客户端（curl 等）；'null' = file:// / 沙箱 iframe。
+  // 这两种都过不了上面的 Content-Type 闸，所以这里不再额外拒绝，避免误伤面板。
+  if (typeof origin === 'string' && origin !== 'null') {
+    const host = req.headers.host
+    if (typeof host !== 'string') return false
+    try {
+      if (new URL(origin).host !== host) return false
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
 function readBody(req, limit = 1 << 20) {
   return new Promise((resolve, reject) => {
     let size = 0
@@ -223,6 +259,14 @@ export function apply(ctx) {
         try {
           if (!isLoopback(req)) {
             sendJson(res, 403, { error: 'forbidden', message: '仅允许本机访问' })
+            return
+          }
+          // 写请求必须是同源面板发出的 JSON 请求（见 isTrustedMutation 的说明）。
+          if (req.method !== 'GET' && req.method !== 'HEAD' && !isTrustedMutation(req)) {
+            sendJson(res, 403, {
+              error: 'forbidden',
+              message: '跨站写请求已拒绝（只接受同源 application/json）',
+            })
             return
           }
           const url = new URL(req.url || '/', 'http://x')
