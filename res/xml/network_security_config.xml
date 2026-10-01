@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  DSH Mobile talks to a self-hosted gateway on the user's own machine.
-  The LAN endpoint is plain ws:// over a private network, and the public
-  endpoint is user-supplied (reverse proxy, may be http:// on an intranet).
-  Cleartext is therefore required. It is NOT permitted to arbitrary hosts:
-  GatewayClient verifies that any cleartext target is a private/loopback/
-  link-local address or a .local name before opening a connection.
+  DSH 掌上通连接用户自己电脑上的自建网关：
+    · 局域网端点走明文 ws://（同一个 WiFi 内），公网端点由用户填写（反代，可能是内网 http://）。
+  因此明文必须放开，而 base-config 是**全量放开**——平台层不再限制任意主机。
+  真正的限制在应用层，见 GatewayClient.cleartextProblem()：
+  connect() / pair() / retryNow() 三个连接入口统一拦截，只有
+  回环 / 私有 IPv4 / fc00::7 / fe80::10 / .local / .lan / .ts.net / 单标签主机名
+  允许明文，公网必须 wss://（IPv6 按 ::1、fc00::/7、fe80::/10 单独判定）。
+  ⚠️ 改本文件不会收紧任何东西；要收紧请改 GatewayClient 的白名单。
+  （旧注释曾写「It is NOT permitted to arbitrary hosts」，那是对应用层行为的描述，
+    不是本配置能提供的能力，容易让后来者误以为平台已兜底，故改写。）
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
