@@ -13,6 +13,33 @@ session list → bubble chat → real-time streaming output → inline approval 
 
 ---
 
+## Quick start
+
+**1. Install the PC plugin** (on your computer, from the repository root)
+
+```powershell
+git clone git@github.com:James-Xue6/dsh-mobile-android.git
+cd dsh-mobile-android
+pwsh -File .\pc-plugin\install.ps1
+```
+
+The script copies the plugin into `~/.dsh/local-plugins/`, drops the APK into the plugin directory,
+and registers the dependency inside your DSH profile.
+
+**2. Restart the DSH desktop app once**, then open `Settings → General → "Mobile Access"`.
+
+**3. Install the app on your phone**: on the "Phone app installer" card, **with your phone on the same
+Wi-Fi, scan the QR code to download and install**. The APK is served straight from your own computer
+(local port 8099) — no third-party cloud drive or CDN involved.
+
+**4. Pair by QR**: back in the panel, click "Generate pairing QR code" and scan it with the app —
+**both the LAN and the public address are filled in at once**, so you can use the LAN at home and
+switch to the public address when you go out, with no manual typing.
+
+> The computer needs `dsh-plugin-mobile-gateway` (the protocol layer). The install script registers it
+> automatically; if it is missing, install it once from the DSH plugin marketplace.
+
+---
 ## 1. Why build a custom client
 
 | Existing option | Form | Why not just use it |

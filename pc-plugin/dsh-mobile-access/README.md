@@ -1,66 +1,62 @@
-# dsh-mobile-access（手机接入）
+# dsh-mobile-access（DSH 掌上通 · PC 接入插件）
 
-在 DSH 里直接管理手机端接入：**一键开关移动网关、生成配对二维码与访问令牌、查看并撤销已配对设备**。
+给 **DSH 掌上通** App 用的 PC 端接入面板。协议层**一行不重写** —— 全部复用
+[`dsh-plugin-mobile-gateway`](https://www.npmjs.com/package/dsh-plugin-mobile-gateway)（MIT）。
 
-## 它做什么 / 不做什么
+## 一键安装
 
-| | |
+在仓库根目录执行：
+
+```powershell
+pwsh -File .\pc-plugin\install.ps1
+```
+
+脚本会：复制插件到 `~/.dsh/local-plugins/`、把 `dist/dsh-mobile.apk` 放进插件目录、
+在 profile 的 `package.json` 登记依赖与 bundles、补一段 `mobile-gateway` 配置（lanPort 3091）。
+**改完重启一次 DSH 生效。**
+
+## 面板能做什么
+
+| 区块 | 作用 |
 |---|---|
-| **做** | 设置 → 通用 →「手机接入」面板；调用网关管理接口做接入编排与展示 |
-| **不做** | 不重写任何协议。WebSocket 网关、`dsh-mobile-v1` 协议、配对鉴权、会话同步全部由 **`dsh-plugin-mobile-gateway`** 提供 |
+| 接入状态 | 网关开关状态、局域网监听、在线设备数、网关版本 |
+| 网关运行模式 | 常驻 / 临时 / 关闭 三态切换 |
+| **手机 App 安装包** | **手机连同一 WiFi 扫码即下载安装 APK**（由插件内置的静态服务从电脑直发） |
+| 生成配对二维码 | 扫码 / 配对串接入；隧道在线时二维码自动带公网地址 |
+| 已配对设备 | 列出设备并可撤销（令牌立即失效） |
+| 公网访问（Cloudflare 隧道） | 一键起随机域名隧道；无需开端口、无需自建反代；开启前有安全声明弹窗 |
+| 意见反馈 | —（在 App 的「设置 → 意见反馈」里） |
 
-架构：本插件是**薄面板**。
+## 它是怎么工作的
 
 ```
-浏览器面板 (client.js)
-   │  fetch /dsh-mobile-access/*
-   ▼
-宿主代理 (index.js)                     ← 以 loopback 身份转发，鉴权边界留在宿主
-   │  http://127.0.0.1:<webPort>/mgw/*
-   ▼
-dsh-plugin-mobile-gateway               ← 协议层（第三方，MIT）
-   │
-   ▼
-DSH Host 0.2.0-rc.2
+浏览器面板 (client.js)  --fetch-->  /dsh-mobile-access/*        （DSH web 端口，宿主代理）
+宿主代理   (index.js)   --loopback--> http://127.0.0.1:<webPort>/mgw/*
+dsh-plugin-mobile-gateway               （协议层：dsh-mobile-v1 / WebSocket）
+DSH Host
 ```
 
-用宿主代理而不是让浏览器直连 `/mgw/*` 的原因：`/mgw` 带 `adminLoopbackOnly` +
-`isSameOrigin` 校验，桌面端渲染进程的来源地址并不稳定；由宿主以 127.0.0.1 发起最稳。
+另外 `index.js` 会在局域网另起一个**只发安装包**的小 HTTP 服务（默认 `8099`）：
 
-## 安装
-
-1. 确保 `dsh-plugin-mobile-gateway` 已装进同一个 profile（本插件依赖它的 `/mgw` 接口）。
-2. 在 profile 的 `package.json` 里把本插件加成 `link:` 依赖，并加入 `dsh.profile.bundles`：
-
-```json
-{
-  "dependencies": {
-    "dsh-mobile-access": "link:C:/Users/Administrator/.dsh/local-plugins/dsh-mobile-access"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": ["...", "dsh-mobile-access"]
-    }
-  }
-}
+```
+GET  http://<本机局域网IP>:8099/app.apk   # 安装包，MIME 为 application/vnd.android.package-archive
+GET  http://<本机局域网IP>:8099/          # 一个只有下载链接的极简页
 ```
 
-3. 重启 DSH（客户端插件在启动时加载）。
+它跑在 DSH 宿主进程内，所以走的是「按程序放行」的防火墙规则，手机在同一 WiFi 下直接可达；
+端口可用环境变量 `DSH_MOBILE_APP_PORT` 改。**只回应这两个路径**，不做目录服务。
 
-## 接口（宿主代理）
+## 为什么路由不放 `/api` 下
 
-| 方法 | 路径 | 转发到 |
-|---|---|---|
-| GET | `/dsh-mobile-access/status` | `/mgw/status` |
-| GET | `/dsh-mobile-access/devices` | `/mgw/devices` |
-| POST | `/dsh-mobile-access/gateway` | `/mgw/gateway`（`{"mode":"persistent\|temporary\|disabled"}`） |
-| POST | `/dsh-mobile-access/pair` | `/mgw/pair`（`{"name","publicUrl"}`） |
-| POST | `/dsh-mobile-access/devices/<id>/revoke` | `/mgw/devices/<id>/revoke` |
+DSH 的 `/api/*` 有浏览器信任围栏（未知路径 401）；实测：
 
-仅允许本机（loopback）访问；网关不可达时返回 `502 gateway-unavailable` 并给出中文原因。
+| 路径 | 结果 |
+|---|---|
+| `/api/dsh-mobile-access/status` | 401（被围栏拦） |
+| `/dsh-mobile-access/status` | 200 |
+| `/mgw/status` | 200（网关自己也因此挂在 `/mgw`） |
 
-## 注意
+## 依赖
 
-- 二维码**一次性、5 分钟有效**；过期重新生成即可。
-- 局域网是明文 `ws://`，只允许私有网段；公网请用自己的反向代理转成 `wss://`。
-- 撤销设备会立即断开该设备的连接，App 需要重新扫码配对。
+- `dsh-plugin-mobile-gateway` 0.9.0 及以上（提供全部协议能力）
+- 生成「安装包/配对」二维码时复用网关依赖里的 `qrcode`；解析不到会优雅降级为纯链接

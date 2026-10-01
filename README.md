@@ -14,6 +14,29 @@
 
 ---
 
+## 快速开始
+
+**① 装 PC 插件**（在电脑上，仓库根目录执行）
+
+```powershell
+git clone git@github.com:James-Xue6/dsh-mobile-android.git
+cd dsh-mobile-android
+pwsh -File .\pc-plugin\install.ps1
+```
+
+脚本会把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、并在 profile 里登记好依赖。
+
+**② 重启一次 DSH 桌面版**，然后打开 `设置 → 通用 → 「手机接入」`。
+
+**③ 手机装 App**：在面板的「手机 App 安装包」卡片上，**手机连同一个 WiFi 扫码即下载安装** ——
+安装包由插件从你这台电脑直接发出（局域网 8099 端口），不经过任何第三方网盘或 CDN。
+
+**④ 扫码配对**：装好后回到面板点「生成配对二维码」，用 App 扫它 ——
+**内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
+
+> 电脑端需要已装 `dsh-plugin-mobile-gateway`（协议层依赖，安装脚本会自动登记；未装则从 DSH 插件市场装一次）。
+
+---
 ## 一、为什么要自建客户端
 
 | 已有方案 | 形态 | 为什么不直接用 |

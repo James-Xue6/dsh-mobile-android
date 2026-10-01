@@ -135,10 +135,15 @@ window.__ModuleLoader__.load({
       var urlState = React.useState('')
     var riskState = React.useState(false)
     var riskOkState = React.useState(false)
+        var appState = React.useState(null)
       var manualUrl = urlState[0]
       var setManualUrl = urlState[1]
 
-      function loadStatus(silent) {
+      function loadApp() {
+          return request('GET', '/app').then(function (d) { setApp(d) }).catch(function () { /* 读不到就不显示 */ })
+        }
+
+        function loadStatus(silent) {
         return request('GET', '/status')
           .then(function (data) { setStatus(data); if (!silent) setError('') })
           .catch(function (e) { if (!silent) setError(e.message) })
@@ -153,6 +158,7 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         loadStatus(false)
         loadDevices()
+        loadApp()
         var timer = setInterval(function () { loadStatus(true) }, 5000)
         return function () { clearInterval(timer) }
       }, [])
@@ -278,7 +284,7 @@ window.__ModuleLoader__.load({
           }, '关闭网关'),
           React.createElement('button', {
             type: 'button', className: 'dsma-btn', disabled: busy !== '',
-            onClick: function () { loadStatus(false); loadDevices() },
+            onClick: function () { loadStatus(false); loadDevices(); loadApp() },
           }, '刷新'),
         ))
         if (lanUrls.length > 0) {
@@ -369,7 +375,42 @@ window.__ModuleLoader__.load({
           ))
         }
       }
-      children.push(React.createElement('div', { className: 'dsma-card', key: 'pair' }, pr))
+      // ---- 手机 App 安装包：扫码即下载（走本机局域网发文件）
+        var ap = appState[0]
+        var az = []
+        az.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '手机 App 安装包'))
+        az.push(React.createElement('div', { className: 'dsma-desc', key: 'd' },
+          '手机和电脑连同一个 WiFi 时，直接扫下面的码下载安装；装好后回到上面「生成配对二维码」扫一次即可接入。'))
+        if (ap && ap.available) {
+          if (ap.qrSvg) {
+            az.push(React.createElement('div', {
+              key: 'qr', className: 'dsma-qr',
+              dangerouslySetInnerHTML: { __html: ap.qrSvg },
+            }))
+          }
+          if (ap.qrUrl) az.push(React.createElement('div', { className: 'dsma-token', key: 'u' }, ap.qrUrl))
+          az.push(React.createElement('div', { className: 'dsma-row', key: 'r1' },
+            React.createElement('button', {
+              type: 'button', className: 'dsma-btn', disabled: !ap.qrUrl,
+              onClick: function () { copy(ap.qrUrl, '安装包地址') },
+            }, '复制局域网地址'),
+            React.createElement('a', {
+              className: 'dsma-btn', href: ap.publicUrl, target: '_blank', rel: 'noreferrer',
+            }, '外网 CDN 直链')))
+          az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
+            '安装包 ' + (ap.size / 1024).toFixed(1) + ' KB · ' + ap.name
+            + '（扫码 → 浏览器下载 → 点安装，允许未知来源即可）'))
+        } else if (ap) {
+          az.push(React.createElement('div', { className: 'dsma-line', key: 'na' },
+            '插件目录里还没有安装包。把 dsh-mobile.apk 放到：' + ap.apkPath))
+          az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'pub2' },
+            '也可以直接用外网直链：' + ap.publicUrl))
+        } else {
+          az.push(React.createElement('div', { className: 'dsma-line', key: 'ld' }, '读取中…'))
+        }
+        children.push(React.createElement('div', { className: 'dsma-card', key: 'app' }, az))
+
+        children.push(React.createElement('div', { className: 'dsma-card', key: 'pair' }, pr))
 
       // ---- 设备
       var dv = []

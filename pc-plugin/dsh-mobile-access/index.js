@@ -10,11 +10,53 @@
 // 协议层完全不重写：本文件只是转发。
 
 import http from 'node:http'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-mobile-access'
 export const inject = ['webServer']
 
 const PREFIX = '/dsh-mobile-access'
+const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
+/** 随插件一起分发的安装包：手机扫面板二维码直接下载 */
+const APK_PATH = path.join(PLUGIN_DIR, 'app', 'dsh-mobile.apk')
+/** 局域网发安装包的端口（只发这一个文件，不做目录服务） */
+const APP_PORT = Number(process.env.DSH_MOBILE_APP_PORT || 8099)
+
+/** 复用网关依赖里的 qrcode 生成二维码；解析不到就退化为纯链接（面板自动降级） */
+function loadQrCode() {
+  const profiles = process.env.DSH_PROFILE_DIR
+    ? [path.join(process.env.DSH_PROFILE_DIR, 'package.json')]
+    : [path.join(os.homedir(), '.dsh', 'profiles', 'desktop', 'package.json'),
+       path.join(os.homedir(), '.dsh', 'package.json')]
+  for (const base of profiles) {
+    try { return createRequire(base)('qrcode') } catch { /* 试下一个 */ }
+  }
+  return null
+}
+
+function lanIPv4() {
+  const out = []
+  const ifaces = os.networkInterfaces()
+  for (const name of Object.keys(ifaces)) {
+    for (const ni of ifaces[name] || []) {
+      if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address)
+    }
+  }
+  return out
+}
+
+function apkInfo() {
+  try {
+    const st = fs.statSync(APK_PATH)
+    return { available: true, size: st.size, mtime: st.mtimeMs, name: path.basename(APK_PATH) }
+  } catch {
+    return { available: false, size: 0, mtime: 0, name: 'dsh-mobile.apk' }
+  }
+}
 
 /** 前端可用的路由 -> /mgw 上的真实路由 */
 const ROUTES = [
@@ -89,6 +131,60 @@ export function apply(ctx) {
   const webServer = ctx.webServer
   const port = webServer && webServer.port ? webServer.port : 0
 
+  // ---------------- 局域网发安装包：手机扫码即下载 ----------------
+  // 跑在 DSH 宿主进程内，防火墙是按程序放行的，所以局域网可达；
+  // 只回应 GET / 与 GET /app.apk，其他一律 404，避免变成通用文件服务。
+  let appServer = null
+  ctx.effect(() => {
+    appServer = http.createServer((req, res) => {
+      const p = (req.url || '/').split('?')[0]
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('method not allowed')
+        return
+      }
+      if (p === '/' ) {
+        const info = apkInfo()
+        const body = Buffer.from(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+          + '<title>DSH 掌上通 · 安装包</title>'
+          + '<body style="font:15px system-ui;padding:24px;line-height:1.7">'
+          + '<h2>DSH 掌上通</h2>'
+          + (info.available
+            ? '<p>安装包 ' + (info.size / 1024).toFixed(1) + ' KB</p>'
+              + '<p><a href="/app.apk" style="font-size:17px">⬇ 点击下载 APK</a></p>'
+              + '<p style="color:#888">下载后在手机上点安装；若提示未知来源，允许本浏览器安装即可。</p>'
+            : '<p>插件目录里还没有安装包：' + APK_PATH + '</p>'),
+          'utf8')
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
+        res.end(req.method === 'HEAD' ? undefined : body)
+        return
+      }
+      if (p === '/app.apk') {
+        let st
+        try { st = fs.statSync(APK_PATH) } catch {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('apk not found')
+          return
+        }
+        res.writeHead(200, {
+          'content-type': 'application/vnd.android.package-archive',
+          'content-length': st.size,
+          'content-disposition': 'attachment; filename="dsh-mobile.apk"',
+          'cache-control': 'no-store',
+        })
+        if (req.method === 'HEAD') { res.end(); return }
+        fs.createReadStream(APK_PATH).pipe(res)
+        return
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('not found')
+    })
+    appServer.on('error', () => { /* 端口被占等：面板会显示不可用 */ })
+    appServer.listen(APP_PORT, '0.0.0.0')
+    return () => { try { appServer && appServer.close() } catch { /* ignore */ } }
+  }, 'mobile-access.app-server')
+
   ctx.effect(() => {
     const dispose = webServer.register({
       kind: 'prefix',
@@ -110,6 +206,29 @@ export function apply(ctx) {
             )
             res.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
             res.end(result.body)
+            return
+          }
+
+          // 面板用来渲染「扫码装 App」卡片
+          if (local === '/app' && req.method === 'GET') {
+            const info = apkInfo()
+            const lan = lanIPv4()
+            const urls = lan.map((ip) => 'http://' + ip + ':' + APP_PORT + '/app.apk')
+            const publicUrl = 'https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/dsh-mobile.apk'
+            let qrSvg = null
+            let qrUrl = urls[0] || ''
+            if (info.available && qrUrl) {
+              const QRCode = loadQrCode()
+              if (QRCode) {
+                try { qrSvg = await QRCode.toString(qrUrl, { type: 'svg', margin: 1, width: 220 }) } catch { qrSvg = null }
+              }
+            }
+            sendJson(res, 200, {
+              available: info.available, size: info.size, name: info.name, port: APP_PORT,
+              lanUrls: urls, qrUrl, qrSvg, publicUrl,
+              apkPath: APK_PATH,
+              downloadPage: urls.length ? urls[0].replace('/app.apk', '/') : '',
+            })
             return
           }
 
