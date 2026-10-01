@@ -526,3 +526,48 @@ App: 已下载 ✓ 下载/DSH 掌上通/dsh-mobile.apk
   而 agent 的交付物常在项目目录 → 这类会提示「不在这个会话的工作目录内」。
 - 实时推送的 `deliverables/presented` 事件在会话历史里能看到（重开会话会渲染卡片），
   但**当次实时**没有渲染出卡片 —— 待查是宿主未实时广播还是客户端漏处理。
+
+---
+
+## 十七、隧道域名轮换问题与扫码自动填充（2026-10-01 深夜）
+
+### 用户反馈的 bug：公网连不上
+
+**根因不是代码错，而是 quick 隧道的域名每次重启都会变**：
+
+```
+重启前（App 里存的）: condo-walnut-palestinian-did.trycloudflare.com   ← 已失效
+重启后（网关在线）:   weblogs-impose-park-corpus.trycloudflare.com
+（实测新地址握手正常：hello / auth=true）
+```
+
+App 里存着旧域名，自然连不上，`connectedClients = 0`。
+
+### 为什么不能让 App 自己去问当前公网地址
+
+查了协议（PROTOCOL.md）：
+
+- `endpoints` **只在「配对载荷」和本机管理接口 `GET /mgw/status` 里给**，
+  `hello` / `paired` **不含** endpoints；
+- `/mgw/*` 受 `adminLoopbackOnly` 限制，**手机连不到**。
+
+→ 所以 **配对载荷（二维码 / 配对串）是 App 拿到当前公网地址的唯一自动通道**，
+「扫码自动填」不是可选优化，而是唯一正确路径。
+
+### 已实现的四处改动
+
+| 改动 | 说明 |
+|---|---|
+| **扫码一次填好两个地址** | 解析配对载荷的 `endpoints[]`：私有网段写「内网」槽、公网/隧道写「公网」槽；只有公网时自动切到「用公网」 |
+| **连不上自动切换** | 连接失败时在内网/公网之间**自动切一次**（只切一次，避免来回跳），新增 `GatewayClient.Listener.onReconnectScheduled` |
+| **失效明确提示** | 地址含 `trycloudflare.com` 或错误含 404 时，直接提示「公网地址可能已失效（隧道域名每次重启会变）→ 重新扫码」 |
+| **安全免责声明** | 手机端：首次切「用公网」弹窗 + 勾选「我已知情」才放行（存一次性确认）；面板端：**每次**开启公网隧道都弹窗（对齐 dsh-pocket） |
+
+### 想让地址永久固定？
+
+quick 隧道做不到（协议里它是随机域名）。两条路：
+
+1. **命名隧道**：把 `3260571.xyz` 的 NS 从阿里云（`hichina.com`）迁到 Cloudflare，
+   建 Tunnel 拿 token/hostname，再 `POST /mgw/cloudflare {"enabled":true,"mode":"named","hostname":…,"token":…}`
+2. **Tailscale**：手机与电脑加入同一 tailnet，App 填 `ws://100.x.x.x:3091/ws/mobile`
+   （App 已把 100.64/10 与 `*.ts.net` 视为内网，不受明文限制；地址永不变、且不暴露公网）
