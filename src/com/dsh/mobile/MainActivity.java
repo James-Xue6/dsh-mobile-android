@@ -124,6 +124,12 @@ public final class MainActivity extends Activity implements
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        // 防截屏 / 防最近任务缩略图泄漏（安全评审 P1-10 必修项）：
+        // 这个界面会出现设备令牌（掩码后仍有末 4 位）、网关地址，以及全部聊天正文与工具输出。
+        // 不设这个标志时：任意 App 可截屏、系统「最近任务」缩略图会把聊天内容留在后台快照里。
+        // FLAG_SECURE 同时关掉两者，代价是用户自己也无法截屏（本 App 没有分享截图的需求）。
+        getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE,
+                android.view.WindowManager.LayoutParams.FLAG_SECURE);
         store = new Store(this);
         if (SHARED_GW == null) SHARED_GW = new GatewayClient(this);
         else SHARED_GW.setListener(this);
