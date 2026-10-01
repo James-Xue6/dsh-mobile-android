@@ -743,14 +743,20 @@ window.__ModuleLoader__.load({
           font: 'inherit',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: wide ? 'flex-start' : 'center',
+          justifyContent: 'center',
           gap: wide ? 8 : 0,
           boxSizing: 'border-box',
-          width: wide ? 'calc(100% + 4px)' : 36,
-          height: wide ? 42 : 36,
-          margin: wide ? '4px -2px' : '3px 0',
-          padding: wide ? '0 10px 0 8px' : 0,
-          lineHeight: wide ? '22px' : 'normal',
+          // 与同一槽位（sidebar.footer.action）里的其它插件按钮对齐：
+          // talk-map / session-cleaner / desktop-restart 都是 36×36 纯图标、
+          // 外边距 3px 0。原来这里的 width: calc(100% + 4px) 与 margin 左右 -2px
+          // 是按「竖排占满整行」写的，而该槽位实际是横排，
+          // 结果这个按钮比同伴宽出一截、左边也对不齐。
+          width: wide ? 'auto' : 36,
+          minWidth: 36,
+          height: 36,
+          margin: '3px 0',
+          padding: wide ? '0 8px' : 0,
+          lineHeight: 'normal',
         },
       }, icon, wide ? React.createElement('span', null, '移动设备') : null)
     }
