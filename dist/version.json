@@ -1,13 +1,15 @@
 {
-  "versionCode": 6,
-  "versionName": "0.6",
-  "notes": "配对与连接提示更清楚：区分「地址为空」和「设备令牌为空」，并说明内网地址不会变、一次配对即自动填好两个地址；输入框灰字提示写明「扫码后自动填」；发版脚本支持同步 Gitee",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.6/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.6/dist/dsh-mobile.apk",
+  "versionCode": 7,
+  "versionName": "0.7",
+  "notes": "意见反馈支持后台直发：App 可直接 POST 到 企业微信/钉钉/飞书 群机器人、Server酱 或 Formspree 邮件转发（用户零门槛，点一下就发）；邮箱 804544542@qq.com 已配置为 mailto 兜底（优先于 GitHub Issue）",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.7/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.7/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
-    "email": ""
+    "email": "804544542@qq.com",
+    "webhook": "",
+    "webhookKind": "generic"
   },
   "page": "https://github.com/James-Xue6/dsh-mobile-android"
 }

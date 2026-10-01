@@ -1786,17 +1786,18 @@ public final class MainActivity extends Activity implements
         String email = fb.optString("email", "");
         String title = "【DSH 掌上通】意见反馈 v" + myVersionName();
         try {
+            // 邮箱优先（作者指定），其次 GitHub Issue
+            if (!email.isEmpty()) {
+                return "mailto:" + email
+                        + "?subject=" + android.net.Uri.encode(title)
+                        + "&body=" + android.net.Uri.encode(text);
+            }
             if (!issues.isEmpty()) {
                 String labels = fb.optString("labels", "");
                 return issues + (issues.contains("?") ? "&" : "?")
                         + "title=" + android.net.Uri.encode(title)
                         + "&body=" + android.net.Uri.encode(text)
                         + (labels.isEmpty() ? "" : "&labels=" + android.net.Uri.encode(labels));
-            }
-            if (!email.isEmpty()) {
-                return "mailto:" + email
-                        + "?subject=" + android.net.Uri.encode(title)
-                        + "&body=" + android.net.Uri.encode(text);
             }
         } catch (Throwable ignored) { }
         return "";
@@ -1809,8 +1810,15 @@ public final class MainActivity extends Activity implements
             return;
         }
         store.addFeedback(t);
-        String full = feedbackText(t);
-        copyFeedback(full);   // 同时复制一份，万一浏览器/邮件打不开也不丢
+        final String full = feedbackText(t);
+        copyFeedback(full);   // 先复制一份，任何通道失败都不丢内容
+        JSONObject fb = feedbackChannel();
+        String webhook = fb == null ? "" : fb.optString("webhook", "").trim();
+        if (!webhook.isEmpty()) {
+            // 后台通道：App 直接 POST，用户什么都不用装、不用配置
+            postFeedback(webhook, fb.optString("webhookKind", "generic"), full);
+            return;
+        }
         String url = buildFeedbackUrl(full);
         if (url.isEmpty()) {
             Toast.makeText(this, "没有取到作者的反馈通道，已复制到剪贴板", Toast.LENGTH_LONG).show();
@@ -1824,6 +1832,70 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "打不开反馈通道，已复制到剪贴板：" + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    /**
+     * 把反馈 POST 到作者配置的 webhook。不同服务要的 JSON 形状不同，这里按 kind 适配：
+     *   wecom / dingtalk 企业微信、钉钉群机器人
+     *   feishu           飞书群机器人
+     *   serverchan       Server酱（key 在 URL 里，用 title/desp）
+     *   generic          通用（Formspree 之类的转发服务，会把所有字段转发成邮件）
+     */
+    private void postFeedback(final String url, final String kind, final String text) {
+        final String shortText = text.length() > 3000 ? text.substring(0, 3000) : text;
+        Toast.makeText(this, "正在发送…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String err = null;
+            java.net.HttpURLConnection c = null;
+            try {
+                JSONObject payload = new JSONObject();
+                if ("wecom".equals(kind) || "dingtalk".equals(kind)) {
+                    payload.put("msgtype", "text");
+                    JSONObject inner = new JSONObject();
+                    inner.put("content", shortText);
+                    payload.put("text", inner);
+                } else if ("feishu".equals(kind)) {
+                    payload.put("msg_type", "text");
+                    JSONObject inner = new JSONObject();
+                    inner.put("text", shortText);
+                    payload.put("content", inner);
+                } else if ("serverchan".equals(kind)) {
+                    payload.put("title", "DSH 掌上通 意见反馈 v" + myVersionName());
+                    payload.put("desp", shortText);
+                } else {
+                    payload.put("subject", "DSH 掌上通 意见反馈 v" + myVersionName());
+                    payload.put("message", shortText);
+                    payload.put("text", shortText);
+                    payload.put("version", myVersionName());
+                    payload.put("device", android.os.Build.MODEL);
+                }
+                byte[] data = payload.toString().getBytes("UTF-8");
+                c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                c.setRequestMethod("POST");
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(15000);
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                c.setRequestProperty("User-Agent", "DSH-Mobile-Android");
+                c.setFixedLengthStreamingMode(data.length);
+                java.io.OutputStream os = c.getOutputStream();
+                os.write(data);
+                os.flush();
+                os.close();
+                int code = c.getResponseCode();
+                if (code < 200 || code >= 300) err = "HTTP " + code;
+            } catch (Throwable e) {
+                err = e.getMessage() == null ? String.valueOf(e) : e.getMessage();
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Throwable ignored) { }
+            }
+            final String e = err;
+            runOnUiThread(() -> {
+                Toast.makeText(this, e == null ? "已发送给作者，谢谢反馈！" : "发送失败（内容已复制）：" + e,
+                        Toast.LENGTH_LONG).show();
+                refreshFeedbackHint();
+            });
+        }, "feedback-post").start();
     }
 
     /** 反馈时附上的环境信息，方便定位。 */
