@@ -151,7 +151,9 @@ public final class SettingsView extends LinearLayout {
 
         // ---- 对话显示模式
         LinearLayout disp = section(body, "对话显示", false);
-        disp.addView(hint("「简洁」只显示正在运行什么，不铺开每条命令的细节，类似桌面端。"));
+        disp.addView(hint("「简洁」= 和桌面端一致的回合摘要：每个回合只留一条人能读懂的过程行"
+                + "（例如「执行了命令 · pwsh」「已读取文件，执行了命令」），不铺开工具参数/输出，"
+                + "也不显示思考过程；「完整」保留全部细节。"));
         LinearLayout seg = Ui.row(ctx);
         seg.setLayoutParams(Ui.fill());
         seg.setPadding(0, Ui.dp(ctx, 10), 0, 0);
