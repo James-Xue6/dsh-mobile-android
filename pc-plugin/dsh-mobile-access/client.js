@@ -45,7 +45,9 @@ window.__ModuleLoader__.load({
       '  border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);}',
       '.dsma-dot{width:7px;height:7px;border-radius:50%;display:inline-block;}',
       '.dsma-qr{margin-top:10px;padding:12px;border-radius:12px;background:#fff;display:inline-block;line-height:0;}',
-      '.dsma-qr svg{width:220px;height:220px;}',
+      '/* 配对串是 552 字符上下 Base64URL，二维码要做成 89x89 模块，画得越大越好扫：',
+      '   220px 时一个模块只有 2.4px，手机常见扫不动/扫错；放到 300px 且等比缩放。 */',
+      '.dsma-qr svg{display:block;width:300px;max-width:100%;height:auto;}',
       '/* 二维码只在弹窗里出现：页面里常驻两张码正是用户「看不明白」的原因 */',
       '.dsma-modal-backdrop{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);display:flex;',
       '  align-items:center;justify-content:center;padding:20px;}',
@@ -128,6 +130,75 @@ window.__ModuleLoader__.load({
     function splitLanUrl(url) {
       var m = /^wss?:\/\/([^/:\s]+)(?::(\d+))?/.exec(String(url || ''))
       return { host: m ? m[1] : '', port: m && m[2] ? m[2] : '' }
+    }
+
+    /**
+     * 面板侧只用「手机真连得上」的内网地址（与 index.js 的 isUsableLanAddress 同一套规则）。
+     *
+     * 为什么面板也要过滤：网关自己（dsh-plugin-mobile-gateway 的 status.lan.urls）会把
+     * 虚拟网卡地址一起列出来，而且虚拟网卡常常排在真网卡前面 —— 内网二维码默认就填了它，
+     * 手机扫了连不上。排除依据：
+     *   · 169.254.x.x —— APIPA，没拿到 DHCP
+     *   · 172.16.0.0/12 —— 虚拟网卡重灾区（VirtualBox / Hyper-V / WSL 常在 172.30.x 之类）
+     *   · 100.64.0.0/10 —— 运营商级 NAT
+     *   · 127.x —— 本机回环
+     */
+    function isUsableLanHost(host) {
+      var parts = String(host || '').split('.')
+      if (parts.length !== 4) return false
+      var nums = []
+      for (var i = 0; i < parts.length; i++) {
+        if (!/^\d{1,3}$/.test(parts[i])) return false
+        var n = Number(parts[i])
+        if (n > 255) return false
+        nums.push(n)
+      }
+      if (nums[0] === 127) return false
+      if (nums[0] === 169 && nums[1] === 254) return false
+      if (nums[0] === 172 && nums[1] >= 16 && nums[1] <= 31) return false
+      if (nums[0] === 100 && nums[1] >= 64 && nums[1] <= 127) return false
+      return true
+    }
+
+    /** 真实家用网段优先（192.168.x > 10.x > 其它） */
+    function lanHostRank(host) {
+      if (/^192\.168\./.test(host)) return 0
+      if (/^10\./.test(host)) return 1
+      return 2
+    }
+
+    /**
+     * 校验 /pair 返回的配对串：必须是非空、长度合理、能解出 version=2 的 Base64URL(JSON)。
+     *
+     * 为什么出码前要自检：二维码一旦画出来用户就会去扫，手机端对「不是配对串的内容」
+     * 只会报一句「不是可用的配对码」。所以宁可这里先验一次：不通过就**不画二维码**，
+     * 直接告诉用户「配对串获取失败，请重试」，而不是画一张内容不对的码。
+     * 返回 '' 表示通过，否则返回原因（给用户看的短句）。
+     */
+    function pairPayloadProblem(value) {
+      if (typeof value !== 'string' || value.trim() === '') return '服务端没有返回配对串'
+      var text = value.trim()
+      if (text.length <= 100) return '配对串只有 ' + text.length + ' 个字符，明显不完整'
+      var b64 = text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '')
+      var pad = b64.length % 4
+      if (pad === 1) return '配对串不是合法的 Base64URL（长度 ' + text.length + '）'
+      if (pad === 2) b64 += '=='
+      else if (pad === 3) b64 += '='
+      var binary
+      try { binary = atob(b64) } catch (e) { return '配对串不是合法的 Base64URL' }
+      var json = binary
+      try {
+        // atob 给的是 latin1 字符串；配对串里可能有中文（设备名），按 UTF-8 还原再看 JSON
+        json = decodeURIComponent(binary.split('').map(function (c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+        }).join(''))
+      } catch (e) { /* 还原失败就按 latin1 继续，JSON 结构本身是 ASCII */ }
+      if (json.charAt(0) !== '{') return '配对串解出来不是 JSON'
+      var obj = null
+      try { obj = JSON.parse(json) } catch (e) { return '配对串不是合法 JSON' }
+      if (obj.version !== 2) return '配对串版本不是 2（收到 ' + obj.version + '）'
+      if (!obj.publicUrl || !obj.pairingCode) return '配对串里缺少连接地址或配对码'
+      return ''
     }
 
     // ------------------------------------------------------------------ 组件
@@ -264,11 +335,17 @@ window.__ModuleLoader__.load({
         guard
           .then(function () { return request('POST', '/pair', body) })
           .then(function (data) {
+            // 服务端给的 svg 就是 qrPayload 画出来的二维码（网关 lib/index.mjs 里
+            // QRCode.toString(qrPayload) 直接用同一个串）；url 只是旁边给人看的文字，
+            // 任何时候都不会画进二维码。这里再验一次配对串，拿不到就不画码。
+            var payload = data && typeof data.qrPayload === 'string' ? data.qrPayload.trim() : ''
+            var problem = pairPayloadProblem(payload)
             setQrView({
               kind: 'pair',
               title: '扫码连接 · ' + (label || '本机'),
-              svg: data && data.svg,
-              payload: data && data.qrPayload,
+              svg: problem ? null : (data && data.svg),
+              payload: problem ? '' : payload,
+              payloadError: problem,
               url: (data && data.payload && data.payload.publicUrl) || url || '',
               expiresAt: data && data.payload && data.payload.expiresAt,
             })
@@ -278,10 +355,15 @@ window.__ModuleLoader__.load({
           .then(function () { setBusy('') })
       }
 
-      /** 内网连接用的 ws 地址（网关已经在监听的地址） */
+      /** 内网连接用的 ws 地址（网关已经在监听的地址，跳过虚拟网卡） */
       function lanWsUrl() {
-        var urls = (status && status.lan && status.lan.urls) || []
-        return urls.length ? urls[0] : ''
+        var urls = ((status && status.lan && status.lan.urls) || []).filter(function (u) {
+          return isUsableLanHost(splitLanUrl(u).host)
+        })
+        if (!urls.length) return ''
+        return urls.slice().sort(function (a, b) {
+          return lanHostRank(splitLanUrl(a).host) - lanHostRank(splitLanUrl(b).host)
+        })[0]
       }
 
       /** 高级区里用：按当前已知地址挑一条生成配对码 */
@@ -291,16 +373,20 @@ window.__ModuleLoader__.load({
         return pairWith(manualUrl.trim() || tunnelUrl || lanWsUrl(), '手动地址')
       }
 
-      /** 探测到的本机内网 IP 候选（网关监听到的 + 发安装包用的那几个） */
+      /** 探测到的本机内网 IP 候选（网关监听到的 + 发安装包用的那几个；滤掉虚拟网卡） */
       function lanCandidates() {
         var out = []
         var push = function (url) {
           var host = splitLanUrl(url).host
-          if (host && out.indexOf(host) < 0) out.push(host)
+          if (host && isUsableLanHost(host) && out.indexOf(host) < 0) out.push(host)
         }
         ;((status && status.lan && status.lan.urls) || []).forEach(push)
-        ;((app && app.lanUrls) || []).forEach(push)
-        return out
+        ;((app && app.lanUrls) || []).forEach(function (url) {
+          // app.lanUrls 是 http://…/app.apk，不是 ws://，单独取一次 host
+          var m = /^https?:\/\/([^/:\s]+)/.exec(String(url || ''))
+          if (m) push('ws://' + m[1])
+        })
+        return out.sort(function (a, b) { return lanHostRank(a) - lanHostRank(b) })
       }
 
       function openLanDialog() {
@@ -563,6 +649,9 @@ window.__ModuleLoader__.load({
         if (app && app.available) {
           az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
             'v' + (app.version || '?') + ' · ' + (app.size / 1024).toFixed(1) + ' KB · ' + app.name))
+          az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'ref' },
+            '局域网直发用的是这台电脑上的最新构建；公网镜像跟的是 ' + (app.publicRef || 'main')
+            + ' 这个 ref（发版才会另打 tag）。'))
           az.push(React.createElement('div', { className: 'dsma-row', key: 'r1' },
             React.createElement('button', {
               type: 'button', className: 'dsma-btn',
@@ -629,11 +718,22 @@ window.__ModuleLoader__.load({
           }
         } else {
           qTitle = qrView.title || '扫码连接'
-          qStep = '打开手机上的「DSH 掌上通」→ 点「扫码配对」→ 扫这张码。'
-            + (qrView.expiresAt ? '（' + fmtTime(qrView.expiresAt) + ' 前有效，只能用一次）' : '')
+          if (qrView.payloadError) {
+            // 配对串没拿到 / 不合法：不画二维码，直接说清楚（画一张内容不对的码
+            // 只会让手机报「不是可用的配对码」，比这里难查得多）
+            qStep = '配对串获取失败，请重试。'
+          } else {
+            qStep = '打开手机上的「DSH 掌上通」→ 点「扫码配对」→ 扫这张码。'
+              + (qrView.expiresAt ? '（' + fmtTime(qrView.expiresAt) + ' 前有效，只能用一次）' : '')
+              + '扫不出来就点下面的「复制配对串」，在 App 里粘贴也可以。'
+          }
         }
         qz.push(React.createElement('div', { className: 'dsma-modal-title' }, qTitle))
         qz.push(React.createElement('div', { className: 'dsma-modal-step' }, qStep))
+        if (qrView.payloadError) {
+          qz.push(React.createElement('div', { className: 'dsma-error' },
+            qrView.payloadError + '（没有画出二维码：这张码里必须是配对串，拿不到就不画）'))
+        }
         if (qSvg) {
           qz.push(React.createElement('div', {
             className: 'dsma-qr', dangerouslySetInnerHTML: { __html: qSvg },
@@ -641,11 +741,14 @@ window.__ModuleLoader__.load({
         } else if (qrView.kind === 'app') {
           qz.push(React.createElement('div', { className: 'dsma-line' },
             app === null ? '正在读取安装包信息…' : '这台电脑上还没有安装包，换「公网镜像」试试。'))
-        } else {
+        } else if (!qrView.payloadError) {
           qz.push(React.createElement('div', { className: 'dsma-line' },
             busy === 'pair' ? '正在生成…' : '二维码没生成出来，关掉再点一次试试。'))
         }
-        if (qUrl) qz.push(React.createElement('div', { className: 'dsma-link' }, qUrl))
+        if (qUrl) {
+          qz.push(React.createElement('div', { className: 'dsma-link' },
+            (qrView.kind === 'app' ? '下载地址：' : '这张码里的地址：') + qUrl))
+        }
         var qActions = []
         if (qUrl) {
           qActions.push(React.createElement('button', {
@@ -680,6 +783,11 @@ window.__ModuleLoader__.load({
         lz.push(React.createElement('div', { className: 'dsma-modal-step' },
           '手机和这台电脑连同一个 WiFi。一般不用改，默认就是本机地址。'))
         var cands = lanCandidates()
+        if (!cands.length) {
+          lz.push(React.createElement('div', { className: 'dsma-dev-meta', style: { marginTop: '10px' } },
+            '没探测到可用的内网地址（169.254.x、172.16-31.x 这类虚拟网卡/自分配地址都会被忽略）。'
+            + '请在手机或电脑的 WiFi 设置里确认这台电脑的局域网 IP，填到下面。'))
+        }
         if (cands.length > 1) {
           lz.push(React.createElement('div', { className: 'dsma-dev-meta', style: { marginTop: '10px' } }, '探测到多个地址，选一个：'))
           lz.push(React.createElement('div', { className: 'dsma-tabs' }, cands.map(function (host) {

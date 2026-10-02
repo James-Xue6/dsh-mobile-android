@@ -11,9 +11,47 @@
 pwsh -File .\pc-plugin\install.ps1
 ```
 
-脚本会：复制插件到 `~/.dsh/local-plugins/`、把 `dist/dsh-mobile.apk` 放进插件目录、
+脚本会：复制插件到 `~/.dsh/local-plugins/`、把 `dist/dsh-mobile.apk` 放进插件目录
+（并把 `app/version.txt` 写成该 APK 的 `versionName`，面板显示的就是这个包的真实版本）、
 在 profile 的 `package.json` 登记依赖与 bundles、补一段 `mobile-gateway` 配置（lanPort 3091）。
 **改完重启一次 DSH 生效。**
+
+## 二维码里编的到底是什么（别改错）
+
+本插件**不自己画二维码**：只把配对串 `qrPayload` 交给网关，由网关的
+`QRCode.toString(qrPayload)` 生成 SVG（网关 0.9.0 的 `lib/index.mjs` 里 `/mgw/pair`），
+面板原样渲染这张 SVG。也就是说：
+
+- **配对二维码里是配对串**（UTF-8 JSON → 无 padding Base64URL，约 550 字符），
+  **不是**隧道地址、也不是 `ws://…` 那种 URL。地址只以文字形式显示在二维码下方
+  （「这张码里的地址：…」），连同「复制配对串」按钮作为扫码失败时的兜底。
+- 出码前 `client.js` 会再验一次这个串（非空、长度 > 100、能解出 `version=2` 的 JSON、
+  且带 `publicUrl`/`pairingCode`）；**验不过就不画二维码**，直接提示
+  「配对串获取失败，请重试」——绝不画一张内容不对的码让手机去报「不是可用的配对码」。
+- 配对串约 550 字符 → 二维码是 89×89 模块，所以 `.dsma-qr svg` 按 300px 等比显示
+  （220px 时单模块只有 2.4px，手机容易扫不出/扫错）。
+
+## 局域网地址只给「手机真连得上」的
+
+`index.js` 的 `lanIPv4()` 和 `client.js` 的 `isUsableLanHost()` 用同一套规则过滤，
+再按 `192.168.x` > `10.x` > 其它排序：
+
+| 网段 | 处理 | 原因 |
+|---|---|---|
+| `169.254.0.0/16` | 排除 | APIPA：没拿到 DHCP 的自分配地址 |
+| `172.16.0.0/12` | 排除 | 虚拟网卡重灾区（VirtualBox / Hyper-V / WSL，如 `172.30.x`），手机路由不过去 |
+| `100.64.0.0/10` | 排除 | 运营商级 NAT（CGNAT） |
+| `127.0.0.0/8` | 排除 | 本机回环 |
+
+一个可用地址都没有时：`/app` 的 `lanUrls` 为空、不生成局域网二维码，面板显示
+「没探测到局域网地址，切到上面的『公网镜像』下载」；内网配对弹窗则提示手填 IP，
+而不是给一张注定连不上的码。
+
+## 公网镜像跟哪个 ref
+
+`publicUrls()` 不再用 `v + versionName` 拼 tag（tag 只有跑 `release.ps1` 发版时才新增，
+未发版时会一直指向旧包）。默认跟 **`main`**，也就是 App 自身更新检查用的同一个 ref；
+要临时钉回某个 tag：设环境变量 `DSH_MOBILE_PUBLIC_REF=v0.8`。
 
 ## 面板在哪
 

@@ -59,6 +59,29 @@ if (Test-Path $apkSrc) {
   New-Item -ItemType Directory -Force -Path $appDir | Out-Null
   Copy-Item $apkSrc (Join-Path $appDir 'dsh-mobile.apk') -Force
   Ok ("已放入 app\dsh-mobile.apk（{0:N1} KB）" -f ((Get-Item $apkSrc).Length / 1KB))
+  # version.txt 必须与这个 APK 一致：面板「安装包信息」显示它，别再出现
+  # 「文件是 0.81 的包、版本号写着 0.8」这种对不上的情况。
+  # 以 AndroidManifest 的 versionName 为准（build.ps1 就是照它打的包）；
+  # 读不到再退到 dist\version.json。注意 version.json 只有跑 release.ps1 才会更新，
+  # 所以它可能落后于工作区里刚构建出来的包，只作兜底。
+  $verName = ''
+  $manifestPath = Join-Path $repoRoot 'AndroidManifest.xml'
+  if (Test-Path $manifestPath) {
+    $mName = [regex]::Match((Get-Content $manifestPath -Raw), 'android:versionName="([^"]+)"')
+    if ($mName.Success) { $verName = $mName.Groups[1].Value.Trim() }
+  }
+  if (-not $verName) {
+    $verJson = Join-Path $repoRoot 'dist\version.json'
+    if (Test-Path $verJson) {
+      try { $verName = (Get-Content $verJson -Raw | ConvertFrom-Json).versionName } catch { }
+    }
+  }
+  if ($verName) {
+    Set-Content -Path (Join-Path $appDir 'version.txt') -Value $verName -Encoding utf8 -NoNewline
+    Ok "app\version.txt = $verName（与 APK 的 versionName 一致）"
+  } else {
+    Warn "没能读到 versionName，app\version.txt 未更新（面板会显示成兜底版本 0.2）"
+  }
 } else {
   Warn "仓库里没有 dist\dsh-mobile.apk，先跑一次 .\build.ps1 再来；面板会显示「没有安装包」"
 }

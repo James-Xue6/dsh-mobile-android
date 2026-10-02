@@ -29,6 +29,7 @@ const REPO_SLUG = 'James-Xue6/dsh-mobile-android'
 /**
  * App 版本：优先读插件目录里的 app/version.txt（与 APK 一起更新），
  * 这样换版本只要替换文件、不用重启 DSH。
+ * 单位是「这个 APK 自己的 versionName」，用于面板显示，不再拿来拼公网镜像地址（见 PUBLIC_REF）。
  */
 function appVersion() {
   try {
@@ -37,13 +38,30 @@ function appVersion() {
   } catch { /* 没这个文件就退回下面的兜底 */ }
   return '0.2'
 }
+/**
+ * 公网镜像用哪个 git ref。
+ *
+ * 为什么不再用「v + versionName」：tag 只有跑 release.ps1 发版时才新增。
+ * 实测 2026-10-02：最新 tag 是 v0.8，那里的安装包还是 0.8 的旧构建，
+ * 而工作区 dist/ 里已经构建出更新的包 —— 用 tag 拼出来的地址会一直指向旧包
+ * （把 version.txt 改成 0.81-test 后更糟：v0.81-test 这个 tag 根本不存在，直接 404）。
+ * 改成跟 App 自身更新检查同一个 ref（src/com/dsh/mobile/MainActivity.java 读的就是
+ * @main 下的 dist/version.json），以后再推新构建，这两个镜像地址自动就是最新的那份。
+ * 要临时钉回某个 tag：设环境变量 DSH_MOBILE_PUBLIC_REF=v0.8。
+ */
+const PUBLIC_REF = String(process.env.DSH_MOBILE_PUBLIC_REF || 'main')
+  .trim()
+  .replace(/^refs\/(heads|tags)\//, '')
+  .replace(/^\/+|\/+$/g, '') || 'main'
 /** 公开发布地址：给出多条线路，手机在哪个网络都能挑到通的那条 */
 function publicUrls() {
   const v = appVersion()
-  const gh = 'https://github.com/' + REPO_SLUG + '/raw/v' + v + '/dist/dsh-mobile.apk'
-  const cdn = 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@v' + v + '/dist/dsh-mobile.apk'
+  const ref = PUBLIC_REF
+  const gh = 'https://github.com/' + REPO_SLUG + '/raw/' + ref + '/dist/dsh-mobile.apk'
+  const cdn = 'https://cdn.jsdelivr.net/gh/' + REPO_SLUG + '@' + ref + '/dist/dsh-mobile.apk'
   return {
     version: v,
+    ref,
     cdn,
     github: gh,
     // 国内直连 GitHub 常常打不开；这两个是常用的 GitHub 加速镜像
@@ -68,15 +86,52 @@ function loadQrCode() {
   return null
 }
 
+/**
+ * 这个地址是不是「手机在同一 WiFi 下真的连得上」的局域网地址。
+ *
+ * 判据（2026-10-02 在本机实测后写死）：
+ *   · 169.254.0.0/16 —— APIPA：DHCP 没拿到地址时的自分配地址，打不通。
+ *   · 172.16.0.0/12 —— 虚拟网卡重灾区。VirtualBox / Hyper-V / WSL / 部分 VPN 都在
+ *     这一段里给宿主机内部地址（例如 172.30.x），它只在宿主机内部有意义，
+ *     手机即使同一 WiFi 也路由不过去。旧版直接拿 os.networkInterfaces() 的第一条
+ *     当「局域网直发」地址，于是二维码指向了 172.30.x（虚拟网卡），手机扫码必超时。
+ *   · 100.64.0.0/10 —— 运营商级 NAT（CGNAT），不是本机内网地址。
+ *   · 127.x —— 本机回环。
+ * 真实家用/办公内网基本落在 192.168.x 或 10.x；真要是 172 内网，本函数会一个地址都不返回，
+ * 面板就显示「没探测到可用内网地址」并让用户手填，而不是给一张连不上的码。
+ */
+function isUsableLanAddress(ip) {
+  const parts = String(ip).split('.')
+  if (parts.length !== 4) return false
+  const nums = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : NaN))
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false
+  const [a, b] = nums
+  if (a === 127) return false                          // 本机回环
+  if (a === 169 && b === 254) return false             // APIPA
+  if (a === 172 && b >= 16 && b <= 31) return false    // 虚拟网卡 / VBox / Hyper-V / WSL
+  if (a === 100 && b >= 64 && b <= 127) return false   // CGNAT
+  return true
+}
+
+/** 排序权重：真实家用网段（192.168.x、10.x）排在其它网段前面 */
+function lanAddressRank(ip) {
+  if (ip.startsWith('192.168.')) return 0
+  if (ip.startsWith('10.')) return 1
+  return 2
+}
+
 function lanIPv4() {
   const out = []
   const ifaces = os.networkInterfaces()
   for (const name of Object.keys(ifaces)) {
     for (const ni of ifaces[name] || []) {
-      if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address)
+      if (ni.family !== 'IPv4' || ni.internal) continue
+      if (!isUsableLanAddress(ni.address)) continue
+      if (out.includes(ni.address)) continue
+      out.push(ni.address)
     }
   }
-  return out
+  return out.sort((x, y) => (lanAddressRank(x) - lanAddressRank(y)) || x.localeCompare(y))
 }
 
 function apkInfo() {
@@ -300,11 +355,16 @@ export function apply(ctx) {
             const lanUrl = urls.length ? urls[0] : ''
             sendJson(res, 200, {
               version: pub.version,
+              // 公网镜像跟的是哪个 ref（面板「备用线路」里会显示，便于核对拿到的是哪一版）
+              publicRef: pub.ref,
               available: info.available, size: info.size, name: info.name, port: APP_PORT,
               lanUrls: urls, lanPage: lanUrl,
+              // 没探测到可用内网地址时 lanUrls 为空、qrLanUrl 为 ''：面板据此显示
+              //「没探测到局域网地址，切到上面的「公网镜像」下载」，不再给一张连不上的码。
+              lanAvailable: urls.length > 0,
               publicUrl: pub.cdn, githubUrl: pub.github, mirrors: pub.mirrors,
               qrUrl: pub.cdn, qrSvg: await mkQr(pub.cdn),
-              qrLanUrl: lanUrl, qrLanSvg: await mkQr(lanUrl),
+              qrLanUrl: lanUrl, qrLanSvg: lanUrl ? await mkQr(lanUrl) : null,
               apkPath: APK_PATH,
             })
             return
@@ -348,3 +408,5 @@ export function apply(ctx) {
 }
 
 export default { name, inject, apply }
+// 导出内部判据供自测用（tools/test-lan-filter.mjs 直接跑真源码，不另抄一份规则）
+export { lanIPv4, isUsableLanAddress, lanAddressRank, publicUrls, appVersion, PUBLIC_REF }
