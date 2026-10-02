@@ -59,7 +59,7 @@ public final class ChatAdapter extends BaseAdapter {
     @Override public Object getItem(int position) { return items.get(position); }
     @Override public long getItemId(int position) { return position; }
 
-    @Override public int getViewTypeCount() { return 7; }
+    @Override public int getViewTypeCount() { return 8; }
 
     @Override public int getItemViewType(int position) { return items.get(position).kind; }
 
@@ -73,6 +73,7 @@ public final class ChatAdapter extends BaseAdapter {
             case ChatItem.APPROVAL:  return approvalCard(it);
             case ChatItem.QUESTION:  return questionCard(it);
             case ChatItem.FILES:     return filesCard(it);
+            case ChatItem.AGENT:     return agentCard(it);
             default:                 return systemRow(it);
         }
     }
@@ -157,6 +158,40 @@ public final class ChatAdapter extends BaseAdapter {
             });
             wrap.addView(r);
         }
+        return wrap;
+    }
+
+    // ------------------------------------------------------------ 专家团 / 子代理回传
+
+    /**
+     * 专家团成员或子代理回传的正文。说话的不是用户，所以不做成右侧蓝色气泡；
+     * 顶部给一行「谁说的」摘要，正文照样可选中复制。
+     */
+    private View agentCard(ChatItem it) {
+        LinearLayout wrap = Ui.col(ctx);
+        wrap.setPadding(0, Ui.dp(ctx, 5), 0, Ui.dp(ctx, 5));
+
+        LinearLayout card = Ui.col(ctx);
+        card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), 0xFFC7D2FE));
+
+        TextView head = Ui.text(ctx, "👥 " + (it.agentName.isEmpty() ? "专家团回传" : it.agentName),
+                12.5f, Ui.BRAND, true);
+        card.addView(head);
+
+        String body = it.text == null ? "" : it.text;
+        if (body.trim().isEmpty()) body = "(空回传)";
+        TextView bubble = Ui.text(ctx, body, 14.5f, Ui.INK, false);
+        bubble.setPadding(0, Ui.dp(ctx, 5), 0, 0);
+        bubble.setMaxWidth(maxBubble);
+        bubble.setTextIsSelectable(true);
+        card.addView(bubble);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.START;
+        card.setLayoutParams(lp);
+        wrap.addView(card);
         return wrap;
     }
 

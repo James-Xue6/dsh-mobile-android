@@ -12,10 +12,18 @@ public final class ChatItem {
     public static final int QUESTION = 5;
     /** 交付物卡片（agent 的 present 工具产出的文件列表）。 */
     public static final int FILES = 6;
+    /**
+     * 专家团成员 / 子代理回传的正文卡片。
+     * 这类正文是 user/message（source.kind = team-message / agent-message），
+     * 但说话的不是用户，不能渲染成右侧蓝色用户气泡。
+     */
+    public static final int AGENT = 7;
 
     public int kind;
     public String key = "";
     public String text = "";
+    /** AGENT 卡片的发言人（专家团成员名 / 子代理会话 id）。 */
+    public String agentName = "";
     public String reasoning = "";
     public String toolName = "";
     public String toolPreview = "";

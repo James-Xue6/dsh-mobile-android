@@ -11,6 +11,7 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import com.dsh.mobile.model.ChatItem;
+import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.ui.ConversationView;
@@ -498,12 +499,66 @@ public final class MainActivity extends Activity implements
 
     /** 正在补拉尾部历史（避免重复触发）。 */
     private boolean tailRefetchPending = false;
+    /** 上一次团队尾部补拉时刻（节流用）。 */
+    private long lastTeamTailRefetchAt = 0L;
 
     /** 交付物事件实时帧没有 data，用一小段尾部历史补齐；不影响分页状态。 */
     private void refetchTailForDeliverables() {
         if (tailRefetchPending || currentSessionId.isEmpty()) return;
         tailRefetchPending = true;
         gw.requestRecentHistory(currentSessionId, 40);
+    }
+
+    /**
+     * 团队事件（team/member、team/message/queued…）实时帧同样没有 data。
+     * 一次团队奔跑会连发几十条，靠 tailRefetchPending 合并成一次补拉；两次补拉之间
+     * 留 3s 间隔，避免在移动网络上反复重取历史。
+     */
+    private void refetchTailForTeam() {
+        long now = System.currentTimeMillis();
+        if (now - lastTeamTailRefetchAt < 3_000L) return;
+        lastTeamTailRefetchAt = now;
+        if (!tailRefetchPending) refetchTailForDeliverables();
+    }
+
+    /** team/* 事件族。 */
+    private static boolean isTeamEvent(String type) {
+        return type != null && type.startsWith("team/");
+    }
+
+    /** 已就位的专家团成员（避免同一成员的多条 phase 变更各占一行）。 */
+    private final Set<String> teamMemberIds = new HashSet<>();
+
+    /**
+     * 专家团成员 / 子代理回传落到对话里（user/message 形态）。
+     * payload 的 source 可能是对象（history/snapshot）或字符串（live 帧），
+     * 两种形态都交给 MessageSource 统一解析。
+     */
+    private void appendDelegation(JSONObject payload, String text, Long seqNum, long t) {
+        JSONObject src = payload.optJSONObject("source");
+        appendDelegationText(MessageSource.messageId(src, text), MessageSource.sender(src, text),
+                MessageSource.body(text), seqNum, t);
+    }
+
+    /**
+     * 回传正文去重后建 AGENT 卡片。
+     * 同一份内容既可能以 team/message/queued 到达，也可能以
+     * user/message(source.kind=team-message) 到达 —— 用 messageId 认成同一条。
+     */
+    private void appendDelegationText(String messageId, String sender, String text, Long seqNum, long t) {
+        if (text == null) return;
+        String body = text.trim();
+        if (body.isEmpty()) return;
+        String key;
+        if (messageId != null && !messageId.isEmpty()) key = "tm:" + messageId;
+        else if (seqNum != null) key = "tm:s" + seqNum;
+        else key = "tm:" + body.hashCode();
+        if (byKey.containsKey(key)) return;
+        ChatItem it = ChatItem.of(ChatItem.AGENT, key, body);
+        it.agentName = sender == null ? "" : sender;
+        it.time = t;
+        byKey.put(key, it);
+        items.add(it);
     }
 
     private void refreshPlan() {
@@ -768,7 +823,7 @@ public final class MainActivity extends Activity implements
                     if (e == null) continue;
                     String ty = e.optString("type", "");
                     if ("deliverables/presented".equals(ty) || "todo/write".equals(ty)
-                            || "goal/change".equals(ty)) {
+                            || "goal/change".equals(ty) || ty.startsWith("team/")) {
                         applyEvent(ty, e.optJSONObject("data"), e.opt("seq"), e.opt("time"), true);
                     }
                 }
@@ -804,6 +859,7 @@ public final class MainActivity extends Activity implements
         items.clear();
         byKey.clear();
         seenSeq.clear();
+        teamMemberIds.clear();   // 与 items 一起重建，否则重开会话后「成员就位」不再补回
         streamAttemptKey = null;
 
         JSONArray events = snap.optJSONArray("events");
@@ -1467,10 +1523,26 @@ public final class MainActivity extends Activity implements
             return;
         }
 
+        // team/* 同样不在网关白名单里：实时帧只有 {type}（data 被 buildWireEvent 的
+        // default 分支整个丢掉，见网关 lib/index.mjs:408-409），所以补拉一次尾部历史 ——
+        // 历史帧走 historyPage()，用的是宿主原始事件，data 是完整的。
+        // 判据「除 type 外没有字段」，避免误伤正常帧。
+        if (payload.length() <= 1 && isTeamEvent(type)) {
+            refetchTailForTeam();
+            return;
+        }
+
         switch (type) {
             case "user/message": {
                 String text = textOfMessage(payload);
                 if (isInjectedContext(payload, text)) return;
+                // 专家团成员 / 子代理回传也是 user/message（source.kind = team-message /
+                // agent-message）：说话的不是用户，单独成卡，否则既会伪装成用户气泡、
+                // 又会在历史形态下被注入过滤器整段丢掉（判据见 MessageSource）。
+                if (MessageSource.isDelegation(MessageSource.kindOf(payload))) {
+                    appendDelegation(payload, text, seqNum, t);
+                    break;
+                }
                 if (pendingUserText != null
                         && (pendingUserText.trim().equals(text.trim()) || text.trim().isEmpty())) {
                     ChatItem pend = byKey.remove("pending-user");
@@ -1598,6 +1670,41 @@ public final class MainActivity extends Activity implements
                 if (payload != null) applyGoal(payload.optJSONObject("goal"));
                 break;
             }
+            // ------------------------------------------------- 专家团（team/*）
+            // 这些事件不在网关白名单里，实时帧只剩 {type}；带 data 的形态来自上面
+            // isTeamEvent 那条分支补拉的历史（宿主原始事件）。
+            case "team/member": {
+                JSONObject m = payload.optJSONObject("member");
+                if (m == null) break;
+                String mid = m.optString("id", "");
+                String label = m.optString("description", "");
+                if (label.isEmpty()) label = m.optString("name", "");
+                if (mid.isEmpty() || label.isEmpty() || !teamMemberIds.add(mid)) break;
+                ChatItem it = ChatItem.of(ChatItem.SYSTEM, "tmm:" + mid, "👥 专家团成员就位：" + label);
+                it.time = t;
+                byKey.put(it.key, it);
+                items.add(it);
+                break;
+            }
+            case "team/message/queued": {
+                JSONObject msg = payload.optJSONObject("message");
+                if (msg == null) break;
+                StringBuilder sb = new StringBuilder();
+                JSONArray parts = msg.optJSONArray("content");
+                if (parts != null) {
+                    for (int i = 0; i < parts.length(); i++) {
+                        JSONObject p = parts.optJSONObject(i);
+                        if (p != null) sb.append(p.optString("text", ""));
+                    }
+                }
+                appendDelegationText(msg.optString("id", ""), msg.optString("senderName", ""),
+                        sb.toString(), seqNum, t);
+                break;
+            }
+            case "team/task":
+            case "team/message/delivered":
+                // 任务条目与投递回执本身没有新的正文，不单独占一行。
+                break;
             case "tool/call": {
                 if (payload == null) break;
                 String callId = payload.optString("callId", "");
@@ -1676,26 +1783,13 @@ public final class MainActivity extends Activity implements
     /**
      * DSH 会把运行时上下文、系统提醒、技能清单等作为 user/message 注入。
      * 桌面端不展示这些；手机上若不滤掉，就是一屏巨大的蓝色用户气泡。
+     *
+     * 但「非 user 即丢弃」曾把专家团成员（team-message）与子代理（agent-message）
+     * 回传的正文一起丢掉，且只在历史形态下丢（那时 source 是对象，实时帧里是字符串）。
+     * 判据已抽到 MessageSource，这里只做转发。
      */
     private static boolean isInjectedContext(JSONObject payload, String text) {
-        // 根上的判据：真正的用户输入 source.kind 一定是 "user"。
-        // DSH 会把运行时上下文、系统提醒、审批策略变更等也作为 user/message 写进日志，
-        // 桌面端不展示这些；手机上若不过滤就是一屏巨大的假用户气泡。
-        if (payload != null) {
-            JSONObject src = payload.optJSONObject("source");
-            if (src != null) {
-                String kind = src.optString("kind", "");
-                if (!kind.isEmpty() && !"user".equals(kind)) return true;
-            }
-        }
-        if (text == null) return false;
-        String t = text.trim();
-        if (t.startsWith("<")) return true;
-        return t.startsWith("Current runtime context")
-                || t.startsWith("Time sampled while preparing")
-                || t.startsWith("Browser time zone for this request")
-                || t.startsWith("Elapsed since")
-                || t.startsWith("The approval policy changed");
+        return MessageSource.isInjected(MessageSource.kindOf(payload), text);
     }
 
     /**
@@ -2003,6 +2097,7 @@ public final class MainActivity extends Activity implements
         items.clear();
         byKey.clear();
         seenSeq.clear();
+        teamMemberIds.clear();   // 与 items 一起重建，否则重开会话后「成员就位」不再补回
         streamAttemptKey = null;
         hasMore = false;
         nextBeforeSeq = null;
@@ -2038,6 +2133,7 @@ public final class MainActivity extends Activity implements
         items.clear();
         byKey.clear();
         seenSeq.clear();
+        teamMemberIds.clear();   // 与 items 一起重建，否则重开会话后「成员就位」不再补回
         streamAttemptKey = null;
         hasMore = false;
         nextBeforeSeq = null;
