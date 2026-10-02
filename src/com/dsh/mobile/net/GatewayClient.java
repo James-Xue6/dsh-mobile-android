@@ -493,7 +493,7 @@ public final class GatewayClient {
             if (penalty > delay) delay = penalty;
         }
         // 改前这里是 detail + " · Ns 后重试"，detail 直接来自异常消息 / 关闭原因，
-        // 真机上就出现过 "rim-country-gets-photos.trycloudflare.com · 51s 后重试" ——
+        // 真机上就出现过 "xxxx-yyyy-zzzz.trycloudflare.com · 51s 后重试" ——
         // 公网隧道域名 + 英文异常对用户是噪音，也把内部拓扑写在了屏幕上。
         // 改后只给"第几次、多少秒"，技术原因进 trace（设置页诊断区）。
         String human = (userText == null || userText.isEmpty()) ? "和电脑断开了，正在重连…" : userText;

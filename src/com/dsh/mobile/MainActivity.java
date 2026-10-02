@@ -154,7 +154,7 @@ public final class MainActivity extends Activity implements
             int top, bottom;
             if (Build.VERSION.SDK_INT >= 30) {
                 // 键盘（IME）也必须算进来：targetSdk 35+ 强制 edge-to-edge，系统不会替我们
-                // 缩小窗口，而 systemBars() 只给导航栏高度。真机实测（华为 PGT-AN10 /
+                // 缩小窗口，而 systemBars() 只给导航栏高度。真机实测（某国产 ROM /
                 // 手势导航 + 中文输入法）：只消费 systemBars() 时输入条被键盘整个盖住，
                 // 用户看不到自己在输入什么（问题 1）。
                 // 底部留白取 max(导航栏, 键盘)：键盘弹起时跟着上移，收起时退回导航栏高度。
@@ -3077,7 +3077,7 @@ public final class MainActivity extends Activity implements
     /**
      * 「粘贴配对串」。
      *
-     * 真机实测（2026-10-02，华为 PGT-AN10 / 1312x2848 / 手势导航 + 中文输入法）：
+     * 真机实测（2026-10-02，某国产 ROM / 1312x2848 / 手势导航 + 中文输入法）：
      * 旧实现在对话框里放一个多行 EditText，把 550+ 字符的配对串粘进去后输入框会长到
      * ~1300px，把「配对」按钮顶到 y=1653..1842；而输入法窗口的可触区从 y=1716 开始 ——
      * 按钮**中心点正好落在键盘上**，点它等于点键盘：对话框不关、不报错、没有 Toast、
