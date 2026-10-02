@@ -33,6 +33,10 @@ public final class SessionListView extends FrameLayout {
     private final Host host;
     private final TextView statusLine;
     private final SessionAdapter adapter;
+    /** 空态提示（抽屉里一个会话都没有时显示，比如"还没有对话"）。 */
+    private final TextView emptyView;
+    /** 当前正在看的会话 id：抽屉里对应卡片高亮，一眼看出"我现在在这个任务里"。 */
+    private String currentId = "";
 
     public SessionListView(Context ctx, Host host) {
         super(ctx);
@@ -88,6 +92,17 @@ public final class SessionListView extends FrameLayout {
         list.setLayoutParams(llp);
         root.addView(list);
 
+        // ---- 空态：一个会话都没有时给一句话，别让抽屉看起来像坏了
+        emptyView = Ui.text(ctx, "还没有对话\n点右下角 ＋ 给 Agent 派个任务", 14f, Ui.INK_FAINT, false);
+        emptyView.setGravity(Gravity.CENTER);
+        emptyView.setLineSpacing(Ui.dp(ctx, 6), 1.1f);
+        FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        elp.gravity = Gravity.CENTER;
+        emptyView.setLayoutParams(elp);
+        emptyView.setVisibility(GONE);
+        addView(emptyView);
+
         // ---- 悬浮新建
         TextView fab = new TextView(ctx);
         fab.setText("＋");
@@ -112,6 +127,21 @@ public final class SessionListView extends FrameLayout {
     /** rows 元素为 String（工作区标题）或 SessionInfo（会话卡片）。 */
     public void setRows(List<Object> rows) {
         adapter.set(rows);
+        boolean hasSession = false;
+        if (rows != null) {
+            for (Object r : rows) {
+                if (r instanceof SessionInfo) { hasSession = true; break; }
+            }
+        }
+        emptyView.setVisibility(hasSession ? GONE : VISIBLE);
+    }
+
+    /** 当前正在查看的会话 id（抽屉里对应卡片高亮）。 */
+    public void setCurrentSession(String id) {
+        String v = id == null ? "" : id;
+        if (v.equals(currentId)) return;
+        currentId = v;
+        adapter.notifyDataSetChanged();
     }
 
     private final class SessionAdapter extends BaseAdapter {
@@ -140,6 +170,8 @@ public final class SessionListView extends FrameLayout {
                 return head;
             }
             SessionInfo s = (SessionInfo) row;
+            // 当前正在看的那个会话：实心淡蓝底 + 品牌色描边，在抽屉里一眼认出来
+            boolean current = s.id != null && !s.id.isEmpty() && s.id.equals(currentId);
 
             LinearLayout outer = Ui.col(ctx);
             // 子会话缩进 + 淡底：一眼看出它挂在上面那个父会话下面，而不是一条独立对话
@@ -148,8 +180,9 @@ public final class SessionListView extends FrameLayout {
             LinearLayout card = Ui.row(ctx);
             card.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 13), Ui.dp(ctx, 13), Ui.dp(ctx, 13));
             card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16),
-                    s.childDepth > 0 ? Ui.BRAND_SOFT : Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
-            card.setElevation(Ui.dp(ctx, 0.5f));
+                    (current || s.childDepth > 0) ? Ui.BRAND_SOFT : Ui.SURFACE,
+                    Ui.dp(ctx, current ? 1.6f : 0.8f), current ? Ui.BRAND : Ui.LINE));
+            card.setElevation(Ui.dp(ctx, current ? 1.5f : 0.5f));
 
             LinearLayout texts = Ui.col(ctx);
             LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
@@ -158,7 +191,7 @@ public final class SessionListView extends FrameLayout {
 
             String shownTitle = s.displayForList();
             if (s.childDepth > 0) shownTitle = "└ " + shownTitle;
-            TextView title = Ui.text(ctx, shownTitle, 15.5f, Ui.INK, true);
+            TextView title = Ui.text(ctx, shownTitle, 15.5f, current ? Ui.BRAND_DEEP : Ui.INK, true);
             title.setSingleLine(true);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             texts.addView(title);

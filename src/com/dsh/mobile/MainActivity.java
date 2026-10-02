@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -15,6 +16,7 @@ import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.ui.ConversationView;
+import com.dsh.mobile.ui.DrawerHost;
 import com.dsh.mobile.ui.QrScanActivity;
 import com.dsh.mobile.ui.SessionListView;
 import com.dsh.mobile.ui.SettingsView;
@@ -32,7 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 单 Activity 架构：会话列表 / 对话 / 连接设置 三屏切换。 */
+/** 单 Activity 架构：对话页 / 连接设置两屏；会话列表是对话页上滑出的左侧抽屉（豆包式）。 */
 public final class MainActivity extends Activity implements
         GatewayClient.Listener,
         SessionListView.Host,
@@ -53,8 +55,13 @@ public final class MainActivity extends Activity implements
      */
     private static final boolean ALLOW_TEST_PAIRING_INTENT = false;
 
-    private enum Screen { LIST, CHAT, SETTINGS }
-    private Screen screen = Screen.LIST;
+    /**
+     * 现在只有两级：对话页 / 设置页。
+     * 会话列表不再是独立的第三块全屏页 —— 它是对话页上从左侧滑出的抽屉（豆包式），
+     * 所以没有 LIST 这个"屏"了（旧代码的 Screen.LIST 已去掉）。
+     */
+    private enum Screen { CHAT, SETTINGS }
+    private Screen screen = Screen.CHAT;
 
     /** 进程级共享的网关客户端：Activity 重建不应打断连接。 */
     private static GatewayClient SHARED_GW;
@@ -63,9 +70,15 @@ public final class MainActivity extends Activity implements
     private GatewayClient gw;
 
     private FrameLayout root;
+    /** 左侧任务抽屉宿主：内容层 + 遮罩 + 抽屉层（见 DrawerHost）。 */
+    private DrawerHost drawerHost;
+    /** 内容层：对话页 / 设置页在这里互切，不再整屏重挂 root。 */
+    private FrameLayout contentHost;
     private SessionListView listScreen;
     private ConversationView convo;
     private SettingsView settingsView;
+    /** 冷启动只自动决定一次：进最近一条会话，或拉开抽屉提示"还没有对话"。 */
+    private boolean autoEntered = false;
 
     private final List<SessionInfo> sessions = new ArrayList<>();
     private final Set<String> archivedIds = new HashSet<>();
@@ -118,6 +131,51 @@ public final class MainActivity extends Activity implements
      * 只活在内存里（不落盘、不进任何被跟踪的文件），显示在设置页诊断区。
      */
     private final java.util.List<String> pairTrace = new java.util.ArrayList<>();
+
+    // ---------------------------------------------------------------- 会话流中断的内联状态条
+    //
+    // 旧行为：每一帧 retrying 的 session-stream-reset 都弹一次 Toast「连接抖动，正在恢复…」。
+    // 网关的会话跟随器失败后会自己退避重试（session-follower.mjs：1s→2s→…→30s），所以只要
+    // 某个会话长期接不上，这个 Toast 就会一直弹。真机实测：打开一个子会话（宿主侧以
+    // session/agent-busy 拒绝，见「会话流中断」诊断），9 秒内来了 4 帧 retrying 中断，
+    // 用户看到的就是「一直弹」。
+    //
+    // 现在改成对话页顶部的一条内联横幅：
+    //   ① 同一会话 30 秒内最多提示一次（节流，退避重试的每一帧不再各弹一次）；
+    //   ② 收到该会话任何新帧 / 快照即自动消失（说明真的接上了）；
+    //   ③ 连续 30 秒仍未恢复 → 横幅变成可点的「还没接上，点这里重新连接」。
+    private static final long STREAM_NOTICE_THROTTLE_MS = 30_000L;
+    /** 从第一次中断起算，超过这么久还没恢复就把横幅变成可点的重连入口。 */
+    private static final long STREAM_NOTICE_ACTION_MS = 30_000L;
+    /** 设置页诊断区最多保留几条流中断记录。 */
+    private static final int STREAM_RESET_LOG_MAX = 10;
+
+    /** 当前横幅属于哪个会话（空 = 没有横幅）。 */
+    private String streamNoticeSession = "";
+    private String streamNoticeText = "";
+    private boolean streamNoticeError = false;
+    private boolean streamNoticeActionable = false;
+    /** 上一次「已显示」提示的时刻与所属会话，用来做 30 秒节流。 */
+    private String streamNoticeLastSession = "";
+    private long streamNoticeLastAt = 0L;
+    /** 把「还没接上」翻出来的定时任务（null = 没排）。 */
+    private Runnable streamNoticeActionTask;
+
+    /**
+     * 最近几次会话流中断：**时间 / code / retrying** 三样，只留最近 STREAM_RESET_LOG_MAX 条。
+     *
+     * 目的只有一个：下次再遇到「一直在抖」时，能一眼看出是**偶发**（零散几条）还是
+     * **持续**（同一 code 连续刷屏）。因此**只记 code，不记 message 明文**（正文可能带
+     * 宿主内部细节，也不是用户要看的东西）；只活在内存里，不落盘、不进任何被跟踪的文件。
+     */
+    private final java.util.ArrayDeque<String> streamResetLog = new java.util.ArrayDeque<>();
+
+    /**
+     * onState 想挂的横幅（连接状态 / hello 告警），与流中断横幅合成后再画。
+     * 连接本身就不正常时优先显示连接问题——流中断往往只是它的后果。
+     */
+    private String stateBannerText = "";
+    private boolean stateBannerError = false;
 
     // 当前会话的目标 / 任务提要
     private String planGoal = "";
@@ -206,11 +264,19 @@ public final class MainActivity extends Activity implements
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(pv), 1200);
         }
 
+        // 左侧任务抽屉：内容层（对话/设置）+ 遮罩 + 抽屉层（会话列表）
+        drawerHost = new DrawerHost(this);
+        root.addView(drawerHost, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        contentHost = drawerHost.content();
         listScreen = new SessionListView(this, this);
-        root.addView(listScreen, new FrameLayout.LayoutParams(
+        drawerHost.drawer().addView(listScreen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         if (store.paired()) {
+            // 冷启动直接进对话页（豆包式：不再有"列表 ⇄ 对话"两级全屏切换）；
+            // 会话列表到达后由 maybeAutoEnter() 决定进最近一条会话、还是拉开抽屉。
+            showChat();
             GatewayClient.State st = gw.state();
             if (st == GatewayClient.State.READY || st == GatewayClient.State.CONNECTING
                     || st == GatewayClient.State.AUTHENTICATING) {
@@ -332,11 +398,17 @@ public final class MainActivity extends Activity implements
         long now = System.currentTimeMillis();
         if (now - lastBackAt < 400L) return;
         lastBackAt = now;
-        if (screen == Screen.LIST) {
-            moveTaskToBack(true);
+        // 抽屉开着时返回键只关抽屉，不退出 App（豆包式两级导航）
+        if (drawerHost != null && drawerHost.isOpen()) {
+            closeDrawer();
             return;
         }
-        showList();
+        if (screen == Screen.SETTINGS) {
+            showChat();
+            return;
+        }
+        // 对话页：不再有"回到列表页"这一级（列表已变成抽屉），走系统的退到后台
+        moveTaskToBack(true);
     }
 
     @Override
@@ -368,41 +440,51 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ 屏幕路由
 
-    private void clearRoot() {
-        root.removeAllViews();
+    /** 内容层只挂当前这一屏；抽屉（会话列表）常驻 root，不参与这里的切换。 */
+    private void setContent(View v) {
+        contentHost.removeAllViews();
+        contentHost.addView(v, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    private void showList() {
-        screen = Screen.LIST;
-        clearRoot();
-        root.addView(listScreen, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        listScreen.setRows(buildRows());
+    /**
+     * 打开左侧任务列表抽屉（对话页左上角 ‹ 的行为）。
+     * 每次打开都刷新一遍行 + 当前会话高亮，保证"我在哪个任务里"在抽屉里看得见。
+     */
+    private void openDrawer() {
+        if (drawerHost == null) return;
+        if (listScreen != null) {
+            listScreen.setCurrentSession(currentSessionId);
+            listScreen.setRows(buildRows());
+        }
         refreshListStatus();
+        drawerHost.openDrawer(true);
+    }
+
+    private void closeDrawer() {
+        if (drawerHost != null) drawerHost.closeDrawer(true);
     }
 
     private void showChat() {
         screen = Screen.CHAT;
-        clearRoot();
         if (convo == null) convo = new ConversationView(this, this);
-        root.addView(convo, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContent(convo);
         convo.setCompact("compact".equals(store.displayMode()));
         convo.setItems(items);
         convo.setTitleText(currentTitle.isEmpty() ? "对话" : currentTitle);
         convo.setSubtitleText(currentCwd);
         convo.setRunning(running, runningHint());
         refreshPlan();
+        paintBanner();   // 从设置页切回来时把横幅按当前状态重画（连接告警 / 流中断）
         convo.refreshNow();
         convo.scrollToBottom();
+        if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
     }
 
     private void showSettings() {
         screen = Screen.SETTINGS;
-        clearRoot();
         if (settingsView == null) settingsView = new SettingsView(this, this);
-        root.addView(settingsView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContent(settingsView);
         settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
                 store.deviceName(), store.useWan());
         settingsView.setDisplayMode(store.displayMode());
@@ -529,6 +611,30 @@ public final class MainActivity extends Activity implements
             if (p.isEmpty() || p.equals(s.id) || !ids.contains(p)) n++;
         }
         return n;
+    }
+
+    /**
+     * 冷启动自动落位（只做一次）：
+     *   有会话 -> 直接进最近一条顶层会话（对话页，不再先过一遍列表页）；
+     *   没会话 -> 直接拉开左侧抽屉，由列表的空态提示"还没有对话"。
+     * 用户已经手动切到设置页时不打扰他。
+     */
+    private void maybeAutoEnter() {
+        if (autoEntered || !store.paired()) return;
+        autoEntered = true;
+        if (!currentSessionId.isEmpty()) return;
+        if (screen != Screen.CHAT) return;
+        List<SessionInfo> vis = visibleSessions();
+        Set<String> ids = new HashSet<>();
+        for (SessionInfo s : vis) ids.add(s.id);
+        for (SessionInfo s : vis) {
+            String p = s.parentSessionId == null ? "" : s.parentSessionId;
+            if (p.isEmpty() || p.equals(s.id) || !ids.contains(p)) {   // 最近的一条顶层会话
+                onOpenSession(s);
+                return;
+            }
+        }
+        openDrawer();
     }
 
     private static long latestAt(List<SessionInfo> l) {
@@ -797,15 +903,15 @@ public final class MainActivity extends Activity implements
                 gw.requestGoal(currentSessionId);
             }
         }
-        if (screen == Screen.CHAT && convo != null) {
-            // READY 默认不挂横幅（连接正常不该常驻一条提示）；但 hello 暴露了协议/能力问题时
-            // 必须挂出来（评审 P1-16）—— 否则这条告警只活在设置页诊断里，普通用户看不到，
-            // "照单全收"等于没修。用 error 配色让它醒目。
-            String helloWarn = gw.helloWarning();
-            boolean warnReady = st == GatewayClient.State.READY && helloWarn != null && !helloWarn.isEmpty();
-            convo.setBanner(st == GatewayClient.State.READY ? (warnReady ? helloWarn : null) : detail,
-                    err || warnReady);
-        }
+        // READY 默认不挂横幅（连接正常不该常驻一条提示）；但 hello 暴露了协议/能力问题时
+        // 必须挂出来（评审 P1-16）—— 否则这条告警只活在设置页诊断里，普通用户看不到，
+        // "照单全收"等于没修。用 error 配色让它醒目。
+        String helloWarn = gw.helloWarning();
+        boolean warnReady = st == GatewayClient.State.READY && helloWarn != null && !helloWarn.isEmpty();
+        // 先落字段再画：屏幕不是 CHAT 时也要更新，否则切回对话页会画出上一次的旧横幅。
+        stateBannerText = st == GatewayClient.State.READY ? (warnReady ? helloWarn : null) : detail;
+        stateBannerError = err || warnReady;
+        paintBanner();
         if (screen == Screen.SETTINGS && settingsView != null) {
             settingsView.setStatus(detail, err);
             refreshDiagnostics();
@@ -859,7 +965,7 @@ public final class MainActivity extends Activity implements
         if (settingsView != null) settingsView.setStatus("配对成功", false);
         refreshDiagnostics();
         gw.requestSessions();
-        showList();
+        showChat();
     }
 
     @Override
@@ -895,6 +1001,7 @@ public final class MainActivity extends Activity implements
         }
         if (listScreen != null) listScreen.setRows(buildRows());
         refreshListStatus();
+        maybeAutoEnter();
         // 重连时保守保留的"运行中"，用会话说里的权威 running 补判一次（评审 N1）：
         // 快照的历史窗口可能不含 turn/end，只靠快照回放会漏掉"回合已在断线期间结束"，
         // 那样停止按钮会一直卡着。这里只在网关明确说该会话已不在跑时才复位。
@@ -923,7 +1030,7 @@ public final class MainActivity extends Activity implements
                 currentTitle = found;
                 if (convo != null) convo.setTitleText(found);
             }
-            if (screen == Screen.LIST && listScreen != null) listScreen.setRows(buildRows());
+            if (listScreen != null) listScreen.setRows(buildRows());
         } else if (wasAwaiting) {
             // 探针回来了但没抽到标题：可能是标题事件还没生成（新会话），
             // 过一会儿再补一次；次数用完就等重连（resetTitleProbesForRetry）再来。
@@ -975,6 +1082,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onSnapshot(String sessionId, JSONObject snap) {
         if (!sessionId.equals(currentSessionId)) return;
+        clearStreamNotice();   // 快照到了 = 这个会话的流已经接上（快照 0 条事件时也走这里）
         cancelSendWatchdog();
         historyFormatVersion = snap.optInt("historyFormatVersion", historyFormatVersion);
         hasMore = snap.optBoolean("hasMore", false);
@@ -1022,6 +1130,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onAssistantStream(JSONObject frame) {
         if (!frame.optString("sessionId", "").equals(currentSessionId)) return;
+        clearStreamNotice();   // 流式增量回来了 = 这个会话的流已经接上
         cancelSendWatchdog();
         JSONObject f = frame.optJSONObject("frame");
         if (f == null) return;
@@ -1220,16 +1329,22 @@ public final class MainActivity extends Activity implements
      * 网关中断了会话流（session-stream-reset）。不处理的话流式气泡会永远转圈、
      * 计时不停，用户以为卡死（评审 P1-5）。
      *
-     * retrying=true 表示这只是瞬时中断：网关侧 follower 会自动重开流并在 1s 后推新
-     * snapshot（lib/index.mjs:2874 带 retrying / session-follower.mjs:123）。这时摘气泡 +
-     * setRunning(false) + Toast「输出被中断了」是误报，用户会看到气泡闪一下又回来，
-     * 所以只做轻提示、保持现状等新 snapshot 覆盖。
+     * retrying=true 表示网关侧的会话跟随器还会自己重开（session-follower.mjs:123
+     * onError({..., retrying: !permanent})），退避 1s→2s→…→30s。旧实现在这里**每帧弹一次
+     * Toast**，只要长期不恢复就是用户报的「一直弹」（真机实测 9 秒 4 帧）。
+     *
+     * 现在统一走顶部内联状态条（见 streamNotice* 字段）：节流 30s、恢复即消失、
+     * 超过 30s 变成可点的「还没接上，点这里重新连接」。**retrying=true 时仍然不停
+     * 「运行中」、不摘气泡**（评审 P1-5），这条约束不变。
      */
     @Override
     public void onStreamReset(String sessionId, String code, String message, boolean retrying) {
+        // 诊断先记：每一次都记，不受节流影响（用户要的就是「偶发还是持续」一眼可辨）
+        logStreamReset(code, retrying);
         if (sessionId != null && !sessionId.isEmpty() && !sessionId.equals(currentSessionId)) return;
         if (retrying) {
-            Toast.makeText(this, "连接抖动，正在恢复…", Toast.LENGTH_SHORT).show();
+            // 只挂/刷新内联横幅，绝不 Toast：网关还在自己重试，这里给一条安静的、可自动消失的提示。
+            showStreamNotice(false, streamNoticeTextOf(code), sessionId);
             return;
         }
         cancelSendWatchdog();
@@ -1258,8 +1373,128 @@ public final class MainActivity extends Activity implements
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         String why = (message == null || message.isEmpty())
                 ? (code == null || code.isEmpty() ? "" : code) : message;
-        Toast.makeText(this, why.isEmpty() ? "输出被中断了" : ("输出被中断了：" + why),
-                Toast.LENGTH_LONG).show();
+        // 终止性中断也走内联横幅：它是「真的断了」这一结论，横幅比一闪而过的 Toast 更该常驻，
+        // 同样在收到该会话任何新帧时自动消失，超过 30 秒则给出重连入口。
+        showStreamNotice(true, why.isEmpty() ? "输出被中断了" : ("输出被中断了：" + why), sessionId);
+    }
+
+    // ---------------------------------------------------------------- 会话流中断：提示与诊断
+
+    /** retrying 中断的横幅文案；带 code 时附在后面，方便与设置页诊断对上。 */
+    private static String streamNoticeTextOf(String code) {
+        if (code == null || code.isEmpty()) return "连接抖动，正在恢复…";
+        return "连接抖动，正在恢复…（" + code + "）";
+    }
+
+    /**
+     * 挂/刷新顶部内联横幅。节流规则：
+     *   - 同一个会话已经挂着提示 → 直接返回（退避重试的后续帧不再刷新，避免闪）；
+     *   - 同一个会话 30 秒内刚提示过 → 也返回（「同一会话 30 秒内最多提示一次」）。
+     * 第一次显示时排一个 30 秒后的任务，把横幅翻成可点的重连入口（持续抖动要有出口）。
+     */
+    private void showStreamNotice(boolean error, String text, String sessionId) {
+        String sid = sessionId == null ? "" : sessionId;
+        if (text == null || text.isEmpty()) return;
+        if (!streamNoticeText.isEmpty() && streamNoticeSession.equals(sid)) return;
+        long now = System.currentTimeMillis();
+        if (sid.equals(streamNoticeLastSession) && now - streamNoticeLastAt < STREAM_NOTICE_THROTTLE_MS) return;
+
+        streamNoticeLastSession = sid;
+        streamNoticeLastAt = now;
+        streamNoticeSession = sid;
+        streamNoticeText = text;
+        streamNoticeError = error;
+        streamNoticeActionable = false;
+
+        if (streamNoticeActionTask != null) uiHandler.removeCallbacks(streamNoticeActionTask);
+        streamNoticeActionTask = new Runnable() {
+            @Override public void run() {
+                streamNoticeActionTask = null;
+                if (streamNoticeText.isEmpty()) return;
+                streamNoticeActionable = true;
+                paintBanner();
+            }
+        };
+        uiHandler.postDelayed(streamNoticeActionTask, STREAM_NOTICE_ACTION_MS);
+        paintBanner();
+    }
+
+    /**
+     * 收到该会话任何新帧 / 快照 = 已经接上了：撤掉提示，并停掉「持续恢复中」的计时。
+     * 调用点在 applyEvent（实时帧 / 历史 / 快照的唯一归并口）与 onAssistantStream。
+     */
+    private void clearStreamNotice() {
+        if (streamNoticeActionTask != null) {
+            uiHandler.removeCallbacks(streamNoticeActionTask);
+            streamNoticeActionTask = null;
+        }
+        if (streamNoticeText.isEmpty()) return;
+        streamNoticeText = "";
+        streamNoticeSession = "";
+        streamNoticeError = false;
+        streamNoticeActionable = false;
+        paintBanner();
+    }
+
+    /**
+     * 画对话页顶部那一条横幅。两类信息共用一条：
+     *   ① 连接状态（onState 的 detail / hello 告警）——优先级更高；
+     *   ② 会话流中断（「连接抖动，正在恢复…」/「输出被中断了…」）。
+     */
+    private void paintBanner() {
+        if (screen != Screen.CHAT || convo == null) return;
+        if (stateBannerText != null && !stateBannerText.isEmpty()) {
+            convo.setBanner(stateBannerText, stateBannerError, false, null);
+            return;
+        }
+        if (streamNoticeText.isEmpty()) {
+            convo.setBanner(null, false);
+            return;
+        }
+        convo.setBanner(
+                streamNoticeActionable
+                        ? (streamNoticeText + "　还没接上，点这里重新连接")
+                        : streamNoticeText,
+                streamNoticeError,
+                streamNoticeActionable,
+                streamNoticeActionable ? this::reconnectCurrentSession : null);
+    }
+
+    /**
+     * 内联横幅「点这里重新连接」的动作：重新 subscribe，必要时重开连接。
+     *
+     *   ① 用户已经明确要重试 → 先清掉旧提示（不该再挂着上一次的结论）；
+     *   ② wantConnected=false（此前已断开）→ 用已存配置重新 connect；
+     *      还想要连接但已经发不出帧（canSend=false，半开链路 / 重连窗口）→ retryNow() 重开一条；
+     *   ③ 无论如何都补一次 subscribe，让这个会话的实时流重新申请一次。
+     */
+    private void reconnectCurrentSession() {
+        clearStreamNotice();
+        if (currentSessionId.isEmpty()) return;
+        if (!gw.wantConnected()) {
+            String url = store.url();
+            if (!url.isEmpty()) gw.connect(url, store.token(), store.deviceId(), store.deviceName());
+        } else if (!gw.canSend()) {
+            gw.retryNow();
+        }
+        gw.subscribe(currentSessionId);
+        gw.requestTasks(currentSessionId);
+        cancelSendWatchdog();
+        refreshDiagnostics();
+    }
+
+    /**
+     * 记一条会话流中断到设置页诊断区：`时间 / code / retrying`，只留最近 10 条。
+     * **不记 message 明文**——这条日志的用途是分辨「偶发」还是「持续」，正文没有用。
+     */
+    private void logStreamReset(String code, boolean retrying) {
+        String t = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                .format(new java.util.Date());
+        String line = t + "  " + (code == null || code.isEmpty() ? "(无 code)" : code)
+                + "  retrying=" + (retrying ? "true" : "false");
+        streamResetLog.addLast(line);
+        while (streamResetLog.size() > STREAM_RESET_LOG_MAX) streamResetLog.removeFirst();
+        refreshDiagnostics();
     }
 
     @Override
@@ -1633,6 +1868,9 @@ public final class MainActivity extends Activity implements
     // ============================================================ 事件归并
 
     private void applyEvent(String type, JSONObject payload, Object seq, Object time, boolean historical) {
+        // 走到这里 = 当前会话确实有东西进来了（实时帧 / 历史 / 快照都归并到这一个口）。
+        // 「连接抖动，正在恢复…」的前提已经不成立，立刻撤掉内联提示。
+        clearStreamNotice();
         long t = 0;
         try { if (time != null) t = Long.parseLong(String.valueOf(time)) * 1000L; } catch (Throwable ignored) { }
         if (t <= 0) t = System.currentTimeMillis();
@@ -2327,6 +2565,9 @@ public final class MainActivity extends Activity implements
 
     private void subscribeCurrent() {
         if (currentSessionId.isEmpty()) return;
+        // 换会话就把上一条流中断提示撤掉：它描述的是上一个会话的流，留着会误导
+        // （尤其是刚从一个长期连不上的子会话切到一个正常会话时）。
+        clearStreamNotice();
         items.clear();
         byKey.clear();
         seenSeq.clear();
@@ -2342,7 +2583,14 @@ public final class MainActivity extends Activity implements
         gw.subscribe(currentSessionId);
         gw.requestTasks(currentSessionId);
         gw.requestGoal(currentSessionId);
-        if (screen != Screen.CHAT) showChat();
+        if (screen != Screen.CHAT) {
+            showChat();
+        } else if (convo != null) {
+            // 在抽屉里点另一条任务时不会走 showChat()（人已经在对话页），
+            // 但标题/副标题必须跟着换，否则会出现"内容换了、标题还是上一条"。
+            convo.setTitleText(currentTitle.isEmpty() ? "对话" : currentTitle);
+            convo.setSubtitleText(currentCwd);
+        }
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
     }
 
@@ -2355,6 +2603,8 @@ public final class MainActivity extends Activity implements
         currentSessionId = s.id;
         currentTitle = s.display();
         currentCwd = s.cwd;
+        closeDrawer();          // 选中任务 -> 抽屉收起 -> 右侧对话扩大并进入该任务
+        if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
         subscribeCurrent();
     }
 
@@ -2379,6 +2629,8 @@ public final class MainActivity extends Activity implements
         hasMore = false;
         nextBeforeSeq = null;
         setRunning(false);
+        closeDrawer();          // 新建/派任务 -> 抽屉收起，进入空白对话
+        if (listScreen != null) listScreen.setCurrentSession("");
         showChat();
     }
 
@@ -2415,7 +2667,10 @@ public final class MainActivity extends Activity implements
     }
 
     @Override
-    public void onSettings() { showSettings(); }
+    public void onSettings() {
+        closeDrawer();          // 设置入口就在抽屉里：点完先收抽屉再进设置
+        showSettings();
+    }
 
     @Override
     public void onRefresh() {
@@ -2462,10 +2717,16 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ ConversationView.Host
 
+    /** 设置页左上角 ‹：回对话页（会话列表已是抽屉，没有列表全屏页了）。 */
     @Override
     public void onBack() {
-        if (screen == Screen.SETTINGS) showList();
-        else showList();
+        showChat();
+    }
+
+    /** 对话页左上角 ‹：打开左侧任务列表抽屉（豆包式：箭头 = 进任务列表）。 */
+    @Override
+    public void onOpenTasks() {
+        openDrawer();
     }
 
     @Override
@@ -2630,7 +2891,7 @@ public final class MainActivity extends Activity implements
         }
         Toast.makeText(this, (useWan ? "连接公网" : "连接内网") + "：" + hostOf(active), Toast.LENGTH_SHORT).show();
         gw.connect(store.url(), token, store.deviceId(), store.deviceName());
-        showList();
+        showChat();
     }
 
     @Override
@@ -3686,7 +3947,7 @@ public final class MainActivity extends Activity implements
         return reason;
     }
 
-    /** 刷新设置页诊断区（状态 / 轨迹 / 最近一次扫码特征 / 本次配对每一步）。 */
+    /** 刷新设置页诊断区（状态 / 轨迹 / 最近一次扫码特征 / 本次配对每一步 / 会话流中断）。 */
     private void refreshDiagnostics() {
         if (settingsView == null) return;
         StringBuilder sb = new StringBuilder();
@@ -3695,6 +3956,14 @@ public final class MainActivity extends Activity implements
         if (!pairTrace.isEmpty()) {
             sb.append("\n\n[配对诊断] 本次配对的每一步（不含配对码/令牌明文）：");
             for (String line : pairTrace) sb.append('\n').append("  ").append(line);
+        }
+        if (!streamResetLog.isEmpty()) {
+            // 目的：下次再遇到「一直在抖」时，一眼看出是偶发（零散几条）还是持续（同一 code 连续刷屏）。
+            // 只记 时间 / code / retrying，不含内容明文（最新在上）。
+            sb.append("\n\n[会话流中断] 最近 ").append(streamResetLog.size())
+                    .append(" 次（时间 / code / retrying，不含内容明文）：");
+            java.util.Iterator<String> it = streamResetLog.descendingIterator();
+            while (it.hasNext()) sb.append('\n').append("  ").append(it.next());
         }
         settingsView.setDiagnostics(sb.toString());
     }

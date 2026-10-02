@@ -26,7 +26,8 @@ import java.util.List;
 public final class ConversationView extends LinearLayout implements ChatAdapter.Host {
 
     public interface Host extends ChatAdapter.Host {
-        void onBack();
+        /** 左上角 ‹ 的行为：打开左侧任务列表抽屉（豆包式），不再是全屏返回列表页。 */
+        void onOpenTasks();
         void onSend(String text);
         void onStop();
         void onLoadMore();
@@ -78,9 +79,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         bar.setBackgroundColor(Ui.SURFACE);
         bar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8));
 
+        // 左上角箭头：保留箭头样式，但行为改成「打开左侧任务列表」（豆包式两级导航）
         TextView back = Ui.circleButton(ctx, "‹", 0x00000000, Ui.INK);
         back.setTextSize(26f);
-        back.setOnClickListener(v -> host.onBack());
+        back.setOnClickListener(v -> host.onOpenTasks());
         bar.addView(back);
 
         LinearLayout titles = Ui.col(ctx);
@@ -250,11 +252,29 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     }
 
     public void setBanner(String text, boolean error) {
-        if (text == null || text.isEmpty()) { banner.setVisibility(GONE); return; }
+        setBanner(text, error, false, null);
+    }
+
+    /**
+     * 顶部状态条。
+     *
+     * actionable=true 时整条可点：用于「连接抖动…还没接上，点这里重新连接」这类
+     * 「持续不恢复、必须给个出口」的提示（点一下 = 重新订阅 + 必要时重开连接）。
+     * 不可点时显式清掉监听器，避免复用同一个 TextView 时残留上一次的点击行为。
+     */
+    public void setBanner(String text, boolean error, boolean actionable, Runnable onClick) {
+        if (text == null || text.isEmpty()) {
+            banner.setVisibility(GONE);
+            banner.setClickable(false);
+            banner.setOnClickListener(null);
+            return;
+        }
         banner.setVisibility(VISIBLE);
         banner.setText(text);
         banner.setTextColor(error ? 0xFF991B1B : 0xFF92400E);
         banner.setBackgroundColor(error ? 0xFFFEF2F2 : 0xFFFFF7E6);
+        banner.setClickable(actionable);
+        banner.setOnClickListener(actionable && onClick != null ? v -> onClick.run() : null);
     }
 
     /** 顶部提要：当前目标 + 任务清单（空则隐藏）。 */
