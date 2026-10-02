@@ -9,14 +9,17 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.dsh.mobile.net.RoutePolicy;
+
 /** 配对与连接设置。 */
 public final class SettingsView extends LinearLayout {
 
     public interface Host {
         void onBack();
         void onScanQr();
-        void onConnect(String lan, String wan, boolean useWan, String token, String deviceName);
-        void onSwitchEndpoint(String lan, String wan, boolean useWan);
+        /** netMode: {@link RoutePolicy#AUTO} / {@link RoutePolicy#LAN} / {@link RoutePolicy#WAN}。 */
+        void onConnect(String lan, String wan, String netMode, String token, String deviceName);
+        void onSwitchEndpoint(String lan, String wan, String netMode);
         void onToggleInsecureTls(boolean on);
         void onCheckUpdate();
         void onOpenFeedback();
@@ -33,11 +36,13 @@ public final class SettingsView extends LinearLayout {
     private final Host host;
     private EditText lanField;
     private EditText wanField;
-    private TextView useLanBtn;
-    private TextView useWanBtn;
+    /** 连接方式三分段：自动（推荐）/ 只用内网 / 只用公网。 */
+    private TextView modeAutoBtn;
+    private TextView modeLanBtn;
+    private TextView modeWanBtn;
+    private String netModeState = RoutePolicy.AUTO;
     private TextView aboutText;
     private TextView updateHint;
-    private boolean useWanState;
     private TextView insecureBtn;
     private boolean insecureState;
     private TextView feedbackCount;
@@ -113,18 +118,26 @@ public final class SettingsView extends LinearLayout {
         wanField = field("扫码后自动填 · wss://你的域名/ws/mobile", false);
         card.addView(wanField);
 
+        card.addView(label("连接方式"));
         LinearLayout epRow = Ui.row(ctx);
         epRow.setLayoutParams(Ui.fill());
         epRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-        useLanBtn = segment("用内网");
-        useWanBtn = segment("用公网");
-        useLanBtn.setOnClickListener(v -> host.onSwitchEndpoint(
-                lanField.getText().toString().trim(), wanField.getText().toString().trim(), false));
-        useWanBtn.setOnClickListener(v -> host.onSwitchEndpoint(
-                lanField.getText().toString().trim(), wanField.getText().toString().trim(), true));
-        epRow.addView(useLanBtn, weight(1f, 0));
-        epRow.addView(useWanBtn, weight(1f, 8));
+        modeAutoBtn = segment("自动（推荐）");
+        modeLanBtn = segment("只用内网");
+        modeWanBtn = segment("只用公网");
+        modeAutoBtn.setOnClickListener(v -> host.onSwitchEndpoint(
+                lanField.getText().toString().trim(), wanField.getText().toString().trim(), RoutePolicy.AUTO));
+        modeLanBtn.setOnClickListener(v -> host.onSwitchEndpoint(
+                lanField.getText().toString().trim(), wanField.getText().toString().trim(), RoutePolicy.LAN));
+        modeWanBtn.setOnClickListener(v -> host.onSwitchEndpoint(
+                lanField.getText().toString().trim(), wanField.getText().toString().trim(), RoutePolicy.WAN));
+        epRow.addView(modeAutoBtn, weight(1f, 0));
+        epRow.addView(modeLanBtn, weight(1f, 8));
+        epRow.addView(modeWanBtn, weight(1f, 8));
         card.addView(epRow);
+        card.addView(hint("自动（推荐）：连着 WiFi 就走上面那条内网地址，用移动数据（5G/4G）"
+                + "或没连 WiFi 就走公网地址；连的 WiFi 不是家里那个、内网几秒没连上，"
+                + "会自动改用公网。\n只用内网 / 只用公网：完全按你的选择走，不再自动判断（手动永远优先）。"));
 
         LinearLayout tlsRow = Ui.row(ctx);
         tlsRow.setLayoutParams(Ui.fill());
@@ -157,7 +170,7 @@ public final class SettingsView extends LinearLayout {
         save.setOnClickListener(v -> host.onConnect(
                 lanField.getText().toString().trim(),
                 wanField.getText().toString().trim(),
-                useWanState,
+                netModeState,
                 tokenField.getText().toString().trim(),
                 nameField.getText().toString().trim()));
         row1.addView(save, weight(1f, 0));
@@ -272,7 +285,8 @@ public final class SettingsView extends LinearLayout {
         // ---- 说明卡片
         LinearLayout help = section(body, "怎么连？", false);
         help.addView(hint("• 同一个 WiFi：电脑端 DSH →「移动设备」→ 生成配对二维码，手机点「扫码配对」扫它即可。"));
-        help.addView(hint("• 外网：把电脑上的网关端口用反向代理暴露成 wss:// 域名，填进上面「公网地址」，之后点「用公网」就能随时切换，不用再改内网地址。"));
+        help.addView(hint("• 外网：把电脑上的网关端口用反向代理暴露成 wss:// 域名，填进上面「公网地址」。"
+                + "之后「连接方式」选「自动（推荐）」就不用管了：在家走内网、在外面走公网。"));
         help.addView(hint("• 一个地址只用一次配对；换地址后重新扫码。"));
         // ---- 意见反馈（点开是反馈窗口）
         LinearLayout fb = section(body, "意见反馈", false);
@@ -358,19 +372,19 @@ public final class SettingsView extends LinearLayout {
         if (diag != null) diag.setText(diagnostics);
         if (feedbackCount != null) feedbackCount.setText(fbHint);
         // 重放开关/分段：这些值本来就在本对象的字段里，重建后自己画回去
-        paintEndpoints(useWanState);
+        paintNetMode(netModeState);
         setInsecureTls(insecureState);
         setAllowScreenshot(shotState);
         paintModes(null);   // 显示模式由宿主随后 setDisplayMode() 覆盖
         paintTheme();
     }
 
-    public void setFields(String lan, String wan, String token, String name, boolean useWan) {
+    public void setFields(String lan, String wan, String token, String name, String netMode) {
         if (lan != null && !lan.isEmpty()) lanField.setText(lan);
         if (wan != null && !wan.isEmpty()) wanField.setText(wan);
         if (token != null && !token.isEmpty()) tokenField.setText(token);
         if (name != null && !name.isEmpty()) nameField.setText(name);
-        paintEndpoints(useWan);
+        paintNetMode(netMode);
     }
 
     public void setFeedbackHint(String text) {
@@ -403,14 +417,16 @@ public final class SettingsView extends LinearLayout {
         if (updateHint != null) updateHint.setText(text == null ? "" : text);
     }
 
-    private void paintEndpoints(boolean useWan) {
-        useWanState = useWan;
-        styleSeg(useLanBtn, !useWan);
-        styleSeg(useWanBtn, useWan);
+    /** 连接方式三分段的选中态（与显示模式/主题同一套 styleSeg 样式）。 */
+    private void paintNetMode(String mode) {
+        netModeState = RoutePolicy.normalizeMode(mode);
+        styleSeg(modeAutoBtn, RoutePolicy.AUTO.equals(netModeState));
+        styleSeg(modeLanBtn, RoutePolicy.LAN.equals(netModeState));
+        styleSeg(modeWanBtn, RoutePolicy.WAN.equals(netModeState));
     }
 
-    /** 外部切换后同步按钮状态。 */
-    public void setUseWan(boolean useWan) { paintEndpoints(useWan); }
+    /** 外部（宿主）同步当前连接方式档位。 */
+    public void setNetMode(String mode) { paintNetMode(mode); }
 
     public void setDiagnostics(String s) {
         if (diag != null) diag.setText(s == null ? "" : s);

@@ -5,10 +5,16 @@ import android.content.SharedPreferences;
 import android.os.Build;
 
 import com.dsh.mobile.net.LanAddress;
+import com.dsh.mobile.net.NetStatus;
+import com.dsh.mobile.net.RoutePolicy;
 
 /**
  * 本地持久化：网关地址、设备 token、安装级设备 ID、设备名。
  * token 只保存在应用私有 SharedPreferences 中，不落日志。
+ *
+ * <p>线路选择（内网 / 公网）也在这里收口：{@link #url()} 与 {@link Device#activeUrl()}
+ * 不再直接「内网优先」，而是走 {@link RoutePolicy}（WiFi -&gt; 内网、移动数据 -&gt; 公网、
+ * 手动档优先，规则与判据见 {@code net/RoutePolicy.java}、{@code net/NetStatus.java}）。
  */
 public final class Store {
 
@@ -21,8 +27,17 @@ public final class Store {
     private static final String K_GATEWAY_NAME = "gateway_name";
     private static final String K_LAN = "lan_url";
     private static final String K_WAN = "wan_url";
+    /**
+     * 「这台设备怎么选线路」的旧字段镜像：auto（自动，默认）/ lan（只用内网）/ wan（只用公网）。
+     * 真身是 {@link Device#netMode}；这个键只在「设备表还是空的」这种中间态下兜底。
+     */
+    private static final String K_NET_MODE = "net_mode";
     /** 一次性清洗标记：把历史上存成「内网地址」的虚拟网卡地址（172.16/12 等）清掉，只做一次。 */
     private static final String K_LAN_CLEANED = "lan_url_sanitized_v1";
+    /**
+     * 旧版本的「用公网」布尔。现在只作为**降级兼容**镜像写入：
+     * 老版本 App 读它决定走哪条，新版本读了会按 netMode 归位（true -&gt; wan，false -&gt; auto）。
+     */
     private static final String K_USE_WAN = "use_wan";
     private static final String K_INSECURE_TLS = "insecure_tls";
     private static final String K_FEEDBACK = "feedback_log";
@@ -45,13 +60,34 @@ public final class Store {
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
     private final SharedPreferences titles;
 
+    /**
+     * 内网刚连不上的时刻（进程级、不落盘）：自动档在 {@link #LAN_FAIL_BACKOFF_MS} 内不再首选内网，
+     * 避免「连着别人家的 WiFi」时每次重连都白等一次 5~8 秒超时（防乒乓）。
+     */
+    private static volatile long sLanFailAt = 0L;
+    /** 内网失败后的退避窗口。换网卡种类（WiFi↔移动数据）、用户手动重连或重新选档位时清零。 */
+    private static final long LAN_FAIL_BACKOFF_MS = 60_000L;
+
     public Store(Context ctx) {
         this.sp = ctx.getApplicationContext().getSharedPreferences(FILE, Context.MODE_PRIVATE);
         this.titles = ctx.getApplicationContext().getSharedPreferences("dsh_mobile_titles", Context.MODE_PRIVATE);
         // 启动时把「允许截屏」策略同步进进程级镜像：Dialog/扫码等窗口创建时读它决定要不要设 FLAG_SECURE
         com.dsh.mobile.ui.Ui.setAllowScreenshot(sp.getBoolean(K_ALLOW_SCREENSHOT, true));
+        // 启动时先问一次「是不是 WiFi」：线路选择在任何一次连接/画卡片之前就要有答案
+        // （NetworkCallback 要等 Activity 起来才注册，不能只靠它）
+        try { NetStatus.refresh(ctx.getApplicationContext()); } catch (Throwable ignored) { }
         // 老版本可能把虚拟网卡地址（172.16/12 等）当成「内网地址」存了下来 —— 一次迁移清掉
         sanitizeStoredLan();
+    }
+
+    /** 记一次「内网这条连不上」（自动档因此暂走公网，见 {@link #LAN_FAIL_BACKOFF_MS}）。 */
+    public static void noteLanFailure() { sLanFailAt = System.currentTimeMillis(); }
+
+    /** 清掉内网退避：换网卡种类、用户手动重连/重新选档位时调用，让自动档重新评估。 */
+    public static void clearLanFailure() { sLanFailAt = 0L; }
+
+    private static boolean lanBackoff() {
+        return System.currentTimeMillis() - sLanFailAt < LAN_FAIL_BACKOFF_MS;
     }
 
     /**
@@ -165,20 +201,84 @@ public final class Store {
     public String feedbackCfg() { return sp.getString(K_FEEDBACK_CFG, ""); }
     public void setFeedbackCfg(String v) { sp.edit().putString(K_FEEDBACK_CFG, v == null ? "" : v).apply(); }
 
-    public boolean useWan() { return sp.getBoolean(K_USE_WAN, false); }
-    public void setUseWan(boolean v) {
-        sp.edit().putBoolean(K_USE_WAN, v).apply();
+    public boolean useWan() { return RoutePolicy.WAN.equals(netMode()); }
+    public void setUseWan(boolean v) { setNetMode(v ? RoutePolicy.WAN : RoutePolicy.AUTO); }
+
+    /**
+     * 当前生效设备的连接方式：{@link RoutePolicy#AUTO}（默认）/ {@link RoutePolicy#LAN} / {@link RoutePolicy#WAN}。
+     *
+     * <p>⚠️ 真身是**旧字段 K_NET_MODE**，设备表里的 {@code Device.netMode} 是它的镜像 —— 与
+     * {@link #lanUrl()}/{@link #wanUrl()} 完全同一套设计（写入落旧字段，再由
+     * {@link #syncLegacyIntoActive()} 同步进当前生效的那台）。
+     * 真机踩过（2026-10-02，Android TV 盒子）：这里若反过来优先读设备字段，
+     * {@link #setNetMode(String)} 写进 K_NET_MODE 后会被 syncLegacyIntoActive 用
+     * 设备里的旧值覆盖，**设置页点「自动」根本没生效**（顶栏一直显示「手动 · 只用公网」）。
+     */
+    public String netMode() {
+        String m = sp.getString(K_NET_MODE, "");
+        if (m != null && !m.isEmpty()) return RoutePolicy.normalizeMode(m);
+        Device d = activeDevice();
+        if (d != null) return RoutePolicy.normalizeMode(d.netMode);
+        return RoutePolicy.normalizeMode(sp.getBoolean(K_USE_WAN, false) ? RoutePolicy.WAN : RoutePolicy.AUTO);
+    }
+
+    /** 设置连接方式（手动档 = 用户显式决定，自动档会按 WiFi/移动数据实时挑）。 */
+    public void setNetMode(String mode) {
+        String m = RoutePolicy.normalizeMode(mode);
+        sp.edit()
+                .putString(K_NET_MODE, m)
+                .putBoolean(K_USE_WAN, RoutePolicy.WAN.equals(m))   // 降级兼容：老版本只认这个布尔
+                .apply();
         syncLegacyIntoActive();
     }
 
-    /** 当前生效的地址：选了公网且填了公网就用公网，否则用内网（兜底旧字段）。 */
+    /** 是不是自动档（手动档下绝不自动切线路 —— 「手动永远优先」）。 */
+    public boolean isAutoMode() { return RoutePolicy.AUTO.equals(netMode()); }
+
+    /**
+     * 给某台设备算这次该连哪条（纯函数 + 进程内缓存的 WiFi 判定，不发系统调用、不落盘）。
+     * 卡片文案、连接地址、诊断信息全部走这里，保证「显示的」和「连的」是同一个结论。
+     */
+    public static RoutePolicy.Pick pickOf(Device d) {
+        if (d == null) return RoutePolicy.decide(RoutePolicy.AUTO, "", "", NetStatus.wifi(), NetStatus.known(), false);
+        return RoutePolicy.decide(d.netMode, d.lanUrl, d.wanUrl,
+                NetStatus.wifi(), NetStatus.known(), lanBackoff(), !NetStatus.online());
+    }
+
+    /** 当前生效设备的选择结果。 */
+    public RoutePolicy.Pick pickActive() {
+        Device d = activeDevice();
+        if (d != null) {
+            // 档位取 netMode()（旧字段真身）而不是设备字段的镜像：万一两者短暂不同步，
+            // 也保证「设置页显示的档位」和「实际走哪条」是同一个结论
+            return RoutePolicy.decide(netMode(), d.lanUrl, d.wanUrl,
+                    NetStatus.wifi(), NetStatus.known(), lanBackoff(), !NetStatus.online());
+        }
+        return RoutePolicy.decide(netMode(), lanUrl(), wanUrl(),
+                NetStatus.wifi(), NetStatus.known(), lanBackoff(), !NetStatus.online());
+    }
+
+    /** 「走内网 / 走公网 / 没有可用地址」。 */
+    public String routeLine() { return pickActive().line; }
+
+    /** 规则来源：「自动 · 已连 WiFi」「自动 · 未连 WiFi（移动数据）」「手动 · 只用公网」… */
+    public String routeSource() { return pickActive().source; }
+
+    /** 现在这条线路是不是公网。 */
+    public boolean usingWan() { return pickActive().wan; }
+
+    /**
+     * 当前生效的地址：按线路规则（WiFi -&gt; 内网、移动数据/未连 WiFi -&gt; 公网、手动档优先）算出来。
+     *
+     * <p>为什么收口在这里：全 App 连的都是 {@code store.url()}，把规则放在这一个函数里，
+     * 「显示的线路」和「实际的线路」就不会各算各的。旧字段 K_URL 只在两个槽位都空时兜底
+     * （全新安装手填地址、设备表迁移前的中间态）。
+     */
     public String url() {
-        String lan = lanUrl();
-        String wan = wanUrl();
-        if (useWan() && !wan.isEmpty()) return wan;
-        if (!lan.isEmpty()) return lan;
-        if (!wan.isEmpty()) return wan;
-        return sp.getString(K_URL, "");
+        String u = pickActive().url;
+        if (!u.isEmpty()) return u;
+        if (lanUrl().isEmpty() && wanUrl().isEmpty()) return sp.getString(K_URL, "");
+        return "";
     }
 
     /** 配对/手填时按地址性质归位到内网或公网槽位。 */
@@ -341,7 +441,12 @@ public final class Store {
         public String lanUrl = "";
         /** 公网地址：人在外面时用；隧道域名会变，失效时重新扫码更新。 */
         public String wanUrl = "";
-        public boolean useWan = false;
+        /**
+         * 连接方式：{@link RoutePolicy#AUTO}（默认，按 WiFi/移动数据自动挑）/
+         * {@link RoutePolicy#LAN}（只用内网）/ {@link RoutePolicy#WAN}（只用公网）。
+         * 旧数据里的 useWan 布尔会在读取时归位（true -&gt; wan，false -&gt; auto）。
+         */
+        public String netMode = RoutePolicy.AUTO;
         public String token = "";
         public String gatewayId = "";
         /** 网关 hello/配对载荷里的 gatewayName，作为默认设备名。 */
@@ -357,12 +462,12 @@ public final class Store {
             return "我的电脑";
         }
 
-        /** 该设备当前该用的地址（内网优先，除非用户选了公网且公网有值）。 */
+        /**
+         * 该设备当前该用的地址。判据与「显示的线路」共用 {@link Store#pickOf}：
+         * 自动档下 WiFi 走（可用的）内网、移动数据/未连 WiFi 走公网，手动档按用户的显式选择。
+         */
         public String activeUrl() {
-            if (useWan && wanUrl != null && !wanUrl.isEmpty()) return wanUrl;
-            if (lanUrl != null && !lanUrl.isEmpty()) return lanUrl;
-            if (wanUrl != null && !wanUrl.isEmpty()) return wanUrl;
-            return "";
+            return Store.pickOf(this).url;
         }
 
         public boolean pairedReady() {
@@ -419,7 +524,10 @@ public final class Store {
         d.platform = o.optString("platform", "");
         d.lanUrl = o.optString("lan", "");
         d.wanUrl = o.optString("wan", "");
-        d.useWan = o.optBoolean("useWan", false);
+        // 旧数据只有 useWan 布尔：true 是「只用公网」，false 是老的「内网优先」= 新的自动档
+        String m = o.optString("netMode", "");
+        if (m == null || m.isEmpty()) m = o.optBoolean("useWan", false) ? RoutePolicy.WAN : RoutePolicy.AUTO;
+        d.netMode = RoutePolicy.normalizeMode(m);
         d.token = o.optString("token", "");
         d.gatewayId = o.optString("gatewayId", "");
         d.gatewayName = o.optString("gatewayName", "");
@@ -436,7 +544,9 @@ public final class Store {
             o.put("platform", d.platform == null ? "" : d.platform);
             o.put("lan", d.lanUrl == null ? "" : d.lanUrl);
             o.put("wan", d.wanUrl == null ? "" : d.wanUrl);
-            o.put("useWan", d.useWan);
+            o.put("netMode", RoutePolicy.normalizeMode(d.netMode));
+            // 降级兼容：老版本只认 useWan 这个布尔，继续按「是不是手动只用公网」写一份
+            o.put("useWan", RoutePolicy.WAN.equals(RoutePolicy.normalizeMode(d.netMode)));
             o.put("token", d.token == null ? "" : d.token);
             o.put("gatewayId", d.gatewayId == null ? "" : d.gatewayId);
             o.put("gatewayName", d.gatewayName == null ? "" : d.gatewayName);
@@ -465,7 +575,8 @@ public final class Store {
         d.lanUrl = lan;
         d.wanUrl = wan;
         d.token = tk;
-        d.useWan = sp.getBoolean(K_USE_WAN, false);
+        d.netMode = RoutePolicy.normalizeMode(sp.getString(K_NET_MODE,
+                sp.getBoolean(K_USE_WAN, false) ? RoutePolicy.WAN : RoutePolicy.AUTO));
         d.gatewayId = sp.getString(K_GATEWAY_ID, "");
         d.gatewayName = sp.getString(K_GATEWAY_NAME, "");
         // 更早的版本只写 K_URL：按地址性质归到内网/公网槽位，避免升级后地址消失
@@ -509,10 +620,12 @@ public final class Store {
     /** 直接写旧字段（**不**回调 syncLegacyIntoActive，避免与 setXxx 形成回环）。 */
     private void writeLegacy(Device d) {
         String active = d.activeUrl();
+        String mode = RoutePolicy.normalizeMode(d.netMode);
         sp.edit()
                 .putString(K_LAN, d.lanUrl == null ? "" : d.lanUrl)
                 .putString(K_WAN, d.wanUrl == null ? "" : d.wanUrl)
-                .putBoolean(K_USE_WAN, d.useWan)
+                .putString(K_NET_MODE, mode)
+                .putBoolean(K_USE_WAN, RoutePolicy.WAN.equals(mode))
                 .putString(K_TOKEN, d.token == null ? "" : d.token)
                 .putString(K_GATEWAY_ID, d.gatewayId == null ? "" : d.gatewayId)
                 .putString(K_GATEWAY_NAME, d.gatewayName == null ? "" : d.gatewayName)
@@ -599,7 +712,8 @@ public final class Store {
         if (list.isEmpty()) {
             sp.edit().remove(K_ACTIVE_DEVICE)
                     .remove(K_TOKEN).remove(K_GATEWAY_ID).remove(K_GATEWAY_NAME)
-                    .remove(K_LAN).remove(K_WAN).remove(K_URL).putBoolean(K_USE_WAN, false)
+                    .remove(K_LAN).remove(K_WAN).remove(K_URL)
+                    .putBoolean(K_USE_WAN, false).putString(K_NET_MODE, RoutePolicy.AUTO)
                     .apply();
         } else {
             setActiveDevice(list.get(0).id);
@@ -677,7 +791,7 @@ public final class Store {
             if (!d.id.equals(id)) continue;
             d.lanUrl = lanUrl();
             d.wanUrl = wanUrl();
-            d.useWan = useWan();
+            d.netMode = netMode();
             d.token = token();
             d.gatewayId = gatewayId();
             d.gatewayName = gatewayName();

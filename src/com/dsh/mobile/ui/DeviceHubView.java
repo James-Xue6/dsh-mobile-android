@@ -14,7 +14,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.dsh.mobile.Store;
-import com.dsh.mobile.net.LanAddress;
+import com.dsh.mobile.net.RoutePolicy;
 
 import java.util.List;
 
@@ -42,6 +42,12 @@ public final class DeviceHubView extends LinearLayout {
         void onManualAdd();
         /** 高级入口：原来的连接设置页（地址/令牌字段仍然保留）。 */
         void onOpenSettings();
+        /**
+         * 这台设备「这次该走内网还是公网、依据哪条规则」（规则在
+         * {@code net/RoutePolicy.java}，宿主按进程级 WiFi 判定算好）。
+         * 卡片只显示「走内网/走公网 + 规则来源」，**不显示地址**（用户要求便于截图分享）。
+         */
+        RoutePolicy.Pick routeOf(Store.Device d);
     }
 
     private final Context ctx;
@@ -213,18 +219,15 @@ public final class DeviceHubView extends LinearLayout {
         if (d.dshVersion != null && !d.dshVersion.isEmpty()) tags.addView(tag("DSH " + d.dshVersion, Ui.INK_SUB));
         card.addView(tags);
 
-        // 第三行：当前使用的地址（内网或公网）+ 在线/离线说明
-        String url = d.activeUrl();
+        // 第三行：这次走哪条线路 + 规则来源（**不显示地址**，方便用户截图分享）
+        RoutePolicy.Pick route = host.routeOf(d);
+        String url = route == null ? "" : route.url;
         String addrLine;
         if (url.isEmpty()) {
-            addrLine = "还没有地址 · 重新扫码或手动添加";
+            addrLine = "还没有可用地址 · 重新扫码或手动添加";
         } else {
-            // 只显示主机端口；地址属于用户自己的内网信息，不写进任何被跟踪的文件。
-            // 「走内网」要求地址确实是可用内网地址（虚拟网卡不算），否则一律按公网说明。
-            String kind = url.isEmpty() ? ""
-                    : (d.hasUsableLan() && LanAddress.isUsableLanUrl(url) ? "走内网" : "走公网");
-            addrLine = online ? ("已连接" + (kind.isEmpty() ? "" : " · " + kind)) : "离线"
-                    + (d.useWan ? "（公网）" : "（内网）");
+            String kind = route.line + " · " + route.source;
+            addrLine = (online ? "已连接 · " : "离线 · ") + kind;
             if (!online && isActive && d.lastSeenAt > 0) {
                 addrLine += " · 上次在线 " + Ui.ago(d.lastSeenAt);
             }

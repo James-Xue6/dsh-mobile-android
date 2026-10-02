@@ -18,6 +18,8 @@ import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.net.LanAddress;
+import com.dsh.mobile.net.NetStatus;
+import com.dsh.mobile.net.RoutePolicy;
 import com.dsh.mobile.ui.ConversationView;
 import com.dsh.mobile.ui.DeviceHubView;
 import com.dsh.mobile.ui.DrawerHost;
@@ -157,6 +159,25 @@ public final class MainActivity extends Activity implements
     private String lastFeedbackDraft = "";
     /** 自动切换端点只用一次，连接成功或手动切换后复位。 */
     private boolean failoverUsed = false;
+    /**
+     * 自动档的「内网超时兜底」定时任务：连着 WiFi 但不是家里那个网时，内网会连不上，
+     * 5~8 秒还没 READY 就改用公网（需求原文：「超时（5~8 秒）兜底切公网」）。
+     * 只在自动档 + 当前选的是可用内网 + 有公网地址时武装；READY / 换网卡 / 已切走就撤掉。
+     */
+    private Runnable autoLanFailoverTask;
+    /** 内网兜底窗口：取 6.5s（落在「5~8 秒」区间中间，比 TCP 的 12s 超时早）。 */
+    private static final long AUTO_LAN_FAILOVER_MS = 6500L;
+    /**
+     * 有活跃会话时被推迟的「内网→公网」切换（需求：「有活跃会话时不中途切换」）。
+     * 等这一回合结束（{@link #setRunning(boolean)} 复位）再执行，绝不打断正在进行的会话。
+     */
+    private boolean pendingAutoFailover = false;
+    /**
+     * 最近一次真正拿去连接的地址：连上以后「显示的是哪条线路」就以它为准
+     * （退避窗口到期、自动档的预测可能已经改回内网，但这条连接还在用公网 ——
+     * 显示的必须和实际用的一致）。只放内存，不落盘、不进日志。
+     */
+    private String lastConnectUrl = "";
     /** READY 稳定存活计时任务：只有真的稳住了才解禁端点故障切换（评审 P1-16）。 */
     private Runnable failoverResetTask;
     /** READY 连续存活满这么久，才允许下一次「内网/公网」自动切换。 */
@@ -334,7 +355,9 @@ public final class MainActivity extends Activity implements
             } else {
                 gw.setTrustAllCerts(store.insecureTls());
                 checkUpdate(false);   // 启动时后台查一次新版本（6 小时内不重复）
-                gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
+                // 走统一入口：按线路规则取地址（WiFi→内网、移动数据/未连 WiFi→公网），
+                // 并武装 5~8 秒的内网超时兜底
+                connectNow();
             }
         }
         refreshListStatus();
@@ -346,6 +369,11 @@ public final class MainActivity extends Activity implements
     // 手机从 WiFi 切到移动数据、或断网恢复时，原来的长连接不会自己知道；
     // 这里在默认网络可用/切换时补一次重连（wantConnected 且当前非 READY 才动），
     // 不用等退避计时器到点。
+    //
+    // 线路选择（2026-10-02 需求）：WiFi 走内网、移动数据/未连 WiFi 走公网，所以这个回调
+    // 还负责把「现在是不是 WiFi」写进 NetStatus —— 它是自动选路的唯一网络输入。
+    // 网络种类真的变了（WiFi↔移动数据）时清掉内网退避并重画线路文案：切换只在
+    // 下次连接/重连生效，不打断正在进行的会话（会话状态在网关侧，重连后重新订阅即恢复）。
     private android.net.ConnectivityManager.NetworkCallback netCallback;
     private long lastNetReconnectAt = 0L;
     /** 上一次看到的默认网络句柄：只有它真的变了，才认为"网卡换了"（WiFi→4G）。 */
@@ -359,14 +387,21 @@ public final class MainActivity extends Activity implements
             if (cm == null) return;
             netCallback = new android.net.ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(android.net.Network network) {
-                    onNetworkChanged(network);
+                    onNetworkChanged(network, null);
                 }
                 @Override public void onCapabilitiesChanged(android.net.Network network,
                                                             android.net.NetworkCapabilities caps) {
                     if (caps != null && caps.hasCapability(
                             android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                        onNetworkChanged(network);
+                        onNetworkChanged(network, caps);
                     }
+                }
+                @Override public void onLost(android.net.Network network) {
+                    // 默认网络没了（WiFi 关掉/断开，且没有别的网顶上来）时**只有 onLost 会来**，
+                    // 没有 onAvailable/onCapabilitiesChanged —— 不在这里重查，App 会一直以为自己
+                    // 还连着 WiFi，「关掉 WiFi 就该走公网」这条规则就永远不生效。
+                    // 重查一次即可：getActiveNetwork() 会给出"顶上来的移动数据"或"没有默认网络"。
+                    onDefaultNetworkLost();
                 }
             };
             cm.registerDefaultNetworkCallback(netCallback);
@@ -378,12 +413,42 @@ public final class MainActivity extends Activity implements
      * onCapabilitiesChanged 触发极其频繁（信号强弱、带宽变化都会来），
      * 用它去重连会变成网络一抖就重开连接；而且 READY 时旧 socket 看着还活着，
      * 只有句柄真的变了（WiFi→4G）才需要主动重开（评审 P1-9）。
+     *
+     * @param caps 回调直接带来的能力（可能为 null：onAvailable 没有能力对象）；给了就用它判 WiFi，
+     *             省一次系统查询，也避免「刚切过去能力还没刷到」的误判。
      */
-    private void onNetworkChanged(android.net.Network network) {
+    private void onNetworkChanged(android.net.Network network, android.net.NetworkCapabilities caps) {
         String key = network == null ? "" : String.valueOf(network);
         boolean handleChanged = !key.equals(lastNetworkKey);
         lastNetworkKey = key;
+        boolean wifiBefore = NetStatus.wifi();
+        if (caps != null) {
+            NetStatus.set(caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI),
+                    caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET));
+        } else {
+            NetStatus.refresh(this);
+        }
+        boolean kindChanged = wifiBefore != NetStatus.wifi();
+        if (kindChanged) {
+            // 换网卡种类 = 换了一套「内网可不可达」的前提：退避作废，重新评估，兜底定时器也撤掉
+            Store.clearLanFailure();
+            cancelAutoLanFailover();
+            refreshRouteUI();
+        }
         retryIfWanted(handleChanged);
+    }
+
+    /**
+     * 默认网络丢了（{@code onLost}）：只重查「现在是不是 WiFi」并重画线路文案，
+     * **不主动重连** —— 没有网络的时候重连只会空转；等网络回来（onAvailable）再按既有退避逻辑补连。
+     */
+    private void onDefaultNetworkLost() {
+        boolean wifiBefore = NetStatus.wifi();
+        NetStatus.refresh(this);
+        if (wifiBefore == NetStatus.wifi()) return;
+        Store.clearLanFailure();          // 网络种类变了：内网退避作废，重新评估
+        cancelAutoLanFailover();
+        refreshRouteUI();
     }
 
     /**
@@ -408,6 +473,7 @@ public final class MainActivity extends Activity implements
             if (now - lastNetReconnectAt < 10000L) return;
             lastNetReconnectAt = now;
             gw.retryNow();
+            armAutoLanFailover(store.url());
             return;
         }
         if (st != GatewayClient.State.FAILED && !gw.backoffAtMax()) return;
@@ -417,6 +483,152 @@ public final class MainActivity extends Activity implements
         // 网络抖动时退避就退化成固定 3s 重连（评审 P1-9）。
         // 明文校验在 retryNow() 内部统一拦截，这里不必重复。
         gw.retryNow();
+        armAutoLanFailover(store.url());
+    }
+
+    // ---- 线路选择（WiFi=内网 / 移动数据或未连 WiFi=公网 / 手动档优先）
+
+    /**
+     * 统一的连接入口：按当前线路策略取地址，并武装「内网超时兜底切公网」。
+     *
+     * <p>刻意**不**在这里复位 {@link #failoverUsed}：{@link #autoSwitchToWan(String)} 切过去
+     * 之后就调用它，若在这里清零，就会变成内网↔公网无限来回切。
+     */
+    private void connectNow() {
+        if (gw == null) return;
+        String url = store.url();
+        String token = store.token();
+        if (url.isEmpty() || token.isEmpty()) return;
+        pendingAutoFailover = false;
+        lastConnectUrl = url;
+        gw.setTrustAllCerts(store.insecureTls());
+        gw.connect(url, token, store.deviceId(), store.deviceName());
+        armAutoLanFailover(url);
+        refreshRouteUI();
+    }
+
+    /**
+     * 武装自动档的内网超时兜底：当前选的是可用内网地址 + 有公网地址时，5~8 秒还没 READY
+     * 就改用公网（连着别人家的 WiFi 是常态，不能让用户每次都干等 TCP 的 12s 超时 + 退避）。
+     */
+    private void armAutoLanFailover(String url) {
+        cancelAutoLanFailover();
+        if (!store.isAutoMode()) return;                       // 手动档：按用户选择，绝不自动切
+        if (url == null || !LanAddress.isUsableLanUrl(url)) return;
+        if (store.wanUrl().isEmpty()) return;                  // 没有公网可切，兜底没有意义
+        autoLanFailoverTask = () -> {
+            autoLanFailoverTask = null;
+            if (gw == null || gw.state() == GatewayClient.State.READY) return;
+            if (!store.isAutoMode()) return;
+            if (!NetStatus.wifi()) return;                     // 已经不在 WiFi 了，等新网络的重新评估
+            if (!LanAddress.isUsableLanUrl(store.lanUrl())) return;
+            autoSwitchToWan("超时");
+        };
+        uiHandler.postDelayed(autoLanFailoverTask, AUTO_LAN_FAILOVER_MS);
+    }
+
+    private void cancelAutoLanFailover() {
+        if (autoLanFailoverTask == null) return;
+        uiHandler.removeCallbacks(autoLanFailoverTask);
+        autoLanFailoverTask = null;
+    }
+
+    /**
+     * 自动档下把线路从「内网」切到「公网」（唯一允许自动切的方向）。
+     *
+     * <p>为什么不切回去：自动档选内网的前提是「连着 WiFi 且内网地址可用」，这两条一变
+     * （换回家里 WiFi / 内网地址重扫）会由 {@link Store#clearLanFailure()} + 网络回调重新评估，
+     * 不需要在这里往回切 —— 反着切就会乒乓。
+     *
+     * <p>防乒乓：切之前先记一次「内网失败」（{@link Store#noteLanFailure()}），自动档在 60 秒
+     * 退避窗口内不再首选内网；切完置 {@link #failoverUsed}，同一次连接只切一次。
+     *
+     * @param why 失败原因的简短说法（「超时」「连不上」），只用于提示文案
+     */
+    private boolean autoSwitchToWan(String why) {
+        if (!store.isAutoMode()) return false;                 // 手动永远优先
+        if (store.usingWan()) return false;                    // 已经在公网，没有可切的
+        if (store.wanUrl().isEmpty()) return false;
+        if (!LanAddress.isUsableLanUrl(store.lanUrl())) return false;
+        if (running) {
+            // 需求：有活跃会话时不中途切换。记下来，这一回合结束后立刻切（见 setRunning）。
+            if (!pendingAutoFailover) {
+                pendingAutoFailover = true;
+                Toast.makeText(this, "内网" + why + "；有正在进行的会话，先不切线路。\n"
+                        + "这一回合结束后会自动改用公网。", Toast.LENGTH_LONG).show();
+            }
+            return false;
+        }
+        if (failoverUsed) return false;
+        failoverUsed = true;
+        pendingAutoFailover = false;
+        cancelAutoLanFailover();
+        Store.noteLanFailure();                                // 退避窗口：60s 内自动档不再首选内网
+        Toast.makeText(this, "内网" + why + "，自动改用公网…", Toast.LENGTH_SHORT).show();
+        lastConnectUrl = store.url();
+        gw.setTrustAllCerts(store.insecureTls());
+        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
+        refreshRouteUI();
+        return true;
+    }
+
+    /** 回合结束（或有明确结论不再 running）时，补执行被推迟的线路切换。 */
+    private void maybeApplyAutoFailover() {
+        if (!pendingAutoFailover) return;
+        if (running) return;
+        pendingAutoFailover = false;
+        if (gw != null && gw.state() == GatewayClient.State.READY) return;   // 已经好了，不必切
+        autoSwitchToWan("连不上");
+    }
+
+    /** 「走内网（自动 · 已连 WiFi）」这类**不含地址**的线路文案，卡片与顶栏共用。 */
+    private String routeLabel() {
+        if (gw == null || !store.paired()) return "";
+        if (gw.state() == GatewayClient.State.READY && !lastConnectUrl.isEmpty()) {
+            // 连上了就报**实际**在用的那条（按地址槽位精确判定，不看 LanAddress 的可用性）
+            boolean wan = isWanUrl(lastConnectUrl);
+            boolean lan = isLanUrl(lastConnectUrl);
+            if (wan || lan) return (wan ? "走公网" : "走内网") + " · " + sourceForConnected(lastConnectUrl);
+        }
+        // 没连上时给出「下次连接会走哪条 + 依据哪条规则」
+        return store.routeLine() + " · " + store.routeSource();
+    }
+
+    /** 这个地址是不是当前生效设备的公网地址。 */
+    private boolean isWanUrl(String url) {
+        Store.Device d = store.activeDevice();
+        return d != null && url != null && !url.isEmpty() && url.equals(d.wanUrl);
+    }
+
+    /** 这个地址是不是当前生效设备的内网地址。 */
+    private boolean isLanUrl(String url) {
+        Store.Device d = store.activeDevice();
+        return d != null && url != null && !url.isEmpty() && url.equals(d.lanUrl);
+    }
+
+    /** 已经连上时，「这条线路是怎么来的」：手动档就是用户选的，自动档按当前网络与是不是 WiFi 说清。 */
+    private String sourceForConnected(String url) {
+        String mode = store.netMode();
+        if (RoutePolicy.WAN.equals(mode)) return "手动 · 只用公网";
+        if (RoutePolicy.LAN.equals(mode)) return "手动 · 只用内网";
+        if (!isWanUrl(url)) return "自动 · 已连 WiFi";
+        if (NetStatus.wifi()) return "自动 · 已连 WiFi（内网连不上，暂用公网）";
+        if (!NetStatus.known()) return "自动 · 网络未识别";
+        return NetStatus.online() ? "自动 · 未连 WiFi（移动数据）" : "自动 · 未连 WiFi（当前无网络）";
+    }
+
+    /** 对话页顶栏副标题：当前目录 + 线路（用户要能一眼看出这次走的是内网还是公网）。 */
+    private String subtitleText() {
+        String base = currentCwd == null ? "" : currentCwd;
+        String route = routeLabel();
+        if (route.isEmpty()) return base;
+        return base.isEmpty() ? route : base + " · " + route;
+    }
+
+    /** 网络种类变了：立刻重画线路文案（不重开连接，等下一次连接/重连才换线路）。 */
+    private void refreshRouteUI() {
+        if (screen == Screen.DEVICE) refreshDevices();
+        if (convo != null && screen == Screen.CHAT) convo.setSubtitleText(subtitleText());
     }
 
     @Override
@@ -768,7 +980,7 @@ public final class MainActivity extends Activity implements
         convo.setCompact("compact".equals(store.displayMode()));
         convo.setItems(items);
         convo.setTitleText(titleForDisplay());
-        convo.setSubtitleText(currentCwd);
+        convo.setSubtitleText(subtitleText());
         convo.setRunning(running, runningHint());
         refreshPlan();
         refreshSubagentEntry();   // 子会话进来要禁用输入并给出原因；主会话要还原
@@ -784,7 +996,7 @@ public final class MainActivity extends Activity implements
         if (settingsView == null) settingsView = new SettingsView(this, this);
         setContent(settingsView);
         settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
-                store.deviceName(), store.useWan());
+                store.deviceName(), store.netMode());
         settingsView.setDisplayMode(store.displayMode());
         // 主题档位可能与内存里那份不同（例如从别处改了 Store），以 Store 为准并同步回来
         themeMode = store.themeMode();
@@ -835,8 +1047,8 @@ public final class MainActivity extends Activity implements
             return;
         }
         if (online) {
-            deviceHub.setStatus("已连接 " + active.displayName()
-                    + (active.useWan ? " · 走公网" : " · 走内网"), false);
+            // 只显示「走内网/走公网 + 依据哪条规则」，**不显示地址**（用户要求卡片便于截图分享）
+            deviceHub.setStatus("已连接 " + active.displayName() + " · " + routeLabel(), false);
         } else {
             String detail = lastStateText.isEmpty() ? "还没连上" : lastStateText;
             deviceHub.setStatus("离线 · " + detail, true);
@@ -866,8 +1078,13 @@ public final class MainActivity extends Activity implements
             return;
         }
         failoverUsed = false;
+        pendingAutoFailover = false;
+        // 用户显式点了「连接」= 重新评估一次：清掉内网退避，让自动档重新优先内网
+        Store.clearLanFailure();
+        lastConnectUrl = url;
         gw.setTrustAllCerts(store.insecureTls());
         gw.connect(url, token, store.deviceId(), store.deviceName());
+        armAutoLanFailover(url);
         refreshDevices();
     }
 
@@ -1072,7 +1289,7 @@ public final class MainActivity extends Activity implements
         String tk = store.token();
         sb.append("令牌　").append(tk.isEmpty() ? "未配对"
                 : "****" + tk.substring(Math.max(0, tk.length() - 4)));
-        sb.append("　当前走").append(store.useWan() ? "公网" : "内网");
+        sb.append("\n线路　").append(store.routeLine()).append("（").append(store.routeSource()).append("）");
         sb.append("\n\n元君谦制作");
         settingsView.setAbout(sb.toString());
     }
@@ -1257,6 +1474,12 @@ public final class MainActivity extends Activity implements
             // 连接反复"连上就被断"时会在内网/公网之间来回切，每轮都白失败一次。
             // 改为 READY 稳定存活 FAILOVER_RESET_MS 后才解禁。
             armFailoverReset();
+            // 线路：连上了就撤掉内网超时兜底；自动档下「WiFi 但走公网」= 内网连不上，
+            // 把内网退避续期 —— 这就是「连通后记住当前用哪条」，下次重连不会又白试一次内网（防乒乓）。
+            cancelAutoLanFailover();
+            pendingAutoFailover = false;
+            if (store.isAutoMode() && NetStatus.wifi() && isWanUrl(lastConnectUrl)) Store.noteLanFailure();
+            refreshRouteUI();
             // 重连后看门狗要撤（避免按钮永久卡 ■），但"运行中"标记不能无条件复位（评审 N1）：
             // 长工具执行中重连时，快照可能不含 assistantStream.activeAttempt，
             // 旧写法无条件 setRunning(false) 会把「运行中」和停止按钮一起抹掉，
@@ -2835,7 +3058,11 @@ public final class MainActivity extends Activity implements
         if (convo != null) {
             convo.setRunning(value, runningHint());
         }
-        if (!value) turnStartedAt = 0;
+        if (!value) {
+            turnStartedAt = 0;
+            // 回合结束了：把因为「有活跃会话」而推迟的 内网→公网 切换补上（需求：不打断进行中的会话）
+            maybeApplyAutoFailover();
+        }
     }
 
     // ---- 发送确认看门狗（评审 P0-2）
@@ -3014,7 +3241,7 @@ public final class MainActivity extends Activity implements
             // 在抽屉里点另一条任务时不会走 showChat()（人已经在对话页），
             // 但标题/副标题必须跟着换，否则会出现"内容换了、标题还是上一条"。
             convo.setTitleText(titleForDisplay());
-            convo.setSubtitleText(currentCwd);
+            convo.setSubtitleText(subtitleText());
         }
         if (convo != null) {
             convo.setItems(items);
@@ -3500,6 +3727,28 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ DeviceHubView.Host（我的设备）
 
+    /**
+     * 卡片要显示「这台设备这次走内网还是公网、依据哪条规则」。
+     *
+     * <p>当前生效的那台且已经连上时，用**实际在用的**那条线路覆盖预测值：自动档的内网退避
+     * 窗口到期后预测会改回内网，但这条连接还在用公网 —— 显示的必须和实际用的一致。
+     */
+    @Override
+    public RoutePolicy.Pick routeOf(Store.Device d) {
+        RoutePolicy.Pick p = Store.pickOf(d);
+        if (d == null || d.id == null || gw == null) return p;
+        if (!d.id.equals(store.activeDeviceId())) return p;
+        if (gw.state() != GatewayClient.State.READY || lastConnectUrl.isEmpty()) return p;
+        boolean wan = isWanUrl(lastConnectUrl);
+        boolean lan = isLanUrl(lastConnectUrl);
+        if (!wan && !lan) return p;
+        p.wan = wan;
+        p.auto = RoutePolicy.AUTO.equals(store.netMode());
+        p.line = wan ? "走公网" : "走内网";
+        p.source = sourceForConnected(lastConnectUrl);
+        return p;
+    }
+
     /** 「连接/进入」：切到这台设备（不是当前生效的那台就先切过去）并连上，然后进对话页。 */
     @Override
     public void onOpenDevice(Store.Device d) {
@@ -3818,7 +4067,9 @@ public final class MainActivity extends Activity implements
         d.id = store.newDeviceId();
         d.lanUrl = lan;
         d.wanUrl = wan;
-        d.useWan = lan.isEmpty() && !wan.isEmpty();
+        // 新添加的设备一律「自动」：连着 WiFi 走内网、移动数据/没连 WiFi 走公网。
+        // （旧写法「没有内网地址就 useWan=true」是同一结论的粗糙版：自动档在没有可用内网时也会走公网。）
+        d.netMode = RoutePolicy.AUTO;
         d.token = token;
         d.name = alias == null ? "" : alias.trim();
         store.upsertDevice(d, true);   // 顺带把地址/令牌镜像进旧字段
@@ -3835,29 +4086,43 @@ public final class MainActivity extends Activity implements
     }
 
     @Override
-    public void onConnect(String lan, String wan, boolean useWan, String token, String deviceName) {
+    public void onConnect(String lan, String wan, String netMode, String token, String deviceName) {
         if (lan.isEmpty() && wan.isEmpty()) {
             Toast.makeText(this, "请先填写内网地址或公网地址", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        String active = (useWan && !wan.isEmpty()) ? wan : (lan.isEmpty() ? wan : lan);
-        String problem = GatewayClient.cleartextProblem(active);
-        if (problem != null) {
-            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
             return;
         }
         if (!deviceName.isEmpty()) store.setDeviceName(deviceName);
         store.setLanUrl(lan);
         store.setWanUrl(wan);
-        store.setUseWan(useWan);
+        store.setNetMode(netMode);
         store.setToken(token);
-        store.setUrl(active);
+        // 用户显式点了「保存并连接」= 重新评估：清掉内网退避，自动档重新优先内网
+        Store.clearLanFailure();
+        pendingAutoFailover = false;
+        failoverUsed = false;
+        String active = store.url();     // 由连接方式 + 当前网络（WiFi/移动数据）算出
         if (token.isEmpty()) {
             Toast.makeText(this, "没有设备令牌，请点「扫码配对」或「粘贴配对串」", Toast.LENGTH_LONG).show();
             return;
         }
-        Toast.makeText(this, (useWan ? "连接公网" : "连接内网") + "：" + hostOf(active), Toast.LENGTH_SHORT).show();
-        gw.connect(store.url(), token, store.deviceId(), store.deviceName());
+        if (active.isEmpty()) {
+            Toast.makeText(this, RoutePolicy.WAN.equals(RoutePolicy.normalizeMode(netMode))
+                            ? "「只用公网」需要填公网地址" : "按当前设置没有可用地址，检查上面两个地址",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        String problem = GatewayClient.cleartextProblem(active);
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this, "已保存 · " + store.routeLine() + "（" + store.routeSource() + "）",
+                Toast.LENGTH_SHORT).show();
+        lastConnectUrl = active;
+        gw.setTrustAllCerts(store.insecureTls());
+        gw.connect(active, token, store.deviceId(), store.deviceName());
+        armAutoLanFailover(active);
+        refreshRouteUI();
         showChat();
     }
 
@@ -4118,7 +4383,7 @@ public final class MainActivity extends Activity implements
     private String feedbackEnv() {
         String ver = "?";
         try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) { }
-        return "v" + ver + " · " + (store.useWan() ? "公网" : "内网") + " · " + gw.debugState();
+        return "v" + ver + " · " + store.routeLine() + "（" + store.routeSource() + "） · " + gw.debugState();
     }
 
     private String feedbackText(String body) {
@@ -4190,7 +4455,7 @@ public final class MainActivity extends Activity implements
             }
             store.setRiskAck(true);
             dlg.dismiss();
-            applyEndpoint(lan, wan, true);
+            applyEndpoint(lan, wan, RoutePolicy.WAN);
         });
     }
 
@@ -4304,27 +4569,15 @@ public final class MainActivity extends Activity implements
                 + "也可以在电脑面板重新生成二维码后重扫。");
     }
 
-    /** 连不上时自动在「内网 / 公网」之间切一次（只切一次，避免来回跳）。 */
+    /**
+     * 连不上时的自动切换：**只在自动档下、把线路从内网切到公网**（只切一次，避免来回跳）。
+     *
+     * <p>手动档（只用内网 / 只用公网）在这里一律不动 —— 用户说了算（「手动永远优先」）。
+     * 反方向（公网→内网）不再自动发生：自动档选内网的前提是「连着 WiFi + 内网地址可用」，
+     * 前提一变由网络回调 + 退避清零重新评估，反过来切就会乒乓。
+     */
     private boolean tryFailover() {
-        if (failoverUsed) return false;
-        String lan = store.lanUrl(), wan = store.wanUrl();
-        if (lan.isEmpty() || wan.isEmpty()) return false;
-        boolean toWan = !store.useWan();
-        // 明文校验已经在 GatewayClient.connect() 内部统一拦截；这里再挡一层，
-        // 不合法就不切，免得把用户钉在一个注定被拒绝的端点上（评审 P0-6 ②）。
-        String problem = GatewayClient.cleartextProblem(toWan ? wan : lan);
-        if (problem != null) {
-            failoverUsed = true;
-            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
-            return false;
-        }
-        failoverUsed = true;
-        store.setUseWan(toWan);
-        if (settingsView != null) settingsView.setUseWan(toWan);
-        Toast.makeText(this, toWan ? "内网连不上，自动改用公网…" : "公网连不上，自动改用内网…",
-                Toast.LENGTH_SHORT).show();
-        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
-        return true;
+        return autoSwitchToWan("连不上");
     }
 
     @Override
@@ -4497,9 +4750,7 @@ public final class MainActivity extends Activity implements
         gw.setTrustAllCerts(on);
         Toast.makeText(this, on ? "已允许自签名证书，正在重连…" : "已恢复证书校验，正在重连…",
                 Toast.LENGTH_SHORT).show();
-        if (!store.url().isEmpty() && !store.token().isEmpty()) {
-            gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
-        }
+        if (!store.url().isEmpty() && !store.token().isEmpty()) connectNow();
     }
 
     /**
@@ -4517,22 +4768,33 @@ public final class MainActivity extends Activity implements
                 Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * 设置页「连接方式」三分段：自动（推荐）/ 只用内网 / 只用公网。
+     *
+     * <p>点击即生效（改档位 + 立刻按新档位重连）。手动档永远优先：选了「只用公网」就
+     * 即使连着 WiFi 也走公网，反之亦然，两个自动规则都被跳过。
+     */
     @Override
-    public void onSwitchEndpoint(String lan, String wan, boolean useWan) {
-        if (useWan && wan.isEmpty()) {
+    public void onSwitchEndpoint(String lan, String wan, String netMode) {
+        String m = RoutePolicy.normalizeMode(netMode);
+        if (RoutePolicy.WAN.equals(m) && wan.isEmpty()) {
             Toast.makeText(this, "还没填公网地址，请先在「公网地址」里填写", Toast.LENGTH_LONG).show();
             return;
         }
-        if (useWan && !store.riskAck()) { confirmPublicAccess(lan, wan); return; }
-        applyEndpoint(lan, wan, useWan);
+        if (RoutePolicy.WAN.equals(m) && !store.riskAck()) { confirmPublicAccess(lan, wan); return; }
+        applyEndpoint(lan, wan, m);
     }
 
-    /** 安全声明确认后（或切到内网时）真正执行切换。 */
-    private void applyEndpoint(String lan, String wan, boolean useWan) {
+    /** 安全声明确认后（或切到自动/只用内网时）真正执行切换。 */
+    private void applyEndpoint(String lan, String wan, String netMode) {
+        String m = RoutePolicy.normalizeMode(netMode);
         store.setLanUrl(lan);
         store.setWanUrl(wan);
-        store.setUseWan(useWan);
-        if (settingsView != null) settingsView.setUseWan(useWan);
+        store.setNetMode(m);
+        // 用户的显式选择 = 重新评估一次：清掉内网退避与被推迟的切换
+        Store.clearLanFailure();
+        pendingAutoFailover = false;
+        if (settingsView != null) settingsView.setNetMode(m);
         if (store.token().isEmpty()) {
             Toast.makeText(this, "还没配对（设备令牌是空的）。\n"
                     + "地址本身没问题、内网地址也不会变，只差一次配对：\n"
@@ -4542,8 +4804,11 @@ public final class MainActivity extends Activity implements
         }
         String active = store.url();
         if (active.isEmpty()) {
-            Toast.makeText(this, (useWan ? "公网地址" : "内网地址") + "还是空的。\n"
-                    + "扫一下电脑面板的「生成配对二维码」，两个地址会自动填好，不用手输。",
+            Toast.makeText(this, "按当前设置没有可用地址："
+                            + (RoutePolicy.WAN.equals(m) ? "「只用公网」需要先填公网地址。"
+                            : RoutePolicy.LAN.equals(m) ? "「只用内网」需要先填内网地址。"
+                            : "内网/公网地址都还是空的。")
+                            + "\n扫一下电脑面板的「生成配对二维码」，两个地址会自动填好，不用手输。",
                     Toast.LENGTH_LONG).show();
             return;
         }
@@ -4552,9 +4817,16 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
             return;
         }
-        Toast.makeText(this, (useWan ? "已切到公网：" : "已切到内网：") + hostOf(active),
+        // 提示不写地址：与卡片一致，方便用户随手截图
+        String what = RoutePolicy.WAN.equals(m) ? "已切到只用公网"
+                : RoutePolicy.LAN.equals(m) ? "已切到只用内网" : "已设为自动选择";
+        Toast.makeText(this, what + " · " + store.routeLine() + "（" + store.routeSource() + "）",
                 Toast.LENGTH_SHORT).show();
+        lastConnectUrl = active;
+        gw.setTrustAllCerts(store.insecureTls());
         gw.connect(active, store.token(), store.deviceId(), store.deviceName());
+        armAutoLanFailover(active);
+        refreshRouteUI();
     }
 
     /**
@@ -4911,13 +5183,17 @@ public final class MainActivity extends Activity implements
                 pairTraceAdd("· 没有可用内网地址（虚拟网卡/APIPA/回环已排除），内网槽位留空");
             }
             if (!wan.isEmpty()) store.setWanUrl(wan);
-            store.setUseWan(store.lanUrl().isEmpty() && !wan.isEmpty());
+            // 扫码配对的设备一律「自动」：之后在家走内网、在外面走公网，用户不用管。
+            // （没有可用内网地址时自动档本来就会走公网，不需要把它写死成手动公网。）
+            store.setNetMode(RoutePolicy.AUTO);
+            Store.clearLanFailure();
             failoverUsed = false;
+            pendingAutoFailover = false;
             pendingPairCode = code;
             pairIndex = 0;
             pairTraceAdd("⑥ 内网=" + (store.lanUrl().isEmpty() ? "无" : hostOf(store.lanUrl()))
                     + " · 公网=" + (wan.isEmpty() ? "无" : hostOf(wan))
-                    + " · 先走" + (store.useWan() ? "公网" : "内网"));
+                    + " · 先走" + store.routeLine() + "（" + store.routeSource() + "）");
             refreshDiagnostics();
             pairWithNextCandidate();
             refreshDiagnostics();
