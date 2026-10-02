@@ -1,10 +1,9 @@
 # 编译 JVM harness（复用 App 真实 net 层源码 + Android 垫片），不需要 Gradle/Android SDK
 # 用法:
-#   pwsh -File harness/build.ps1                                    # 默认用工作区当前源码 src/ -> harness/out
-#   pwsh -File harness/build.ps1 -NetRoot harness/snapshot/ce7afd8  # 显式指定冻结快照做对照 -> harness/out-ce7afd8
+#   pwsh -File harness/build.ps1                      # 默认用工作区当前源码 src/ -> harness/out
+#   pwsh -File harness/build.ps1 -NetRoot src -OutName out-ab   # 换输出目录（做新旧对照时用）
 #
-# 重要：默认必须是「当前源码」，否则 e2e 结果测的是旧快照、结论无效。
-# （旧版默认走 snapshot\ce7afd8，注释示例还写成仓库外的 ..\src，两处都已修正。）
+# 重要：默认必须是「当前源码」，否则 e2e 结果测的不是你现在这份代码、结论无效。
 param(
   [string]$NetRoot = 'src',
   [string]$OutName = ''
@@ -18,7 +17,7 @@ $javac = Join-Path $javaHome 'bin\javac.exe'
 $java = Join-Path $javaHome 'bin\java.exe'
 if (-not (Test-Path $javac)) { throw "找不到 javac：$javac（请设置 JAVA_HOME）" }
 
-# 源码根：默认 src（当前源码）；显式传 harness/snapshot/<sha> 可编出对照用的旧版产物。
+# 源码根：默认 src（当前源码）；传别的源码根可编出对照产物（输出目录见上面 OutName）。
 if ([string]::IsNullOrWhiteSpace($NetRoot)) { $NetRoot = 'src' }
 $netBase = Join-Path $root $NetRoot
 $tag = $NetRoot

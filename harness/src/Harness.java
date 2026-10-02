@@ -162,7 +162,7 @@ public final class Harness implements GatewayClient.Listener {
     }
 
     /**
-     * 兼容桥：旧版 net 源码（harness/snapshot/ce7afd8）的 Listener 只有这个 3 参方法。
+     * 兼容桥：旧版 net 源码的 Listener 只有这个 3 参方法。
      * 故意不加 @Override —— 这样同一份 Harness 既能编当前 src（4 参是真覆盖），
      * 也能编旧快照（这里的 4 参只是多出来的普通方法，不会编译失败）。
      */
