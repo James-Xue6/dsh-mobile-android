@@ -34,3 +34,10 @@ tools/logs/
 
 # --- 安全文档与审计记录：绝不入库（公开仓库）---
 docs/*.md
+
+# 测试证据与临时 dump：绝不入库（含真实地址/会话信息）
+evidence/
+.verify-step/
+.verify-e2e/
+*.dump.xml
+ui-*.xml
