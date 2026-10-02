@@ -193,8 +193,8 @@ public final class DeviceHubView extends LinearLayout {
             addrLine = "还没有地址 · 重新扫码或手动添加";
         } else {
             // 只显示主机端口；地址属于用户自己的内网信息，不写进任何被跟踪的文件
-            String host = hostOf(url);
-            addrLine = (online ? "当前在线 · " : "离线 · ") + host
+            String kind = url.isEmpty() ? "" : (Store.isPrivateUrl(url) ? "走内网" : "走公网");
+            addrLine = online ? ("已连接" + (kind.isEmpty() ? "" : " · " + kind)) : "离线"
                     + (d.useWan ? "（公网）" : "（内网）");
             if (!online && isActive && d.lastSeenAt > 0) {
                 addrLine += " · 上次在线 " + Ui.ago(d.lastSeenAt);
