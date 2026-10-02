@@ -143,7 +143,7 @@ Write-Host @"
 $gwClient = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib\client.js'
 $patchScript = Join-Path $PSScriptRoot 'patches\restore-gateway-panel-fix.ps1'
 if (Test-Path $gwClient) {
-  Write-Host "`n[附] 叠加网关面板补丁（下拉实底 + 手机接入并入移动设备）" -ForegroundColor Cyan
+  Write-Host "`n[附] 叠加网关面板补丁（下拉实底 + 手机接入三个按钮置顶 + 其余收进高级设置）" -ForegroundColor Cyan
   if (Test-Path $patchScript) {
     try { & $patchScript } catch { Warn "补丁未应用：$($_.Exception.Message)" }
   } else { Warn "找不到 $patchScript" }

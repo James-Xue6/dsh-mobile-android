@@ -19,6 +19,18 @@
 #     同时本插件把 window.__DSH_MOBILE_GATEWAY__.open() 暴露出去，
 #     供「设置 → 通用 → 手机接入」那一行改成跳转。
 #
+#  3) 东西太多看不明白（用户第 4 次反馈）→ 面板重排为「三个按钮 + 一个高级区」
+#     「配对二维码」与「安装包二维码」长得一样、上下堆了好几张码，
+#     加上网关运行模式/设备鉴权/隧道状态/设备列表，打开抽屉根本不知道先点哪。
+#     修法（本轮重设计，取代了上一轮「只加第 1/2 步徽标」的那版改动）:
+#     · 抽屉最上方直接渲染「手机接入」主面板（dsh-mobile-access/client.js），
+#       面板里只剩三件事：① 下载 App、② 生成公网二维码、③ 生成内网二维码，
+#       二维码一律改用弹窗展示（局域网直发 / 公网镜像 作为弹窗里的两个标签）；
+#     · 网关运行模式、设备鉴权、公网隧道、配对连接方式、已配对设备与吊销、
+#       手动填地址全部收进默认收起的「高级设置（一般用不到）」；
+#     · 上一轮加的「第一次使用 · 按两步走」引导卡与「第 1/2 步」徽标已删除
+#       （顺序说明挪进主面板本身）。功能一个没删，只是默认不可见。
+#
 # 注意: 本脚本是「整文件覆盖」。网关插件升级过（版本变化）时不要覆盖，
 #       否则会把插件降级 —— 所以下面**版本不符直接报错退出**，
 #       需要时按上面的说明手动移植，或更新同目录下的 .patched 基线。
@@ -50,6 +62,11 @@ $missing = @()
 if ($after -notmatch 'styles\.select') { $missing += '下拉实底样式(styles.select)' }
 if ($after -notmatch '__DSH_MOBILE_ACCESS__') { $missing += '手机接入跨 bundle 桥(__DSH_MOBILE_ACCESS__)' }
 if ($after -notmatch '__DSH_MOBILE_GATEWAY__') { $missing += '面板打开桥(__DSH_MOBILE_GATEWAY__)' }
+if ($after -notmatch '三个按钮：先下载 App，再扫码连接') { $missing += '主面板(三个按钮)说明' }
+if ($after -notmatch '高级设置（一般用不到）') { $missing += '高级设置折叠区' }
+if ($after -notmatch 'setAdvancedOpen') { $missing += '高级设置折叠状态(setAdvancedOpen)' }
+if ($after -match '第一次使用 · 按两步走') { $missing += '残留的旧分步引导卡' }
+if ($after -match 'accessOpen') { $missing += '残留的旧折叠状态(accessOpen)' }
 if ($missing.Count -gt 0) { throw "覆盖后自检失败，缺: $($missing -join '、')。已备份的原文在 $bak，请手动恢复。" }
 
-Write-Host '面板修复已就位（下拉实底 + 手机接入并入移动设备）。重启 DSH 桌面版后生效。'
+Write-Host '面板修复已就位（下拉实底 + 手机接入主面板置顶 + 其余收进高级设置）。重启 DSH 桌面版后生效。'

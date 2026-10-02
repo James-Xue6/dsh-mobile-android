@@ -206,9 +206,10 @@ window.__ModuleLoader__.load({
       const [pairingRoute, setPairingRoute] = React.useState('auto')
       const [connectionHelpOpen, setConnectionHelpOpen] = React.useState(false)
       const [toolsOpen, setToolsOpen] = React.useState(false)
-      // 「手机接入」区块默认收起：它内部有与上面「网关运行模式」重复的开关，
-      // 展开着会让同一个抽屉里出现两份同样的控件。标题里写清里面有什么，点一下就能展开。
-      const [accessOpen, setAccessOpen] = React.useState(false)
+      // 抽屉重排：主面板（下载 App / 扫码连接 三个按钮）永远在最上面直接可见；
+      // 网关运行模式、设备鉴权、隧道细节、配对连接方式、已配对设备全部收进
+      // 默认收起的高级区。打开抽屉第一屏就是用户真正要做的事，不再被一堆开关淹没。
+      const [advancedOpen, setAdvancedOpen] = React.useState(false)
       const [toolBusy, setToolBusy] = React.useState(false)
       const [toolNotice, setToolNotice] = React.useState('')
       const stoppedRef = React.useRef(false)
@@ -553,6 +554,27 @@ window.__ModuleLoader__.load({
               React.createElement('button', { style: { ...styles.button, ...styles.headerButton }, onClick: () => setOpen(false), 'aria-label': '关闭' }, '✕'))),
           toolNotice ? React.createElement('div', { style: { ...styles.muted, marginBottom: 10 } }, toolNotice) : null,
           error ? React.createElement('div', { style: styles.error }, error) : null,
+          // ---- 主面板：打开抽屉第一眼就是这三件事（下载 App / 公网 / 内网）
+          React.createElement('section', { style: styles.card },
+            React.createElement('strong', null, '手机接入'),
+            React.createElement('div', { style: { ...styles.muted, marginTop: 4 } },
+              '三个按钮：先下载 App，再扫码连接。网关开关、隧道细节之类都在下面「高级设置」里。'),
+            React.createElement('div', { style: { marginTop: 10 } }, React.createElement(MobileAccessHost))),
+          // ---- 高级设置：默认收起，原有功能一个不少
+          React.createElement('section', { style: styles.card },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' } },
+              React.createElement('div', { style: { minWidth: 0 } },
+                React.createElement('strong', null, '高级设置（一般用不到）'),
+                React.createElement('div', { style: { ...styles.muted, marginTop: 4 } },
+                  '网关运行模式 · 设备鉴权 · 公网隧道 · 配对连接方式 · 已配对设备与吊销')),
+              React.createElement('button', {
+                type: 'button',
+                style: { ...styles.button, flexShrink: 0, minWidth: 60 },
+                'aria-expanded': advancedOpen,
+                onClick: () => setAdvancedOpen((value) => !value),
+              }, advancedOpen ? '收起' : '展开')),
+            advancedOpen
+              ? React.createElement(React.Fragment, null,
           React.createElement('section', { style: styles.card },
             React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center' } },
               React.createElement('div', null,
@@ -724,7 +746,7 @@ window.__ModuleLoader__.load({
             }, busy ? '正在生成…' : !(status && status.gatewayEnabled) ? '请先开启移动网关' : !publicUrl.trim() ? '等待连接地址' : '生成配对二维码'),
             React.createElement('p', { style: { ...styles.muted, margin: '10px 0 0' } }, '同一局域网选择“局域网直连”，无需关闭 Cloudflare Tunnel。局域网使用私有地址的 ws://；公网地址必须使用 wss://。配对码只能使用一次，并在 5 分钟内过期。')),
           qr ? React.createElement('section', { style: { ...styles.card, textAlign: 'center' } },
-            React.createElement('strong', null, '使用 iOS 客户端扫码'),
+            React.createElement('strong', null, '用「DSH 掌上通」App 扫这张配对码'),
             React.createElement('img', { style: styles.qr, src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qr.svg)}`, alt: '一次性设备配对二维码' }),
             React.createElement('label', { style: { ...styles.label, textAlign: 'left' } }, 'Base64URL 配对字符串'),
             React.createElement('textarea', { style: styles.pairingText, value: qr.qrPayload, readOnly: true, spellCheck: false, onFocus: (event) => event.target.select() }),
@@ -752,23 +774,7 @@ window.__ModuleLoader__.load({
                     device,
                     onRevoke: revoke,
                     revoking: revokingIds.has(device.id),
-                  }))),
-          // 「手机接入」（dsh-mobile-access）的全部功能并入本抽屉，
-          // 这样 PC 端只有一个入口：侧边栏底部的「移动设备」。
-          React.createElement('section', { style: styles.card },
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' } },
-              React.createElement('div', { style: { minWidth: 0 } },
-                React.createElement('strong', null, '手机接入'),
-                React.createElement('div', { style: { ...styles.muted, marginTop: 4 } },
-                  '安装包二维码 · 公网一键隧道 · 配对编排与设备撤销（原「设置 → 通用 → 手机接入」）')),
-              React.createElement('button', {
-                type: 'button',
-                style: { ...styles.button, flexShrink: 0, minWidth: 60 },
-                'aria-expanded': accessOpen,
-                onClick: () => setAccessOpen((value) => !value),
-              }, accessOpen ? '收起' : '展开')),
-            accessOpen
-              ? React.createElement('div', { style: { marginTop: 4 } }, React.createElement(MobileAccessHost))
+                  }))))
               : null),
           status && status.version
             ? React.createElement('div', { style: styles.version, 'aria-label': `插件版本 ${status.version}` }, `v${status.version}`)

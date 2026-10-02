@@ -46,6 +46,21 @@ window.__ModuleLoader__.load({
       '.dsma-dot{width:7px;height:7px;border-radius:50%;display:inline-block;}',
       '.dsma-qr{margin-top:10px;padding:12px;border-radius:12px;background:#fff;display:inline-block;line-height:0;}',
       '.dsma-qr svg{width:220px;height:220px;}',
+      '/* 二维码只在弹窗里出现：页面里常驻两张码正是用户「看不明白」的原因 */',
+      '.dsma-modal-backdrop{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);display:flex;',
+      '  align-items:center;justify-content:center;padding:20px;}',
+      '.dsma-modal{width:100%;max-width:380px;max-height:calc(100vh - 40px);overflow:auto;box-sizing:border-box;',
+      '  padding:18px 20px;border-radius:14px;text-align:center;background:var(--dsw-alias-bg-layer-1);',
+      '  color:var(--dsw-alias-label-primary);box-shadow:0 12px 40px rgba(0,0,0,.35);}',
+      '.dsma-modal-title{font-size:15px;font-weight:600;}',
+      '.dsma-modal-step{margin-top:6px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);}',
+      '.dsma-tabs{margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;}',
+      '.dsma-tab{padding:4px 12px;font-size:12px;border-radius:999px;cursor:pointer;',
+      '  border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);}',
+      '.dsma-tab-on{border-color:#4d6bfe;background:rgba(77,107,254,.12);color:#4d6bfe;font-weight:600;}',
+      '.dsma-link{margin-top:8px;font-size:12px;line-height:18px;word-break:break-all;color:var(--dsw-alias-label-tertiary);}',
+      '.dsma-modal-actions{margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}',
+      '.dsma-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1);}',
       '.dsma-token{margin-top:10px;padding:9px 11px;border-radius:8px;font-family:monospace;',
       '  font-size:12px;line-height:18px;word-break:break-all;background:var(--dsw-alias-bg-layer-1);',
       '  border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);}',
@@ -109,7 +124,25 @@ window.__ModuleLoader__.load({
       try { window.localStorage.setItem(DEVICE_NAME_KEY, value) } catch (e) { /* ignore */ }
     }
 
+    /** 从 ws://ip:port/ws/mobile 里拆出 IP 与端口（内网弹窗的默认值要用） */
+    function splitLanUrl(url) {
+      var m = /^wss?:\/\/([^/:\s]+)(?::(\d+))?/.exec(String(url || ''))
+      return { host: m ? m[1] : '', port: m && m[2] ? m[2] : '' }
+    }
+
     // ------------------------------------------------------------------ 组件
+    /**
+     * 「手机接入」主面板 —— 重设计后的交互。
+     *
+     * 原则（用户反馈「东西一大堆、看不明白」）：
+     *   · 打开面板只看到 3 个按钮 + 一句说明，不超过一屏：
+     *       ① 下载 App       → 点一下弹二维码（局域网直发 / 公网镜像 两条线路）
+     *       ② 公网连接       → 点一下先弹风险确认，同意后弹二维码
+     *       ③ 内网连接       → 点一下先弹「只改 IP/端口」的小框，再弹二维码
+     *   · 二维码只在弹窗里出现，页面里不再常驻两张码。
+     *   · 网关模式 / 隧道细节 / 设备列表与撤销 / 手动地址 / 安装包细节
+     *     全部收进「高级设置（一般用不到）」，默认收起，功能一个不少。
+     */
     function MobileAccessRow() {
       var statusState = React.useState(null)
       var status = statusState[0]
@@ -126,30 +159,50 @@ window.__ModuleLoader__.load({
       var busyState = React.useState('')
       var busy = busyState[0]
       var setBusy = busyState[1]
-      var pairState = React.useState(null)
-      var pairing = pairState[0]
-      var setPairing = pairState[1]
       var nameState = React.useState(readDeviceName())
       var deviceName = nameState[0]
       var setDeviceName = nameState[1]
       var urlState = React.useState('')
-        var riskState = React.useState(false)
-        var riskOpen = riskState[0]
-        var setRiskOpen = riskState[1]
-        var riskOkState = React.useState(false)
-        var riskOk = riskOkState[0]
-        var setRiskOk = riskOkState[1]
-        var appState = React.useState(null)
-        var app = appState[0]
-        var setApp = appState[1]
       var manualUrl = urlState[0]
       var setManualUrl = urlState[1]
+      // 二维码弹窗：公网 / 内网 / 下载 App 共用同一个弹窗
+      var qrState = React.useState(null)
+      var qrView = qrState[0]
+      var setQrView = qrState[1]
+      // 公网前的风险确认
+      var riskState = React.useState(false)
+      var riskOpen = riskState[0]
+      var setRiskOpen = riskState[1]
+      var riskOkState = React.useState(false)
+      var riskOk = riskOkState[0]
+      var setRiskOk = riskOkState[1]
+      // 内网：只让改 IP / 端口的小弹窗
+      var lanState = React.useState(false)
+      var lanOpen = lanState[0]
+      var setLanOpen = lanState[1]
+      var lanIpState = React.useState('')
+      var lanIp = lanIpState[0]
+      var setLanIp = lanIpState[1]
+      var lanPortState = React.useState('')
+      var lanPort = lanPortState[0]
+      var setLanPort = lanPortState[1]
+      // 下载 App 弹窗里的线路：局域网直发 / 公网镜像
+      var appRouteState = React.useState('lan')
+      var appRoute = appRouteState[0]
+      var setAppRoute = appRouteState[1]
+      var appState = React.useState(null)
+      var app = appState[0]
+      var setApp = appState[1]
+      // 高级设置默认收起
+      var advState = React.useState(false)
+      var advOpen = advState[0]
+      var setAdvOpen = advState[1]
 
       function loadApp() {
-          return request('GET', '/app').then(function (d) { setApp(d) }).catch(function () { /* 读不到就不显示 */ })
-        }
+        return request('GET', '/app').then(function (d) { setApp(d) }).catch(function () { /* 读不到就不显示 */ })
+      }
 
-        function loadStatus(silent) {
+      function loadStatus(silent) {
         return request('GET', '/status')
           .then(function (data) { setStatus(data); if (!silent) setError('') })
           .catch(function (e) { if (!silent) setError(e.message) })
@@ -181,42 +234,123 @@ window.__ModuleLoader__.load({
       }
 
       function tunnel(action, confirmed) {
-          if (action === 'on' && !confirmed) { setRiskOk(false); setRiskOpen(true); return }
-          setBusy('tunnel'); setError(''); setMessage('')
-          var path = action === 'restart' ? '/tunnel/restart' : '/tunnel'
-          var body = action === 'on' ? { enabled: true, mode: 'quick' }
-            : action === 'off' ? { enabled: false } : {}
-          request('POST', path, body)
-            .then(function () {
-              setMessage(action === 'on'
-                ? '正在开启隧道；首次运行需先下载 cloudflared（约 20-50MB），通常 1-2 分钟'
-                : (action === 'off' ? '已关闭公网隧道' : '正在重启隧道'))
-              return loadStatus(true)
-            })
-            .catch(function (e) { setError(e.message) })
-            .then(function () { setBusy('') })
-        }
+        if (action === 'on' && !confirmed) { setRiskOk(false); setRiskOpen(true); return }
+        setBusy('tunnel'); setError(''); setMessage('')
+        var path = action === 'restart' ? '/tunnel/restart' : '/tunnel'
+        var body = action === 'on' ? { enabled: true, mode: 'quick' }
+          : action === 'off' ? { enabled: false } : {}
+        request('POST', path, body)
+          .then(function () {
+            setMessage(action === 'on'
+              ? '正在开启公网隧道；首次运行需先下载 cloudflared（约 20-50MB），通常 1-2 分钟'
+              : (action === 'off' ? '已关闭公网隧道' : '正在重启隧道'))
+            return loadStatus(true)
+          })
+          .catch(function (e) { setError(e.message) })
+          .then(function () { setBusy('') })
+      }
 
-        function makePairing() {
+      /** 生成配对码并弹出二维码弹窗；url 为空则由服务端按当前环境挑一条 */
+      function pairWith(url, label) {
         setBusy('pair'); setError(''); setMessage('')
-        var name = deviceName.trim() || '我的手机'
+        var name = (deviceName || '').trim() || '我的手机'
         writeDeviceName(name)
-        var lanUrl = status && status.lan && status.lan.urls && status.lan.urls.length
-          ? status.lan.urls[0] : ''
         var body = { name: name }
-        var tunnelUrl = status && status.cloudflare && status.cloudflare.publicUrl
-            ? status.cloudflare.publicUrl : ''
-          // 隧道在线时优先用公网地址：手机扫码拿到的就是能在外网用的地址
-          var chosen = manualUrl.trim() || tunnelUrl || lanUrl
-        if (chosen) body.publicUrl = chosen
-        request('POST', '/pair', body)
+        if (url) body.publicUrl = url
+        // 网关没开时顺手以「临时模式」开启：用户点一下就该出码，不该再去找开关
+        var guard = (status && status.gatewayEnabled)
+          ? Promise.resolve()
+          : request('POST', '/gateway', { mode: 'temporary' })
+        guard
+          .then(function () { return request('POST', '/pair', body) })
           .then(function (data) {
-            setPairing(data)
-            setMessage('二维码已生成，有效期 5 分钟，仅可使用一次')
+            setQrView({
+              kind: 'pair',
+              title: '扫码连接 · ' + (label || '本机'),
+              svg: data && data.svg,
+              payload: data && data.qrPayload,
+              url: (data && data.payload && data.payload.publicUrl) || url || '',
+              expiresAt: data && data.payload && data.payload.expiresAt,
+            })
             return loadDevices()
           })
           .catch(function (e) { setError(e.message) })
           .then(function () { setBusy('') })
+      }
+
+      /** 内网连接用的 ws 地址（网关已经在监听的地址） */
+      function lanWsUrl() {
+        var urls = (status && status.lan && status.lan.urls) || []
+        return urls.length ? urls[0] : ''
+      }
+
+      /** 高级区里用：按当前已知地址挑一条生成配对码 */
+      function makePairing() {
+        var tunnelUrl = status && status.cloudflare && status.cloudflare.publicUrl
+          ? status.cloudflare.publicUrl : ''
+        return pairWith(manualUrl.trim() || tunnelUrl || lanWsUrl(), '手动地址')
+      }
+
+      /** 探测到的本机内网 IP 候选（网关监听到的 + 发安装包用的那几个） */
+      function lanCandidates() {
+        var out = []
+        var push = function (url) {
+          var host = splitLanUrl(url).host
+          if (host && out.indexOf(host) < 0) out.push(host)
+        }
+        ;((status && status.lan && status.lan.urls) || []).forEach(push)
+        ;((app && app.lanUrls) || []).forEach(push)
+        return out
+      }
+
+      function openLanDialog() {
+        var parts = splitLanUrl(lanWsUrl())
+        setLanIp(parts.host)
+        setLanPort(parts.port || String((status && status.lan && status.lan.port) || ''))
+        setLanOpen(true); setError(''); setMessage('')
+      }
+
+      function confirmLan() {
+        var ip = String(lanIp || '').trim().replace(/^wss?:\/\//, '').replace(/\/.*$/, '')
+        if (!ip) { setError('请填写这台电脑的局域网 IP'); return }
+        var port = String(lanPort || '').trim() || '3091'
+        var wsPath = (status && status.wsPath) || '/ws/mobile'
+        setLanOpen(false)
+        pairWith('ws://' + ip + ':' + port + wsPath, '内网')
+      }
+
+      /** 公网：先弹风险确认（每次都确认，不记住） */
+      function askPublic() {
+        setRiskOk(false); setError(''); setMessage(''); setRiskOpen(true)
+      }
+
+      /** 等隧道拿到公网地址；首次要下载组件，可能等 1-2 分钟 */
+      function waitTunnelUrl(deadline) {
+        return request('GET', '/status').then(function (data) {
+          setStatus(data)
+          var url = data && data.cloudflare && data.cloudflare.publicUrl
+          if (url) return url
+          if (Date.now() > deadline) {
+            throw new Error('公网隧道还在准备中（第一次用要先下载组件，约 1-2 分钟）。过一会儿再点一次「生成公网二维码」即可。')
+          }
+          return new Promise(function (resolve) { setTimeout(resolve, 2000) })
+            .then(function () { return waitTunnelUrl(deadline) })
+        })
+      }
+
+      function confirmRisk() {
+        if (!riskOk) { setError('请勾选「我已知情」后再开启公网'); return }
+        setRiskOpen(false); setRiskOk(false)
+        setBusy('tunnel'); setError(''); setMessage('')
+        var cf = status && status.cloudflare
+        var ensure = cf && cf.enabled
+          ? Promise.resolve()
+          : request('POST', '/tunnel', { enabled: true, mode: 'quick' })
+              .then(function () { return loadStatus(true) })
+        ensure
+          .then(function () { return waitTunnelUrl(Date.now() + 150000) })
+          .then(function (url) { setBusy(''); return pairWith(url, '公网') })
+          .catch(function (e) { setError(e.message); setBusy('') })
       }
 
       function revoke(id, name) {
@@ -247,65 +381,107 @@ window.__ModuleLoader__.load({
       var mode = status ? status.gatewayMode : ''
       var lanUrls = (status && status.lan && status.lan.urls) || []
       var lanOk = status && status.lan && status.lan.listening
+      var cf = (status && status.cloudflare) || null
 
       var children = []
 
       children.push(React.createElement('div', { className: 'dsma-title', key: 'title' }, '手机接入'))
-      children.push(React.createElement(
-        'div', { className: 'dsma-desc', key: 'desc' },
-        '用手机遥控这台电脑上的 DSH。开启网关后生成二维码，用「DSH 掌上通」App 扫码即可接入；'
-        + '外网可自行反代后填域名。协议层由 dsh-plugin-mobile-gateway 提供，本面板只负责接入编排。',
-      ))
+      children.push(React.createElement('div', { className: 'dsma-desc', key: 'desc' },
+        '点一下出码、用手机扫就行。第一次用请从①开始；②里两个按钮按手机在哪选一个。'))
 
-      // ---- 状态
-      var st = []
-      st.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '接入状态'))
-      if (status === null) {
-        st.push(React.createElement('div', { className: 'dsma-line', key: 'l' }, error ? ('读取失败：' + error) : '读取中…'))
-      } else {
-        st.push(React.createElement('div', { className: 'dsma-row', key: 'chips' },
-          React.createElement('span', { className: 'dsma-chip' },
-            React.createElement('i', { className: 'dsma-dot', style: { background: enabled ? '#16a34a' : '#9ca3af' } }),
-            enabled ? ('网关已开启 · ' + (mode === 'persistent' ? '常驻' : mode === 'temporary' ? '临时' : mode)) : '网关已关闭'),
-          React.createElement('span', { className: 'dsma-chip' },
-            React.createElement('i', { className: 'dsma-dot', style: { background: lanOk ? '#16a34a' : '#f59e0b' } }),
-            lanOk ? ('局域网监听 :' + (status.lan && status.lan.port)) : '局域网未监听'),
-          React.createElement('span', { className: 'dsma-chip' }, '在线设备 ' + (status.connectedClients || 0)),
-          React.createElement('span', { className: 'dsma-chip' }, '网关 v' + (status.version || '?')),
-        ))
-        if (status.lan && status.lan.error) {
-          st.push(React.createElement('div', { className: 'dsma-error', key: 'lanerr' }, '局域网监听异常：' + status.lan.error))
-        }
-        st.push(React.createElement('div', { className: 'dsma-row', key: 'actions' },
+      // ---- ① 下载 App（下载安装包用的码；扫了不会连上电脑）
+      children.push(React.createElement('div', { className: 'dsma-card', key: 'c1' },
+        React.createElement('div', { className: 'dsma-card-title' }, '① 下载 App'),
+        React.createElement('div', { className: 'dsma-line' },
+          '手机还没装「DSH 掌上通」就点这里；这张码只下载安装包，不会连上电脑。'),
+        React.createElement('div', { className: 'dsma-row' },
           React.createElement('button', {
-            type: 'button', className: 'dsma-btn' + (enabled && mode === 'persistent' ? ' dsma-btn-primary' : ''),
-            disabled: busy !== '', onClick: function () { setMode('persistent') },
-          }, '常驻开启'),
-          React.createElement('button', {
-            type: 'button', className: 'dsma-btn' + (enabled && mode === 'temporary' ? ' dsma-btn-primary' : ''),
-            disabled: busy !== '', onClick: function () { setMode('temporary') },
-          }, '临时开启'),
-          React.createElement('button', {
-            type: 'button', className: 'dsma-btn', disabled: busy !== '', onClick: function () { setMode('disabled') },
-          }, '关闭网关'),
-          React.createElement('button', {
-            type: 'button', className: 'dsma-btn', disabled: busy !== '',
-            onClick: function () { loadStatus(false); loadDevices(); loadApp() },
-          }, '刷新'),
-        ))
-        if (lanUrls.length > 0) {
-          st.push(React.createElement('div', { className: 'dsma-line', key: 'urls' }, '手机可达地址：' + lanUrls.join('、')))
-        }
-      }
-      children.push(React.createElement('div', { className: 'dsma-card', key: 'status' }, st))
+            type: 'button', className: 'dsma-btn dsma-btn-primary',
+            onClick: function () {
+              setAppRoute(app && app.available && app.qrLanSvg ? 'lan' : 'net')
+              setQrView({ kind: 'app' })
+            },
+          }, '下载 App')),
+        app === null
+          ? React.createElement('div', { className: 'dsma-dev-meta', style: { marginTop: '6px' } }, '读取中…')
+          : null))
 
-        // ---- 公网访问（网关内置 Cloudflare 隧道）
-        var cf = (status && status.cloudflare) || null
+      // ---- ② 扫码连接（公网 / 内网，二选一）
+      children.push(React.createElement('div', { className: 'dsma-card', key: 'c2' },
+        React.createElement('div', { className: 'dsma-card-title' }, '② 扫码连接'),
+        React.createElement('div', { className: 'dsma-line' },
+          'App 装好后点这里出码，在 App 里点「扫码配对」扫一下，手机就连上这台电脑了。'),
+        React.createElement('div', { className: 'dsma-row' },
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn dsma-btn-primary',
+            disabled: busy !== '', onClick: askPublic,
+          }, busy === 'tunnel' ? '正在准备公网…' : '生成公网二维码')),
+        React.createElement('div', { className: 'dsma-dev-meta' },
+          '人在外面、手机用流量时选这个；手机在任何网络都能连。'),
+        React.createElement('div', { className: 'dsma-row' },
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn',
+            disabled: busy !== '', onClick: openLanDialog,
+          }, '生成内网二维码')),
+        React.createElement('div', { className: 'dsma-dev-meta' },
+          '手机和电脑连同一个 WiFi 时选这个；同一网络下最快。'),
+        !enabled
+          ? React.createElement('div', { className: 'dsma-dev-meta', style: { marginTop: '6px' } },
+              '（网关现在是关的；点上面任一按钮会自动帮你开。）')
+          : null))
+
+      // ---- 高级设置：默认收起，功能一个不少
+      var adv = []
+      adv.push(React.createElement('div', { className: 'dsma-row', style: { marginTop: 0 }, key: 'toggle' },
+        React.createElement('button', {
+          type: 'button', className: 'dsma-btn',
+          'aria-expanded': advOpen,
+          onClick: function () { setAdvOpen(!advOpen) },
+        }, advOpen ? '收起高级设置' : '高级设置（一般用不到）'),
+        React.createElement('span', { className: 'dsma-dev-meta' },
+          advOpen ? '' : '网关开关、隧道细节、已配对设备、手动填地址')))
+      if (advOpen) {
+        // 接入状态
+        adv.push(React.createElement('div', { className: 'dsma-sec', key: 'st' },
+          React.createElement('div', { className: 'dsma-card-title' }, '接入状态'),
+          status === null
+            ? React.createElement('div', { className: 'dsma-line' }, error ? ('读取失败：' + error) : '读取中…')
+            : React.createElement(React.Fragment, null,
+                React.createElement('div', { className: 'dsma-row' },
+                  React.createElement('span', { className: 'dsma-chip' },
+                    React.createElement('i', { className: 'dsma-dot', style: { background: enabled ? '#16a34a' : '#9ca3af' } }),
+                    enabled ? ('网关已开启 · ' + (mode === 'persistent' ? '常驻' : mode === 'temporary' ? '临时' : mode)) : '网关已关闭'),
+                  React.createElement('span', { className: 'dsma-chip' },
+                    React.createElement('i', { className: 'dsma-dot', style: { background: lanOk ? '#16a34a' : '#f59e0b' } }),
+                    lanOk ? ('局域网监听 :' + (status.lan && status.lan.port)) : '局域网未监听'),
+                  React.createElement('span', { className: 'dsma-chip' }, '在线设备 ' + (status.connectedClients || 0)),
+                  React.createElement('span', { className: 'dsma-chip' }, '网关 v' + (status.version || '?'))),
+                status.lan && status.lan.error
+                  ? React.createElement('div', { className: 'dsma-error' }, '局域网监听异常：' + status.lan.error)
+                  : null,
+                React.createElement('div', { className: 'dsma-row' },
+                  React.createElement('button', {
+                    type: 'button', className: 'dsma-btn' + (enabled && mode === 'persistent' ? ' dsma-btn-primary' : ''),
+                    disabled: busy !== '', onClick: function () { setMode('persistent') },
+                  }, '常驻开启'),
+                  React.createElement('button', {
+                    type: 'button', className: 'dsma-btn' + (enabled && mode === 'temporary' ? ' dsma-btn-primary' : ''),
+                    disabled: busy !== '', onClick: function () { setMode('temporary') },
+                  }, '临时开启'),
+                  React.createElement('button', {
+                    type: 'button', className: 'dsma-btn', disabled: busy !== '', onClick: function () { setMode('disabled') },
+                  }, '关闭网关'),
+                  React.createElement('button', {
+                    type: 'button', className: 'dsma-btn', disabled: busy !== '',
+                    onClick: function () { loadStatus(false); loadDevices(); loadApp() },
+                  }, '刷新')),
+                lanUrls.length > 0
+                  ? React.createElement('div', { className: 'dsma-line' }, '手机可达地址：' + lanUrls.join('、'))
+                  : null)))
+
+        // 公网隧道细节
         var tz = []
-        tz.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '公网访问（Cloudflare 隧道）'))
-        tz.push(React.createElement('div', { className: 'dsma-desc', key: 'd' },
-          '不用开端口、不用自建反代：开启后由网关拉起 Cloudflare 隧道，手机在任何网络（含 5G）都能连，'
-          + '拿到的是受信任的真证书，不必打开「信任自签名证书」。隧道在线时，配对二维码会自动带上公网地址。'))
+        tz.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '公网隧道（Cloudflare）'))
         if (cf) {
           var tState = { disabled: '未开启', preparing: '准备中', starting: '启动中', online: '已在线', error: '出错' }[cf.state] || String(cf.state || '未知')
           tz.push(React.createElement('div', { className: 'dsma-row', key: 's' },
@@ -336,177 +512,253 @@ window.__ModuleLoader__.load({
           tz.push(React.createElement('div', { className: 'dsma-line', key: 'n' },
             '当前网关未启用 Cloudflare 能力（需网关插件 0.9.0 及以上）。'))
         }
-        children.push(React.createElement('div', { className: 'dsma-card', key: 'tunnel' }, tz))
+        adv.push(React.createElement('div', { className: 'dsma-sec', key: 'tz' }, tz))
 
-      // ---- 配对
-      var pr = []
-      pr.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '生成配对二维码'))
-      pr.push(React.createElement('div', { className: 'dsma-field', key: 'f1' },
-        React.createElement('div', { className: 'dsma-dev-meta' }, '设备名'),
-        React.createElement('input', {
-          className: 'dsma-input', value: deviceName, placeholder: '例如：我的手机',
-          onChange: function (e) { setDeviceName(e.target.value) },
-        }),
-      ))
-      pr.push(React.createElement('div', { className: 'dsma-field', key: 'f2' },
-        React.createElement('div', { className: 'dsma-dev-meta' }, '地址（留空则用上面的局域网地址）'),
-        React.createElement('input', {
-          className: 'dsma-input', value: manualUrl,
-          placeholder: 'ws://192.168.1.100:3091/ws/mobile 或 wss://你的域名/ws/mobile',
-          onChange: function (e) { setManualUrl(e.target.value) },
-        }),
-      ))
-      pr.push(React.createElement('div', { className: 'dsma-row', key: 'f3' },
-        React.createElement('button', {
-          type: 'button', className: 'dsma-btn dsma-btn-primary',
-          disabled: busy !== '' || !enabled, onClick: makePairing,
-        }, busy === 'pair' ? '生成中…' : '生成二维码'),
-      ))
-      if (!enabled) {
-        pr.push(React.createElement('div', { className: 'dsma-line', key: 'need' }, '请先在上方开启网关。'))
-      }
-      if (pairing && pairing.svg) {
-        pr.push(React.createElement('div', { className: 'dsma-qr', key: 'qr', dangerouslySetInnerHTML: { __html: pairing.svg } }))
-        if (pairing.payload) {
-          pr.push(React.createElement('div', { className: 'dsma-line', key: 'info' },
-            '配对给到：' + pairing.payload.publicUrl + '　有效期至 ' + fmtTime(pairing.payload.expiresAt)))
+        // 手动地址 / 设备名
+        var mz = []
+        mz.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '手动填地址生成配对码'))
+        mz.push(React.createElement('div', { className: 'dsma-field', key: 'f1' },
+          React.createElement('div', { className: 'dsma-dev-meta' }, '设备名'),
+          React.createElement('input', {
+            className: 'dsma-input', value: deviceName, placeholder: '例如：我的手机',
+            onChange: function (e) { setDeviceName(e.target.value) },
+          })))
+        mz.push(React.createElement('div', { className: 'dsma-field', key: 'f2' },
+          React.createElement('div', { className: 'dsma-dev-meta' }, '地址（留空则自动挑一条当前可用的）'),
+          React.createElement('input', {
+            className: 'dsma-input', value: manualUrl,
+            placeholder: 'ws://192.168.1.100:3091/ws/mobile',
+            onChange: function (e) { setManualUrl(e.target.value) },
+          })))
+        mz.push(React.createElement('div', { className: 'dsma-row', key: 'f3' },
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn',
+            disabled: busy !== '', onClick: makePairing,
+          }, busy === 'pair' ? '生成中…' : '生成二维码')))
+        adv.push(React.createElement('div', { className: 'dsma-sec', key: 'mz' }, mz))
+
+        // 已配对设备
+        var dv = []
+        dv.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '已配对设备（' + devices.length + '）'))
+        if (devices.length === 0) {
+          dv.push(React.createElement('div', { className: 'dsma-line', key: 'empty' }, '还没有设备配对过。'))
+        } else {
+          devices.forEach(function (d) {
+            dv.push(React.createElement('div', { className: 'dsma-dev', key: d.id },
+              React.createElement('div', null,
+                React.createElement('div', { className: 'dsma-dev-name' }, d.name || '(未命名)'),
+                React.createElement('div', { className: 'dsma-dev-meta' },
+                  '最近连接 ' + fmtTime(d.lastSeenAt) + (d.online ? '　● 在线' : ''))),
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn dsma-btn-danger',
+                disabled: busy !== '', onClick: function () { revoke(d.id, d.name || d.id) },
+              }, '撤销')))
+          })
         }
-        if (pairing.qrPayload) {
-          pr.push(React.createElement('div', { className: 'dsma-token', key: 'tok' }, pairing.qrPayload))
-          pr.push(React.createElement('div', { className: 'dsma-row', key: 'copy' },
-            React.createElement('button', {
-              type: 'button', className: 'dsma-btn', onClick: function () { copy(pairing.qrPayload, '配对串') },
-            }, '复制配对串'),
-            React.createElement('span', { className: 'dsma-dev-meta' }, 'App 里也可用「粘贴配对串」直接接入，不必扫码。'),
-          ))
-        }
-      }
-      // ---- 手机 App 安装包：扫码即下载（走本机局域网发文件）
-        var ap = appState[0]
+        adv.push(React.createElement('div', { className: 'dsma-sec', key: 'dv' }, dv))
+
+        // 安装包细节 / 备用下载线路
         var az = []
-        az.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '手机 App 安装包'))
-        az.push(React.createElement('div', { className: 'dsma-desc', key: 'd' },
-          '两个码按你的网络挑一个扫：同一 WiFi 用①「局域网直发」必通；人在外面用②「公网下载」。'
-          + '装好后回到上面「生成配对二维码」扫一次即可接入。'))
-        if (ap && ap.available) {
-          var pushQr = function (svg, url, label, key) {
-            if (!svg) return
-            az.push(React.createElement('div', { key: key + 'l', className: 'dsma-line' }, label))
-            az.push(React.createElement('div', {
-              key: key, className: 'dsma-qr',
-              dangerouslySetInnerHTML: { __html: svg },
-            }))
-            if (url) az.push(React.createElement('div', { key: key + 'u', className: 'dsma-dev-meta' }, url))
-          }
-          pushQr(ap.qrLanSvg, ap.qrLanUrl, '① 手机和电脑在同一 WiFi：扫这个（安装包从本机直发，必通）', 'ql')
-          pushQr(ap.qrSvg, ap.qrUrl, '② 人在外面：扫这个（走公网线路，见下面多个镜像）', 'qp')
-
+        az.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '安装包信息与备用线路'))
+        if (app && app.available) {
+          az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
+            'v' + (app.version || '?') + ' · ' + (app.size / 1024).toFixed(1) + ' KB · ' + app.name))
           az.push(React.createElement('div', { className: 'dsma-row', key: 'r1' },
             React.createElement('button', {
               type: 'button', className: 'dsma-btn',
-              disabled: !ap.lanUrls || !ap.lanUrls.length,
-              onClick: function () { if (ap.lanUrls && ap.lanUrls.length) copy(ap.lanUrls[0], '局域网地址') },
+              disabled: !app.lanUrls || !app.lanUrls.length,
+              onClick: function () { if (app.lanUrls && app.lanUrls.length) copy(app.lanUrls[0], '局域网地址') },
             }, '复制局域网直发地址')))
-          if (ap.lanUrls && ap.lanUrls.length) {
-            az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'lan' },
-              '局域网直发：' + ap.lanUrls[0]))
+          if (app.lanUrls && app.lanUrls.length) {
+            az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'lan' }, '局域网直发：' + app.lanUrls[0]))
           }
-          if (ap.mirrors && ap.mirrors.length) {
+          if (app.mirrors && app.mirrors.length) {
             az.push(React.createElement('div', { className: 'dsma-line', key: 'mh' },
-              '公网线路（哪个通用哪个，点一下复制；jsDelivr 在国内时通时断）：'))
+              '公网线路（哪个通用哪个，点一下复制）：'))
             az.push(React.createElement('div', { className: 'dsma-row', key: 'mr' },
-              ap.mirrors.map(function (m) {
+              app.mirrors.map(function (m) {
                 return React.createElement('button', {
                   key: m.name, type: 'button', className: 'dsma-btn',
                   onClick: function () { copy(m.url, m.name) },
                 }, m.name)
               })))
           }
-          az.push(React.createElement('div', { className: 'dsma-line', key: 'meta' },
-            'v' + (ap.version || '?') + ' · ' + (ap.size / 1024).toFixed(1) + ' KB · ' + ap.name
-            + '（下载后点安装，允许未知来源即可）'))
-        } else if (ap) {
+        } else if (app) {
           az.push(React.createElement('div', { className: 'dsma-line', key: 'na' },
-            '插件目录里还没有安装包。把 dsh-mobile.apk 放到：' + ap.apkPath))
+            '插件目录里还没有安装包。把 dsh-mobile.apk 放到：' + app.apkPath))
           az.push(React.createElement('div', { className: 'dsma-dev-meta', key: 'pub2' },
-            '也可以直接用外网直链：' + ap.publicUrl))
+            '也可以直接用外网直链：' + app.publicUrl))
         } else {
           az.push(React.createElement('div', { className: 'dsma-line', key: 'ld' }, '读取中…'))
         }
-        children.push(React.createElement('div', { className: 'dsma-card', key: 'app' }, az))
-
-        children.push(React.createElement('div', { className: 'dsma-card', key: 'pair' }, pr))
-
-      // ---- 设备
-      var dv = []
-      dv.push(React.createElement('div', { className: 'dsma-card-title', key: 'h' }, '已配对设备（' + devices.length + '）'))
-      if (devices.length === 0) {
-        dv.push(React.createElement('div', { className: 'dsma-line', key: 'empty' }, '还没有设备配对过。'))
-      } else {
-        devices.forEach(function (d) {
-          dv.push(React.createElement('div', { className: 'dsma-dev', key: d.id },
-            React.createElement('div', null,
-              React.createElement('div', { className: 'dsma-dev-name' }, d.name || '(未命名)'),
-              React.createElement('div', { className: 'dsma-dev-meta' },
-                '最近连接 ' + fmtTime(d.lastSeenAt) + (d.online ? '　● 在线' : '')),
-            ),
-            React.createElement('button', {
-              type: 'button', className: 'dsma-btn dsma-btn-danger',
-              disabled: busy !== '', onClick: function () { revoke(d.id, d.name || d.id) },
-            }, '撤销'),
-          ))
-        })
+        adv.push(React.createElement('div', { className: 'dsma-sec', key: 'az' }, az))
       }
-      children.push(React.createElement('div', { className: 'dsma-card', key: 'devices' }, dv))
+      children.push(React.createElement('div', { className: 'dsma-card', key: 'adv' }, adv))
 
       if (message) children.push(React.createElement('div', { className: 'dsma-ok', key: 'msg' }, message))
       if (error) children.push(React.createElement('div', { className: 'dsma-error', key: 'err' }, error))
 
-      // ---- 开启公网前的安全免责声明（每次都要勾选，和 dsh-pocket 一致）
-        if (riskOpen) {
-          children.push(React.createElement('div', {
-            key: 'risk',
-            style: { position: 'fixed', inset: '0', background: 'rgba(0,0,0,.45)', zIndex: 9999,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' },
-          },
-            React.createElement('div', {
-              style: { background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-                borderRadius: '14px', padding: '20px 22px', maxWidth: '560px', width: '100%',
-                boxShadow: '0 12px 40px rgba(0,0,0,.35)' },
-            },
-              React.createElement('div', { style: { fontSize: '15px', fontWeight: 600, marginBottom: '10px' } },
-                '⚠ 安全免责声明'),
-              React.createElement('div', { style: { fontSize: '13px', lineHeight: '21px' } },
-                '开启公网 = 把这台电脑上的 DSH 暴露到互联网。DSH 能执行代码、读写文件，'
-                + '任何人拿到公网地址和设备令牌，都可能访问甚至操作你的电脑。'),
-              React.createElement('div', { style: { fontSize: '13px', lineHeight: '21px', marginTop: '10px' } },
-                '请确认：① 妥善保管设备令牌，别把配对二维码/配对串发给别人；② 不用时立即「关闭公网隧道」；'
-                + '③ 隧道域名每次重启电脑都会变，变了在手机上重新扫一次码；④ 公司/涉密网络请先确认合规。'),
-              React.createElement('label', {
-                style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px',
-                  fontSize: '13px', cursor: 'pointer' },
-              },
-                React.createElement('input', {
-                  type: 'checkbox', checked: riskOk,
-                  onChange: function (e) { setRiskOk(e.target.checked) },
-                }),
-                '我已知情，同意开启'),
-              React.createElement('div', {
-                style: { display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' },
-              },
-                React.createElement('button', {
-                  type: 'button', className: 'dsma-btn',
-                  onClick: function () { setRiskOpen(false); setRiskOk(false) },
-                }, '取消'),
-                React.createElement('button', {
-                  type: 'button', className: 'dsma-btn dsma-btn-primary',
-                  onClick: function () {
-                    if (!riskOk) { setError('请勾选「我已知情」后再开启公网'); return }
-                    setRiskOpen(false); setRiskOk(false); tunnel('on', true)
-                  },
-                }, '我已知情，同意开启')))))
+      // ---- 二维码弹窗（公网 / 内网 / 下载 App 共用）
+      if (qrView) {
+        var qz = []
+        var qTitle = '扫这张码'
+        var qStep = ''
+        var qSvg = qrView.svg
+        var qUrl = qrView.url || ''
+        if (qrView.kind === 'app') {
+          qz.push(React.createElement('div', { className: 'dsma-tabs' },
+            React.createElement('button', {
+              type: 'button', className: 'dsma-tab' + (appRoute === 'lan' ? ' dsma-tab-on' : ''),
+              onClick: function () { setAppRoute('lan') },
+            }, '局域网直发'),
+            React.createElement('button', {
+              type: 'button', className: 'dsma-tab' + (appRoute === 'net' ? ' dsma-tab-on' : ''),
+              onClick: function () { setAppRoute('net') },
+            }, '公网镜像')))
+          if (appRoute === 'lan') {
+            qTitle = '下载 App · 局域网直发'
+            qSvg = app && app.qrLanSvg
+            qUrl = (app && app.qrLanUrl) || ''
+            qStep = '手机和电脑连同一个 WiFi：用手机相机扫一下 → 打开下载页 → 点「下载 APK」→ 安装。'
+            if (!qSvg) qStep = '没探测到局域网地址，切到上面的「公网镜像」下载。'
+          } else {
+            qTitle = '下载 App · 公网镜像'
+            qSvg = app && app.qrSvg
+            qUrl = (app && app.qrUrl) || ''
+            qStep = '不在同一个 WiFi 也能用：用手机相机扫一下 → 下载安装包 → 点安装（提示未知来源时允许即可）。'
+          }
+        } else {
+          qTitle = qrView.title || '扫码连接'
+          qStep = '打开手机上的「DSH 掌上通」→ 点「扫码配对」→ 扫这张码。'
+            + (qrView.expiresAt ? '（' + fmtTime(qrView.expiresAt) + ' 前有效，只能用一次）' : '')
         }
-        return React.createElement('div', { className: 'dsma-root' }, children)
+        qz.push(React.createElement('div', { className: 'dsma-modal-title' }, qTitle))
+        qz.push(React.createElement('div', { className: 'dsma-modal-step' }, qStep))
+        if (qSvg) {
+          qz.push(React.createElement('div', {
+            className: 'dsma-qr', dangerouslySetInnerHTML: { __html: qSvg },
+          }))
+        } else if (qrView.kind === 'app') {
+          qz.push(React.createElement('div', { className: 'dsma-line' },
+            app === null ? '正在读取安装包信息…' : '这台电脑上还没有安装包，换「公网镜像」试试。'))
+        } else {
+          qz.push(React.createElement('div', { className: 'dsma-line' },
+            busy === 'pair' ? '正在生成…' : '二维码没生成出来，关掉再点一次试试。'))
+        }
+        if (qUrl) qz.push(React.createElement('div', { className: 'dsma-link' }, qUrl))
+        var qActions = []
+        if (qUrl) {
+          qActions.push(React.createElement('button', {
+            type: 'button', className: 'dsma-btn',
+            onClick: function () { copy(qUrl, '链接') },
+          }, '复制链接'))
+        }
+        if (qrView.payload) {
+          qActions.push(React.createElement('button', {
+            type: 'button', className: 'dsma-btn',
+            onClick: function () { copy(qrView.payload, '配对串') },
+          }, '复制配对串'))
+        }
+        qActions.push(React.createElement('button', {
+          type: 'button', className: 'dsma-btn dsma-btn-primary',
+          onClick: function () { setQrView(null) },
+        }, '关闭'))
+        qz.push(React.createElement('div', { className: 'dsma-modal-actions' }, qActions))
+        children.push(React.createElement('div', {
+          className: 'dsma-modal-backdrop', key: 'qrmodal',
+          onMouseDown: function () { setQrView(null) },
+        }, React.createElement('div', {
+          className: 'dsma-modal',
+          onMouseDown: function (e) { e.stopPropagation() },
+        }, qz)))
+      }
+
+      // ---- 内网：只改 IP / 端口的小弹窗
+      if (lanOpen) {
+        var lz = []
+        lz.push(React.createElement('div', { className: 'dsma-modal-title' }, '内网连接'))
+        lz.push(React.createElement('div', { className: 'dsma-modal-step' },
+          '手机和这台电脑连同一个 WiFi。一般不用改，默认就是本机地址。'))
+        var cands = lanCandidates()
+        if (cands.length > 1) {
+          lz.push(React.createElement('div', { className: 'dsma-dev-meta', style: { marginTop: '10px' } }, '探测到多个地址，选一个：'))
+          lz.push(React.createElement('div', { className: 'dsma-tabs' }, cands.map(function (host) {
+            return React.createElement('button', {
+              key: host, type: 'button',
+              className: 'dsma-tab' + (lanIp === host ? ' dsma-tab-on' : ''),
+              onClick: function () { setLanIp(host) },
+            }, host)
+          })))
+        }
+        lz.push(React.createElement('div', { className: 'dsma-field' },
+          React.createElement('div', { className: 'dsma-dev-meta' }, '电脑的局域网 IP'),
+          React.createElement('input', {
+            className: 'dsma-input', value: lanIp, placeholder: '192.168.1.100',
+            onChange: function (e) { setLanIp(e.target.value) },
+          })))
+        lz.push(React.createElement('div', { className: 'dsma-field' },
+          React.createElement('div', { className: 'dsma-dev-meta' }, '端口（不知道就别改）'),
+          React.createElement('input', {
+            className: 'dsma-input', value: lanPort, placeholder: '3091',
+            onChange: function (e) { setLanPort(e.target.value) },
+          })))
+        lz.push(React.createElement('div', { className: 'dsma-modal-actions' },
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn',
+            onClick: function () { setLanOpen(false) },
+          }, '取消'),
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn dsma-btn-primary', disabled: busy !== '',
+            onClick: confirmLan,
+          }, busy === 'pair' ? '生成中…' : '生成二维码')))
+        children.push(React.createElement('div', {
+          className: 'dsma-modal-backdrop', key: 'lanmodal',
+          onMouseDown: function () { setLanOpen(false) },
+        }, React.createElement('div', {
+          className: 'dsma-modal',
+          onMouseDown: function (e) { e.stopPropagation() },
+        }, lz)))
+      }
+
+      // ---- 公网前的风险确认（每次都要勾选，和 dsh-pocket 一致）
+      if (riskOpen) {
+        children.push(React.createElement('div', {
+          className: 'dsma-modal-backdrop', key: 'risk',
+          onMouseDown: function () { setRiskOpen(false) },
+        },
+          React.createElement('div', {
+            className: 'dsma-modal',
+            style: { textAlign: 'left', maxWidth: '440px' },
+            onMouseDown: function (e) { e.stopPropagation() },
+          },
+            React.createElement('div', { className: 'dsma-modal-title' }, '生成公网二维码前，请先确认'),
+            React.createElement('div', { className: 'dsma-modal-step' },
+              '这一步会把这台电脑上的 DSH 暴露到互联网。DSH 能执行代码、读写文件，'
+              + '任何人拿到公网地址和设备令牌，都可能访问甚至操作你的电脑。'),
+            React.createElement('div', { className: 'dsma-modal-step', style: { marginTop: '10px' } },
+              '请确认：① 别把二维码/配对串发给别人；② 不用时在「高级设置」里关掉公网隧道；'
+              + '③ 隧道地址每次重启电脑都可能变，变了在手机上重新扫一次码；④ 公司/涉密网络请先确认合规。'),
+            React.createElement('label', {
+              style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px',
+                fontSize: '13px', cursor: 'pointer' },
+            },
+              React.createElement('input', {
+                type: 'checkbox', checked: riskOk,
+                onChange: function (e) { setRiskOk(e.target.checked) },
+              }),
+              '我已知情，同意开启'),
+            React.createElement('div', { className: 'dsma-modal-actions', style: { justifyContent: 'flex-end' } },
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn',
+                onClick: function () { setRiskOpen(false); setRiskOk(false) },
+              }, '取消'),
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn dsma-btn-primary',
+                disabled: busy !== '', onClick: confirmRisk,
+              }, '我已知情，生成二维码')))))
+      }
+
+      return React.createElement('div', { className: 'dsma-root' }, children)
     }
 
     // ------------------------------------------------------------------ 设置页的跳转入口
@@ -534,7 +786,7 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { className: 'dsma-root' },
         React.createElement('div', { className: 'dsma-title' }, '手机接入'),
         React.createElement('div', { className: 'dsma-desc' },
-          '手机接入的全部功能（网关开关、公网隧道、配对二维码、安装包二维码、已配对设备）'
+          '手机接入的全部功能（下载 App、公网/内网二维码、已配对设备）'
           + '都已并入侧边栏的「移动设备」面板，这里不再重复一份。'),
         React.createElement('div', { className: 'dsma-row' },
           React.createElement('button', {
