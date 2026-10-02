@@ -45,6 +45,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
     private Camera camera;
     private SurfaceView surface;
     private TextView errorView;
+    /** 顶部提示条：扫不到时这里会升级成"怎么扫 / 改用粘贴"的具体指引。 */
+    private TextView tipView;
+    /** 进入扫码页的时刻，用于"还没扫到（已 N 秒）"的可见反馈。 */
+    private long openedAt;
     /** 用来算"居中裁剪"尺寸：SurfaceView 的父容器，同时也是裁剪边界。 */
     private FrameLayout root;
 
@@ -90,6 +94,8 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         tlp.gravity = Gravity.TOP;
         tip.setLayoutParams(tlp);
         root.addView(tip);
+        this.tipView = tip;
+        this.openedAt = System.currentTimeMillis();
 
         // 失败时的可见提示（旧版是静默 finish，排查无从下手）
         errorView = new TextView(this);
@@ -117,6 +123,27 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         cancel.setOnClickListener(v -> finish());
         root.addView(cancel);
 
+        // 「粘贴 / 手输配对串」兜底入口：相机这条路走不通（权限被拒、光线差、
+        // 二维码太小扫不出、手机没有相机）时，用户不必先返回再去找设置页。
+        // 返回 RESULT_FIRST_USER，由 MainActivity 打开粘贴对话框。
+        TextView pasteBtn = new TextView(this);
+        pasteBtn.setText("粘贴 / 手输配对串");
+        pasteBtn.setTextColor(0xFFFFFFFF);
+        pasteBtn.setTextSize(15f);
+        pasteBtn.setGravity(Gravity.CENTER);
+        pasteBtn.setBackground(Ui.pill(0xCC4D6BFE));
+        pasteBtn.setPadding(48, 22, 48, 22);
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        plp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        plp.bottomMargin = 210;
+        pasteBtn.setLayoutParams(plp);
+        pasteBtn.setOnClickListener(v -> {
+            setResult(RESULT_FIRST_USER);
+            finish();
+        });
+        root.addView(pasteBtn);
+
         setContentView(root);
         // 屏幕尺寸 / 旋转 / 分屏变化后重新按预览比例摆放（问题 4：不变形的全屏取景）
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> applyPreviewAspect());
@@ -129,6 +156,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
     @Override
     protected void onResume() {
         super.onResume();
+        // 「一直扫不到」在旧版里是完全静默的：画面一直在动，用户以为 App 卡住了
+        // （"我感觉一直不行"）。这里每 2 秒刷新一次提示条，8 秒后升级成可执行的指引。
+        ui.removeCallbacks(hintTick);
+        ui.postDelayed(hintTick, 2_000L);
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] { Manifest.permission.CAMERA }, REQ_CAMERA);
         } else {
@@ -136,9 +167,30 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         }
     }
 
+    /**
+     * 扫不到的可见反馈：把"还没扫到、已经等了多久、可以怎么办"写在提示条上。
+     * 只改文案、不阻塞扫码；一旦解码成功或页面退出就停。
+     */
+    private final Runnable hintTick = new Runnable() {
+        @Override
+        public void run() {
+            if (decoded || isFinishing() || tipView == null) return;
+            long sec = Math.max(0L, (System.currentTimeMillis() - openedAt) / 1000L);
+            if (sec >= 8) {
+                tipView.setText("还没扫到（已 " + sec + " 秒）\n"
+                        + "把电脑上的二维码放大一些、手机靠近一点；\n"
+                        + "实在扫不出就点下面「粘贴 / 手输配对串」。");
+            } else if (sec >= 2) {
+                tipView.setText("正在识别…把二维码完整放进框内、保持手机稳定");
+            }
+            ui.postDelayed(this, 2_000L);
+        }
+    };
+
     @Override
     protected void onPause() {
         super.onPause();
+        ui.removeCallbacks(hintTick);
         release();
     }
 

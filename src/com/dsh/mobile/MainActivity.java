@@ -111,6 +111,13 @@ public final class MainActivity extends Activity implements
     private String lastPairDebug = "";
     private java.util.List<String> pairCandidates = new java.util.ArrayList<>();
     private int pairIndex = 0;
+    /**
+     * 本次配对的全过程轨迹（"点了没反应/报错但不知道错在哪"必须能一锤定音）。
+     *
+     * 只记「长度 / 字段有无 / 主机名 / 每一步的结果」，**绝不记 pairingCode / token 明文**；
+     * 只活在内存里（不落盘、不进任何被跟踪的文件），显示在设置页诊断区。
+     */
+    private final java.util.List<String> pairTrace = new java.util.ArrayList<>();
 
     // 当前会话的目标 / 任务提要
     private String planGoal = "";
@@ -751,6 +758,11 @@ public final class MainActivity extends Activity implements
             if (!n.isEmpty()) store.setDeviceName(n);
         }
         Toast.makeText(this, "配对成功", Toast.LENGTH_SHORT).show();
+        // 配对成功也要落进轨迹：这样"成功"与"失败"在诊断区里是同一份逐条记录，
+        // 用户报"时好时坏"时能直接对比（token 只记长度，不记内容）
+        pairTraceAdd("✓ 配对成功：已拿到设备令牌（" + token.length() + " 字符，不记内容）");
+        if (settingsView != null) settingsView.setStatus("配对成功", false);
+        refreshDiagnostics();
         gw.requestSessions();
         showList();
     }
@@ -2793,10 +2805,18 @@ public final class MainActivity extends Activity implements
     /** 用下一个候选地址继续配对；都用完则明确报错。 */
     private void pairWithNextCandidate() {
         if (pendingPairCode == null) return;
-        while (pairIndex < pairCandidates.size()) {
+        int total = pairCandidates.size();
+        int skipped = 0;
+        while (pairIndex < total) {
             String target = pairCandidates.get(pairIndex++);
-            if (GatewayClient.cleartextProblem(target) != null) continue;
+            String denied = GatewayClient.cleartextProblem(target);
+            if (denied != null) {
+                skipped++;
+                pairTraceAdd("· 跳过 " + hostOf(target) + "（安全策略：" + denied + "）");
+                continue;
+            }
             store.setUrl(target);
+            pairTraceAdd("· 尝试 " + pairIndex + "/" + total + "：" + hostOf(target));
             if (settingsView != null) {
                 settingsView.setStatus("正在配对 " + hostOf(target)
                         + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个地址）…", false);
@@ -2805,11 +2825,15 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "正在连接 " + hostOf(target)
                     + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个）", Toast.LENGTH_SHORT).show();
             gw.pair(target, pendingPairCode, store.deviceId(), store.deviceName());
+            refreshDiagnostics();
             return;
         }
         pendingPairCode = null;
-        Toast.makeText(this, "配对失败：配对码里的地址都连不上。\n"
-                + "请确认手机能上网；或在电脑面板重新生成二维码后重扫。", Toast.LENGTH_LONG).show();
+        // 走到这里说明每个地址都被拒/试完：必须给出可见且可执行的结论，不能静默返回
+        pairFail("配对失败：配对码里的 " + total + " 个地址都连不上"
+                + (skipped > 0 ? "（其中 " + skipped + " 个被安全策略拒绝）" : "") + "。\n"
+                + "请确认手机和电脑在同一 WiFi、或手机能上网；\n"
+                + "也可以在电脑面板重新生成二维码后重扫。");
     }
 
     /** 连不上时自动在「内网 / 公网」之间切一次（只切一次，避免来回跳）。 */
@@ -3050,17 +3074,154 @@ public final class MainActivity extends Activity implements
         gw.connect(active, store.token(), store.deviceId(), store.deviceName());
     }
 
+    /**
+     * 「粘贴配对串」。
+     *
+     * 真机实测（2026-10-02，华为 PGT-AN10 / 1312x2848 / 手势导航 + 中文输入法）：
+     * 旧实现在对话框里放一个多行 EditText，把 550+ 字符的配对串粘进去后输入框会长到
+     * ~1300px，把「配对」按钮顶到 y=1653..1842；而输入法窗口的可触区从 y=1716 开始 ——
+     * 按钮**中心点正好落在键盘上**，点它等于点键盘：对话框不关、不报错、没有 Toast、
+     * 设备列表也不动，表现就是用户说的「点了毫无反应」。
+     *
+     * 治本做法是**根本不要手输**：配对串本来就该是复制粘贴的，
+     * 所以这里先读系统剪贴板 —— 读到就直接用一个没有输入框的确认框（不会弹输入法，
+     * 按钮永远点得到）。读不到才走手输，且手输框做了三重保险（限高 + 置顶 + 输入法弹起时缩内容）。
+     */
     @Override
     public void onPastePairing() {
-        final EditText input = new EditText(this);
-        input.setHint("粘贴电脑端生成的配对串（Base64URL）");
-        input.setMinLines(3);
-        new AlertDialog.Builder(this)
-                .setTitle("粘贴配对串")
-                .setView(input)
-                .setPositiveButton("配对", (d, w) -> startPairing(input.getText().toString()))
+        String clip = clipboardPairingCandidate();
+        if (!clip.isEmpty()) {
+            showPairConfirmDialog(clip);
+            return;
+        }
+        showPairInputDialog("");
+    }
+
+    /**
+     * 剪贴板里那段文本是不是一段"看起来就是配对串"的内容。
+     *
+     * 只认「够长、且不是 http 链接」的内容：宁可退回手输框，也不要拿剪贴板里
+     * 不相干的文本去配对（那只会得到一句莫名其妙的失败原因）。
+     */
+    private String clipboardPairingCandidate() {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) return "";
+            android.content.ClipData clip = cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() <= 0) return "";
+            CharSequence cs = clip.getItemAt(0).coerceToText(this);
+            if (cs == null) return "";
+            String s = PairingText.sanitize(cs.toString());
+            if (s.length() < 100 || PairingText.looksLikeHttpUrl(s)) return "";
+            return s;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 确认框：没有输入框 -> 不弹输入法 -> 「配对」按钮永远在键盘上方点得到。 */
+    private void showPairConfirmDialog(final String text) {
+        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+                .setTitle("用剪贴板里的配对串配对")
+                .setMessage("读到 " + text.length() + " 个字符的配对串。\n"
+                        + PairingText.describe(text) + "\n\n"
+                        + "点「配对」后这台手机会连上电脑；不想要这段内容就点「手动输入」。")
+                .setPositiveButton("配对", null)
+                .setNeutralButton("手动输入", null)
                 .setNegativeButton("取消", null)
-                .show();
+                .create();
+        dlg.setOnShowListener(x -> {
+            dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(v -> { dlg.dismiss(); startPairing(text); });
+            dlg.getButton(android.app.AlertDialog.BUTTON_NEUTRAL)
+                    .setOnClickListener(v -> { dlg.dismiss(); showPairInputDialog(""); });
+        });
+        dlg.show();
+    }
+
+    /**
+     * 手输/粘贴框。
+     *
+     * 三重保险，保证「配对」按钮不会被输入法盖住（旧实现的 bug 就在这里）：
+     *   ① 输入框高度封顶（4 行 + 外层 ScrollView 限高）：配对串再长也不撑大对话框；
+     *   ② 对话框整体贴屏幕顶部（gravity=TOP）：按钮区远离底部键盘；
+     *   ③ window 用 ADJUST_RESIZE：输入法弹起时缩内容而不是压住。
+     * 另外「配对」的回调自己接管：解析失败时**不关对话框、不清输入**，把原因写在框里。
+     */
+    private void showPairInputDialog(String initial) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("粘贴电脑端生成的配对串（Base64URL）");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setMaxLines(4);
+        input.setText(initial == null ? "" : initial);
+        input.setSelection(input.getText().length());
+
+        android.widget.ScrollView scroller = new android.widget.ScrollView(this);
+        scroller.addView(input, new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroller.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 92)));
+
+        final android.widget.TextView msg = Ui.text(this, "", 12.5f, Ui.INK_SUB, false);
+        msg.setPadding(0, Ui.dp(this, 8), 0, 0);
+
+        android.widget.LinearLayout box = Ui.col(this);
+        int pad = (int) Ui.dp(this, 20);
+        box.setPadding(pad, (int) Ui.dp(this, 6), pad, 0);
+        box.addView(scroller);
+        box.addView(msg);
+
+        final String clipHint = clipboardPairingCandidate().isEmpty()
+                ? "剪贴板里现在没有配对串" : "剪贴板里有配对串，点「读剪贴板」直接填进来";
+        msg.setText("配对串有 550 个字符左右，推荐在电脑面板点「复制配对串」后回来点「读剪贴板」。\n"
+                + clipHint);
+
+        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+                .setTitle("粘贴配对串")
+                .setView(box)
+                .setPositiveButton("配对", null)
+                .setNeutralButton("读剪贴板", null)
+                .setNegativeButton("取消", null)
+                .create();
+        dlg.setOnShowListener(x -> {
+            dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String problem = startPairing(input.getText().toString());
+                if (problem == null) {
+                    dlg.dismiss();      // 解析通过、配对已启动
+                } else {
+                    msg.setTextColor(Ui.ERR);
+                    msg.setText(problem);   // 失败：留在原界面，输入一个字都不丢
+                }
+            });
+            dlg.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                String clip = clipboardPairingCandidate();
+                if (clip.isEmpty()) {
+                    msg.setTextColor(Ui.ERR);
+                    msg.setText("剪贴板里没有可用的配对串。请在电脑面板点「复制配对串」再来点这里。");
+                    return;
+                }
+                input.setText(clip);
+                input.setSelection(clip.length());
+                msg.setTextColor(Ui.OK);
+                msg.setText("已从剪贴板读入 " + clip.length() + " 个字符，点「配对」继续。");
+            });
+        });
+        dlg.show();
+        // ② 贴顶：按钮区远离底部键盘（旧实现的按钮 y=1653..1842，键盘可触区从 1716 起）
+        android.view.Window w = dlg.getWindow();
+        if (w != null) {
+            // ③ 输入法弹起时缩内容，而不是把它盖在按钮上
+            w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                    | android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED);
+            android.view.WindowManager.LayoutParams lp = w.getAttributes();
+            lp.gravity = android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL;
+            lp.y = (int) Ui.dp(this, 56);
+            w.setAttributes(lp);
+        }
     }
 
     @Override
@@ -3078,6 +3239,10 @@ public final class MainActivity extends Activity implements
         super.onActivityResult(request, result, data);
         if (request == REQ_QR && result == RESULT_OK && data != null) {
             startPairing(data.getStringExtra(QrScanActivity.EXTRA_RAW));
+        }
+        // 扫码页里点「粘贴/手输」：相机这条路走不通时，给它一条一定走得通的路
+        if (request == REQ_QR && result == RESULT_FIRST_USER) {
+            onPastePairing();
         }
         if (request == REQ_IMAGE && result == RESULT_OK && data != null && data.getData() != null) {
             sendImage(data.getData());
@@ -3141,99 +3306,167 @@ public final class MainActivity extends Activity implements
         }, "img-send").start();
     }
 
-    private void startPairing(String raw) {
-        // 问题 2-a：扫码/粘贴进来的字符串先做健壮化预处理（BOM、零宽字符、换行、
-        // 首尾引号、外部包裹的协议前缀），再交给解析器。相机扫码与 adb intent 的差别
-        // 往往就在这几个不可见字符上：肉眼一样，字节不一样，一个能配一个报错。
-        final String scanned = PairingText.sanitize(raw);
-        // 问题 2-d：把"到底扫到了什么"记进设置页诊断区（脱敏，见 describeScanned）。
+    /**
+     * 扫码 / 粘贴的统一入口。
+     *
+     * 分三段，每段的失败必须给出**不同**的原因（旧写法把整条流程塞进一个 try，
+     * 于是"连接层抛的任何异常"都会被报成「不是可用的配对码」—— 用户拿着正确的
+     * 配对串也会以为码不对，完全无从下手，这就是"我感觉一直不行"的来源）：
+     *   ① 预处理 + 解码 —— 只有这一段失败才是"内容不是配对码"；
+     *   ② 字段与地址提取 —— 版本不支持 / 已过期 / 缺字段 / 地址连不上；
+     *   ③ 启动配对 —— 网络与状态错误，与配对串内容无关。
+     *
+     * @return null 表示解析通过、配对已启动；否则是给用户看的中文原因
+     *         （调用方决定显示在哪：对话框内联 + Toast 都已经在 {@link #pairFail} 里做了）
+     */
+    private String startPairing(String raw) {
+        pairTrace.clear();
+        final String input = raw == null ? "" : raw;
+        pairTraceAdd("① 收到 " + input.length() + " 字符");
+        final String scanned = PairingText.sanitize(input);
+        pairTraceAdd("② 预处理后 " + scanned.length() + " 字符（清掉 "
+                + Math.max(0, input.length() - scanned.length()) + " 个空白/不可见字符或外层包裹）");
+        // 问题 2-d：把"到底扫到了什么"记进设置页诊断区（脱敏，见 PairingText.describe）
         lastPairDebug = PairingText.describe(scanned);
         refreshDiagnostics();
         if (scanned.isEmpty()) {
-            Toast.makeText(this, "扫到的内容是空的，请重新对准二维码。", Toast.LENGTH_LONG).show();
-            return;
+            return pairFail("配对串是空的。请重新扫一次，或把电脑面板上的配对串复制后粘贴进来。");
         }
         // 问题 2-b：面板里有两张二维码 —— ① 安装包下载链接 ② 配对码。
         // 扫到 ① 时绝不能笼统报"配对失败"，要直接说清它是什么、该扫哪一张。
         if (PairingText.looksLikeHttpUrl(scanned)) {
-            Toast.makeText(this, "这是「安装包下载链接」，不是配对码。\n"
+            return pairFail("这是「安装包下载链接」，不是配对码。\n"
                     + "请用手机浏览器打开它下载安装 App；\n"
-                    + "配对请扫电脑面板里「生成配对二维码」那一张。", Toast.LENGTH_LONG).show();
-            return;
+                    + "配对请扫电脑面板里「生成配对二维码」那一张。");
         }
+
+        // ---- ① 解码（只有这里失败才叫"不是可用的配对码"）
+        final JSONObject payload;
         try {
-            JSONObject payload = PairingText.decode(scanned);
-            int version = payload.optInt("version", 0);
-            if (version != 2) {
-                Toast.makeText(this, "配对信息版本不支持：" + version, Toast.LENGTH_LONG).show();
-                return;
-            }
-            long expires = payload.optLong("expiresAt", 0L);
-            if (expires > 0 && System.currentTimeMillis() > expires) {
-                Toast.makeText(this, "配对码已过期，请在电脑端重新生成", Toast.LENGTH_LONG).show();
-                return;
-            }
-            String url = payload.optString("publicUrl", "");
-            String code = payload.optString("pairingCode", "");
-            if (url.isEmpty() || code.isEmpty()) {
-                Toast.makeText(this, "配对信息不完整", Toast.LENGTH_LONG).show();
-                return;
-            }
-            // 网关给的 publicUrl 可能只对电脑本机有效（例如 ws://127.0.0.1:19387/…），
-            // 真正可用的是 payload.endpoints —— 它带着隧道 / 局域网等全部地址。
-            // 这里排成候选列表逐个试：私有网段优先（在家最快），不行再走公网。
-            pairCandidates = buildPairCandidates(payload, url);
-            if (pairCandidates.isEmpty()) {
-                // 问题 2-c：说清"扫到的确实是配对码，问题出在里面的地址"。
-                Toast.makeText(this, "扫到了配对码，但里面的地址手机连不上"
-                        + "（只有 127.0.0.1 / localhost 这类电脑本机地址）。\n"
-                        + "请在电脑面板重新点「生成配对二维码」，"
-                        + "并把「配对连接方式」选成「自动选择 · 优先外网」；\n"
-                        + "或者在 App 设置里手动填「公网地址」。", Toast.LENGTH_LONG).show();
-                return;
-            }
-            store.setUrl(pairCandidates.get(0));
-            // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
-              // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
-              String lan = "", wan = "";
-              JSONArray eps = payload.optJSONArray("endpoints");
-              if (eps != null) {
-                  for (int i = 0; i < eps.length(); i++) {
-                      String e = eps.optString(i, "").trim();
-                      if (e.isEmpty()) continue;
-                      if (Store.isPrivateUrl(e)) { if (lan.isEmpty()) lan = e; }
-                      else if (wan.isEmpty()) wan = e;
-                  }
-              }
-              if (Store.isPrivateUrl(url)) { if (lan.isEmpty()) lan = url; }
-              else if (wan.isEmpty()) wan = url;
-              if (!lan.isEmpty()) store.setLanUrl(lan);
-              if (!wan.isEmpty()) store.setWanUrl(wan);
-              store.setUseWan(lan.isEmpty() && !wan.isEmpty());
-              failoverUsed = false;
-              pendingPairCode = code;
-              pairIndex = 0;
-              pairWithNextCandidate();
+            payload = PairingText.decode(scanned);
         } catch (Throwable t) {
             String why = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
-            // 问题 2-c：别只说"无法解析"，要讲清是"扫到了东西但不像配对码"。
-            Toast.makeText(this, "扫到了内容，但它不是可用的配对码：" + why
-                    + "\n\n请确认扫的是电脑面板里「生成配对二维码」那一张；"
-                    + "设置页底部的「扫码诊断」会记下最近一次扫到的内容特征。",
-                    Toast.LENGTH_LONG).show();
+            pairTraceAdd("✗ 解码失败：" + why);
+            return pairFail("这段内容不是可用的配对码（解码失败：" + why + "）。\n"
+                    + "请确认扫的是电脑面板里「生成配对二维码」那一张；\n"
+                    + "微信/相册里的截图二维码也常被压缩到扫错，可以用「粘贴配对串」代替。");
+        }
+        pairTraceAdd("③ 解码成功（Base64URL/JSON 已还原）");
+
+        // ---- ② 字段与地址
+        final int version = payload.optInt("version", 0);
+        final long expires = payload.optLong("expiresAt", 0L);
+        final String url = payload.optString("publicUrl", "");
+        final String code = payload.optString("pairingCode", "");
+        final JSONArray eps = payload.optJSONArray("endpoints");
+        final boolean expired = expires > 0 && System.currentTimeMillis() > expires;
+        pairTraceAdd("④ 字段：version=" + version
+                + " · publicUrl=" + (url.isEmpty() ? "无" : "有")
+                + " · pairingCode=" + (code.isEmpty() ? "无（只记有无，不记内容）" : "有（只记有无，不记内容）")
+                + " · endpoints=" + (eps == null ? 0 : eps.length()) + " 个"
+                + " · " + (expires > 0 ? (expired ? "已过期" : "未过期") : "无有效期"));
+        if (version != 2) {
+            return pairFail("配对信息版本不支持：" + version + "。请在电脑端把「移动设备」插件更新到最新版。");
+        }
+        if (expired) {
+            return pairFail("配对码已过期，请在电脑端重新生成二维码后重扫。");
+        }
+        if (url.isEmpty() || code.isEmpty()) {
+            return pairFail("配对信息不完整（缺少连接地址或配对码）。请在电脑端重新生成二维码。");
+        }
+        // 网关给的 publicUrl 可能只对电脑本机有效（例如 ws://127.0.0.1:19387/…），
+        // 真正可用的是 payload.endpoints —— 它带着隧道 / 局域网等全部地址。
+        // 这里排成候选列表逐个试：私有网段优先（在家最快），不行再走公网。
+        pairCandidates = buildPairCandidates(payload, url);
+        if (pairCandidates.isEmpty()) {
+            pairTraceAdd("✗ 候选地址 0 个（publicUrl 与 endpoints 都是 127.0.0.1/localhost）");
+            // 问题 2-c：说清"扫到的确实是配对码，问题出在里面的地址"。
+            return pairFail("扫到了配对码，但里面的地址手机连不上"
+                    + "（只有 127.0.0.1 / localhost 这类电脑本机地址）。\n"
+                    + "请在电脑面板重新点「生成配对二维码」，"
+                    + "并把「配对连接方式」选成「自动选择 · 优先外网」；\n"
+                    + "或者在 App 设置里手动填「公网地址」。");
+        }
+        StringBuilder hosts = new StringBuilder();
+        for (int i = 0; i < pairCandidates.size(); i++) {
+            if (i > 0) hosts.append(" → ");
+            hosts.append(hostOf(pairCandidates.get(i)));
+        }
+        pairTraceAdd("⑤ 候选地址 " + pairCandidates.size() + " 个：" + hosts);
+
+        // ---- ③ 编排：这里的异常与"配对串内容"无关，绝不能报成"不是可用的配对码"
+        try {
+            store.setUrl(pairCandidates.get(0));
+            // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
+            // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
+            String lan = "", wan = "";
+            if (eps != null) {
+                for (int i = 0; i < eps.length(); i++) {
+                    String e = eps.optString(i, "").trim();
+                    if (e.isEmpty()) continue;
+                    if (Store.isPrivateUrl(e)) { if (lan.isEmpty()) lan = e; }
+                    else if (wan.isEmpty()) wan = e;
+                }
+            }
+            if (Store.isPrivateUrl(url)) { if (lan.isEmpty()) lan = url; }
+            else if (wan.isEmpty()) wan = url;
+            if (!lan.isEmpty()) store.setLanUrl(lan);
+            if (!wan.isEmpty()) store.setWanUrl(wan);
+            store.setUseWan(lan.isEmpty() && !wan.isEmpty());
+            failoverUsed = false;
+            pendingPairCode = code;
+            pairIndex = 0;
+            pairTraceAdd("⑥ 内网=" + (lan.isEmpty() ? "无" : hostOf(lan))
+                    + " · 公网=" + (wan.isEmpty() ? "无" : hostOf(wan))
+                    + " · 先走" + (store.useWan() ? "公网" : "内网"));
+            refreshDiagnostics();
+            pairWithNextCandidate();
+            refreshDiagnostics();
+            return null;
+        } catch (Throwable t) {
+            String why = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+            pairTraceAdd("✗ 启动配对时出错：" + why);
+            pendingPairCode = null;
+            return pairFail("配对串本身没问题，但启动配对时出错了：" + why
+                    + "\n请再点一次；若一直这样，把设置页底部的诊断信息发给作者。");
         }
     }
 
     // ============================================================ 配对串健壮化 / 诊断
     // 解析规则本身在 com.dsh.mobile.PairingText 里（纯字符串处理，可脱离真机跑 JVM 断言：
-    // harness/src/PairingTextTest.java）。这里只留一个刷新诊断区的小工具。
+    // harness/src/PairingTextTest.java）。这里只留诊断与统一的失败出口。
 
-    /** 刷新设置页诊断区（状态 / 轨迹 / 最近一次扫码特征）。 */
+    /** 记一行配对轨迹（脱敏；调用后刷新设置页诊断区）。 */
+    private void pairTraceAdd(String line) {
+        pairTrace.add(line);
+        if (pairTrace.size() > 40) pairTrace.remove(0);
+    }
+
+    /**
+     * 配对失败的**唯一**出口：Toast + 设置页状态 + 诊断轨迹，一处都不能少。
+     *
+     * 为什么要有这个函数：旧代码里失败提示散落在各分支，稍有遗漏就是"点了没反应"。
+     * 现在所有失败路径都必须经过这里，保证「任何失败都有可见反馈」。
+     */
+    private String pairFail(String reason) {
+        String flat = reason == null ? "" : reason.replace('\n', ' ');
+        pairTraceAdd("✗ " + flat);
+        Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
+        if (settingsView != null) settingsView.setStatus(flat, true);
+        refreshDiagnostics();
+        return reason;
+    }
+
+    /** 刷新设置页诊断区（状态 / 轨迹 / 最近一次扫码特征 / 本次配对每一步）。 */
     private void refreshDiagnostics() {
         if (settingsView == null) return;
         StringBuilder sb = new StringBuilder();
         if (gw != null) sb.append(gw.debugState()).append('\n').append(gw.traceText());
         if (!lastPairDebug.isEmpty()) sb.append("\n\n[扫码诊断] ").append(lastPairDebug);
+        if (!pairTrace.isEmpty()) {
+            sb.append("\n\n[配对诊断] 本次配对的每一步（不含配对码/令牌明文）：");
+            for (String line : pairTrace) sb.append('\n').append("  ").append(line);
+        }
         settingsView.setDiagnostics(sb.toString());
     }
 }
