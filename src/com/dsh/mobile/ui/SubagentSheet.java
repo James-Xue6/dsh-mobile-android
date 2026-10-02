@@ -153,7 +153,18 @@ public final class SubagentSheet {
         t.setEllipsize(android.text.TextUtils.TruncateAt.END);
         texts.addView(t);
 
-        StringBuilder meta = new StringBuilder(status);
+        // 状态里的 "●/○" 字符换成真圆点：矢量圆点不受字体/字重影响，垂直位置永远正确
+        String statusText = status == null ? "" : status;
+        int dotColor = 0;
+        if (statusText.startsWith("● ")) {
+            dotColor = statusColor;
+            statusText = statusText.substring(2);
+        } else if (statusText.startsWith("○ ")) {
+            dotColor = Ui.alpha(Ui.INK_FAINT, 0.9f);
+            statusText = statusText.substring(2);
+        }
+
+        StringBuilder meta = new StringBuilder(statusText);
         if (updatedAt > 0) {
             String ago = Ui.ago(updatedAt);
             if (!ago.isEmpty()) meta.append(" · ").append(ago);
@@ -170,8 +181,20 @@ public final class SubagentSheet {
         TextView m = Ui.text(ctx, meta.toString(), Ui.S_FOOT, statusColor, false);
         m.setSingleLine(true);
         m.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        m.setPadding(0, Ui.dp(ctx, 3), 0, 0);
-        texts.addView(m);
+        LinearLayout metaRow = Ui.row(ctx);
+        metaRow.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        metaRow.setPadding(0, Ui.dp(ctx, 3), 0, 0);
+        if (dotColor != 0) {
+            View d = Ui.dot(ctx, 7f, dotColor);
+            LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) d.getLayoutParams();
+            dlp.rightMargin = Ui.dp(ctx, 6);
+            metaRow.addView(d);
+        }
+        m.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        metaRow.addView(m);
+        texts.addView(metaRow);
         row.addView(texts);
 
         if (current) {

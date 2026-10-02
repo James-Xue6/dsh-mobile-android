@@ -163,8 +163,11 @@ public final class ChatAdapter extends BaseAdapter {
         TextView bubble = Ui.text(ctx, it.text, Ui.S_BODY, Ui.ON_BRAND, false);
         bubble.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 11), Ui.dp(ctx, 15), Ui.dp(ctx, 11));
         bubble.setMaxWidth(maxBubble);
-        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 18), Ui.BRAND_FILL);
-        bubble.setBackground(bg);
+        // 用户气泡：细腻的蓝色渐变（上 #0A84FF → 下 #0071E3）+ 18dp 圆角。
+        // 纯色实心块在深色/浅色下都是一块"死色"，一段极窄渐变就把它变成了有光感的实体。
+        // 注意这里**不能**用 brandPill()：999 的圆角会被夹到 min(宽,高)/2，
+        // 多行气泡会变成两头圆的"体育场形"。
+        bubble.setBackground(Ui.brandGradient(Ui.dp(ctx, 18)));
         bubble.setTextIsSelectable(true);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -250,9 +253,12 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_AGENT));
+        // 左侧 3dp 主色强调条 + 发丝描边 + 极浅阴影（旧版是整卡一圈淡蓝框 = "土"元素）
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+                Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
 
-        TextView head = Ui.text(ctx, "👥 " + agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
+        TextView head = Ui.text(ctx, agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
+        Ui.setLeadingIcon(head, com.dsh.mobile.R.drawable.ic_people, Ui.BRAND, 14f, 6f);
         card.addView(head);
 
         String body = it.text == null ? "" : it.text;
@@ -295,8 +301,7 @@ public final class ChatAdapter extends BaseAdapter {
             // 简洁模式：一行说清"正在执行什么"，不展示命令参数
             LinearLayout one = Ui.row(ctx);
             one.setPadding(0, Ui.dp(ctx, 3), 0, Ui.dp(ctx, 3));
-            TextView dot = Ui.text(ctx, "●", 10f, it.toolError ? Ui.ERR : Ui.WARN, false);
-            one.addView(dot);
+            one.addView(Ui.dot(ctx, 8f, it.toolError ? Ui.ERR : Ui.WARN));
             TextView line = Ui.text(ctx, "正在执行：" + (it.toolName.isEmpty() ? "工具" : it.toolName),
                     Ui.S_FOOT, Ui.INK_SUB, false);
             line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
@@ -316,8 +321,7 @@ public final class ChatAdapter extends BaseAdapter {
         String status = it.toolError ? "失败" : (it.toolRunning ? "运行中" : "完成");
         int dotColor = it.toolError ? Ui.ERR : (it.toolRunning ? Ui.WARN : Ui.OK);
 
-        TextView dot = Ui.text(ctx, "●", 10f, dotColor, false);
-        head.addView(dot);
+        head.addView(Ui.dot(ctx, 8f, dotColor));
 
         TextView name = Ui.text(ctx, it.toolName.isEmpty() ? "工具" : it.toolName, Ui.S_FOOT, Ui.INK, true);
         name.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 8), 0);
@@ -354,9 +358,16 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4));
 
         int color = it.stepError ? Ui.ERR : (it.stepRunning ? Ui.WARN : Ui.INK_SUB);
-        TextView dot = Ui.text(ctx, it.stepError ? "⚠" : (it.stepRunning ? "◐" : "·"),
-                11.5f, color, false);
-        wrap.addView(dot);
+        // 状态点用真圆点（尺寸/居中可控，不受字体影响）；失败保留 ⚠ 的强语义
+        View mark;
+        if (it.stepError) {
+            mark = Ui.text(ctx, "⚠", 11.5f, color, false);
+        } else {
+            mark = Ui.dot(ctx, it.stepRunning ? 8f : 6f, color);
+            LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) mark.getLayoutParams();
+            dlp.topMargin = Ui.dp(ctx, 6);
+        }
+        wrap.addView(mark);
 
         TextView line = Ui.text(ctx, it.text == null ? "" : it.text, Ui.S_FOOT, color, false);
         line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
@@ -388,7 +399,8 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_APPROVAL));
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+                Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
 
         TextView title = Ui.text(ctx, "需要你的批准", Ui.S_HEAD, Ui.INK, true);
@@ -440,7 +452,8 @@ public final class ChatAdapter extends BaseAdapter {
             actions.addView(allow);
 
             TextView deny = actionButton("拒绝", Ui.SURFACE, Ui.ERR);
-            deny.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_DANGER));
+            // 危险动作不做大红块：一层 12% 的红淡底 + 红字，权重低但一眼看得懂
+            deny.setBackground(Ui.pill(Ui.alpha(Ui.ERR, 0.12f)));
             deny.setOnClickListener(v -> host.onApprove(it, "rejected"));
             deny.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -460,7 +473,8 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_QUESTION));
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+                Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
 
         card.addView(Ui.text(ctx, "Agent 在等你的回答", Ui.S_HEAD, Ui.INK, true));
@@ -631,7 +645,8 @@ public final class ChatAdapter extends BaseAdapter {
         row.setLayoutParams(rlp);
         Ui.tap(row, 0.97f);   // 选项行按下反馈（背景由 paint() 管，这里只压暗，不抢背景）
 
-        TextView mark = Ui.text(ctx, "○", 16f, Ui.INK_FAINT, false);
+        TextView mark = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_circle,
+                0x00000000, Ui.INK_FAINT, 22f, 0f, 20f);
         row.addView(mark);
 
         LinearLayout texts = Ui.col(ctx);
@@ -649,8 +664,13 @@ public final class ChatAdapter extends BaseAdapter {
         final boolean[] refresh = {false};
         Runnable paint = () -> {
             boolean on = sel.contains(label);
-            mark.setText(on ? (multi ? "☑" : "◉") : (multi ? "☐" : "○"));
-            mark.setTextColor(on ? Ui.BRAND : Ui.INK_FAINT);
+            // 选中标记：手写矢量（单选用圆圈/对勾圆，多选用方框/对勾方框），不用 ☑☐◉○ 字符
+            Ui.setIconBg(mark,
+                    on ? (multi ? com.dsh.mobile.R.drawable.ic_check_square
+                                : com.dsh.mobile.R.drawable.ic_check_circle)
+                       : (multi ? com.dsh.mobile.R.drawable.ic_square
+                                : com.dsh.mobile.R.drawable.ic_circle),
+                    on ? Ui.BRAND : Ui.INK_FAINT, 0x00000000, 22f, 20f);
             row.setBackground(Ui.roundStroke(Ui.dp(ctx, 11),
                     on ? Ui.BRAND_SOFT : Ui.FIELD_BG,
                     Ui.dp(ctx, 1.0f), on ? Ui.LINE_SELECTED : Ui.LINE));
@@ -684,7 +704,8 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_OK));
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+                Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));
 
@@ -734,11 +755,17 @@ public final class ChatAdapter extends BaseAdapter {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * 卡片里的动作按钮：**真胶囊**（圆角 = 高度一半）。
+     * fill 为主色实心时铺同一套蓝色渐变，其余（拒绝 / 取消）用纯色胶囊。
+     */
     private TextView actionButton(String label, int fill, int fg) {
-        TextView t = Ui.text(ctx, label, Ui.S_CALLOUT, fg, true);
+        TextView t = Ui.text(ctx, label, Ui.S_CALLOUT, fg, false);
+        t.setTypeface(Ui.medium());
         t.setGravity(Gravity.CENTER);
+        t.setMinHeight(Ui.dp(ctx, 46));
         t.setPadding(0, Ui.dp(ctx, 13), 0, Ui.dp(ctx, 13));
-        t.setBackground(Ui.round(Ui.dp(ctx, 12), fill));
+        t.setBackground(fill == Ui.BRAND_FILL ? Ui.brandPill() : Ui.pill(fill));
         Ui.tap(t);
         return t;
     }

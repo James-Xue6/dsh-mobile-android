@@ -72,24 +72,24 @@ public final class SessionListView extends FrameLayout {
         t.setLayoutParams(tlp);
         top.addView(t);
 
-        TextView refresh = Ui.circleButton(ctx, "↻", Ui.CHIP_BG, Ui.INK_SUB);
+        TextView refresh = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_refresh,
+                Ui.CHIP_BG, Ui.INK_SUB);
         refreshBtn = refresh;
-        refresh.setTextSize(18f);
         refresh.setContentDescription("刷新会话");
         refresh.setOnClickListener(v -> host.onRefresh());
         top.addView(refresh);
 
         // 「我的设备」入口：启动页是设备页，这里给对话页一个随时回去看在线状态的入口
-        TextView devices = Ui.circleButton(ctx, "🖥", Ui.CHIP_BG, Ui.INK_SUB);
+        TextView devices = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_monitor,
+                Ui.CHIP_BG, Ui.INK_SUB);
         devicesBtn = devices;
-        devices.setTextSize(16f);
         devices.setContentDescription("我的设备");
         devices.setOnClickListener(v -> host.onDevices());
         top.addView(devices);
 
-        TextView gear = Ui.circleButton(ctx, "⚙", Ui.CHIP_BG, Ui.INK_SUB);
+        TextView gear = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_sliders,
+                Ui.CHIP_BG, Ui.INK_SUB);
         gearBtn = gear;
-        gear.setTextSize(18f);
         gear.setContentDescription("连接设置");
         gear.setOnClickListener(v -> host.onSettings());
         top.addView(gear);
@@ -116,10 +116,11 @@ public final class SessionListView extends FrameLayout {
         list.setLayoutParams(llp);
         root.addView(list);
 
-        // ---- 空态：一个会话都没有时给一句话，别让抽屉看起来像坏了
+        // ---- 空态：一个安静的图标 + 一句灰字（不是干巴巴一行"空"）
         emptyView = Ui.text(ctx, "还没有对话\n点右下角 ＋ 给 Agent 派个任务", Ui.S_SUB, Ui.INK_FAINT, false);
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setLineSpacing(Ui.dp(ctx, 6), 1.1f);
+        paintEmptyIcon();
         FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         elp.gravity = Gravity.CENTER;
@@ -128,14 +129,11 @@ public final class SessionListView extends FrameLayout {
         addView(emptyView);
 
         // ---- 悬浮新建
-        TextView fab = new TextView(ctx);
+        TextView fab = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_plus,
+                Ui.BRAND_FILL, Ui.ON_BRAND, 26f, 56f);
         this.fab = fab;
-        fab.setText("＋");
-        fab.setTextSize(24f);
-        fab.setTextColor(Ui.ON_BRAND);
-        fab.setGravity(Gravity.CENTER);
-        fab.setBackground(Ui.pill(Ui.BRAND_FILL));
         fab.setElevation(Ui.dp(ctx, 6));
+        fab.setContentDescription("新建对话");
         FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(Ui.dp(ctx, 56), Ui.dp(ctx, 56));
         flp.gravity = Gravity.BOTTOM | Gravity.END;
         flp.rightMargin = Ui.dp(ctx, 18);
@@ -143,6 +141,13 @@ public final class SessionListView extends FrameLayout {
         fab.setLayoutParams(flp);
         fab.setOnClickListener(v -> host.onNewChat());
         addView(fab);
+    }
+
+    /** 空态图标：矢量显示器 + 一点透明度，颜色跟随当前主题。 */
+    private void paintEmptyIcon() {
+        if (emptyView == null) return;
+        Ui.setTopIcon(emptyView, com.dsh.mobile.R.drawable.ic_monitor,
+                Ui.alpha(Ui.INK_FAINT, 0.85f), 46f, 18f);
     }
 
     public void setStatus(String s) {
@@ -158,15 +163,15 @@ public final class SessionListView extends FrameLayout {
         setBackgroundColor(Ui.BG);
         if (header != null) header.setBackgroundColor(Ui.BG);
         if (headerTitle != null) headerTitle.setTextColor(Ui.INK);
-        if (refreshBtn != null) refreshBtn.setTextColor(Ui.INK_SUB);
-        if (devicesBtn != null) devicesBtn.setTextColor(Ui.INK_SUB);
-        if (gearBtn != null) gearBtn.setTextColor(Ui.INK_SUB);
+        if (refreshBtn != null) Ui.setIcon(refreshBtn, com.dsh.mobile.R.drawable.ic_refresh, Ui.INK_SUB);
+        if (devicesBtn != null) Ui.setIcon(devicesBtn, com.dsh.mobile.R.drawable.ic_monitor, Ui.INK_SUB);
+        if (gearBtn != null) Ui.setIcon(gearBtn, com.dsh.mobile.R.drawable.ic_sliders, Ui.INK_SUB);
         if (statusLine != null) statusLine.setTextColor(Ui.INK_FAINT);
-        if (emptyView != null) emptyView.setTextColor(Ui.INK_FAINT);
-        if (fab != null) {
-            fab.setTextColor(Ui.ON_BRAND);
-            fab.setBackground(Ui.pill(Ui.BRAND_FILL));
+        if (emptyView != null) {
+            emptyView.setTextColor(Ui.INK_FAINT);
+            paintEmptyIcon();
         }
+        if (fab != null) Ui.setIcon(fab, com.dsh.mobile.R.drawable.ic_plus, Ui.ON_BRAND);
         adapter.notifyDataSetChanged();
         requestLayout();
     }
@@ -310,9 +315,9 @@ public final class SessionListView extends FrameLayout {
                 badge.setLayoutParams(blp);
                 card.addView(badge);
             } else if (s.running) {
-                TextView dot = Ui.text(ctx, "● 运行中", Ui.S_CAP1, Ui.WARN, false);
-                dot.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 4), 0);
-                card.addView(dot);
+                LinearLayout run = Ui.dotLabel(ctx, 8f, Ui.WARN, "运行中", Ui.S_CAP1, Ui.WARN);
+                run.setPadding(Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4), 0);
+                card.addView(run);
             } else {
                 card.addView(Ui.chevron(ctx));
             }

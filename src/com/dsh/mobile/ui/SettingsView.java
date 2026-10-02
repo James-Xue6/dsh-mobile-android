@@ -92,8 +92,8 @@ public final class SettingsView extends LinearLayout {
         bar.setBackgroundColor(Ui.SURFACE);
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 6), Ui.dp(ctx, 12), Ui.dp(ctx, 6));
-        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.BRAND);
-        back.setTextSize(28f);
+        TextView back = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_chevron_left,
+                android.graphics.Color.TRANSPARENT, Ui.BRAND, 20f, 36f);
         back.setContentDescription("返回");
         back.setOnClickListener(v -> host.onBack());
         bar.addView(back);
@@ -508,10 +508,14 @@ public final class SettingsView extends LinearLayout {
         TextView t = Ui.text(ctx, title, Ui.S_FOOT, Ui.INK_SUB, false);
         t.setLetterSpacing(0.06f);   // 汉字也吃一点字间距 = iOS 组标题的"大写感"
         head.addView(t, weight(1f, 0));
-        final TextView arrow = Ui.text(ctx, open0 ? "\u25BE" : "\u25B8", Ui.S_FOOT, Ui.INK_FAINT, false);
+        // 展开/收起箭头：手写矢量 chevron（旧版是 ▾/▸ 两个字符，不同字体下胖瘦不一），
+        // 收起时朝右、展开时旋转 90° 朝下 —— 旋转的是同一个图形，两端永远等粗。
+        final TextView arrow = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_chevron_right,
+                0x00000000, Ui.INK_FAINT, 18f, 0f, 16f);
+        arrow.setRotation(open0 ? 90f : 0f);
         head.addView(arrow);
 
-        final android.view.View line = Ui.divider(ctx);
+        final android.view.View line = Ui.insetDivider(ctx, 16);
         line.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         final LinearLayout box = Ui.col(ctx);
@@ -523,7 +527,7 @@ public final class SettingsView extends LinearLayout {
             boolean show = box.getVisibility() != android.view.View.VISIBLE;
             box.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
             line.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
-            arrow.setText(show ? "\u25BE" : "\u25B8");
+            arrow.setRotation(show ? 90f : 0f);
             sectionOpen.put(title, show);
         });
 

@@ -41,6 +41,8 @@ public final class DrawerHost extends FrameLayout {
     private final FrameLayout content;
     private final View scrim;
     private final FrameLayout drawer;
+    /** 抽屉右缘的发丝线（主题切换要换色）。 */
+    private final View edge;
 
     /** 抽屉当前平移量：0 = 全开，-drawerWidth = 全关。 */
     private float tx;
@@ -75,6 +77,14 @@ public final class DrawerHost extends FrameLayout {
         drawer = new FrameLayout(ctx);
         drawer.setBackgroundColor(Ui.BG);
         drawer.setElevation(Ui.dp(ctx, 10));
+        // 抽屉右缘一条 1px 发丝线：抽屉与内容层本来只靠阴影分界，而深色档阴影在纯黑底上
+        // 根本看不见 —— 补一条亮线，两层在任何主题下都"分得开"（层次感的关键小细节）。
+        edge = new View(ctx);
+        edge.setBackgroundColor(Ui.SEP);
+        FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
+                Math.max(1, Ui.dp(ctx, 0.5f)), FrameLayout.LayoutParams.MATCH_PARENT);
+        elp.gravity = android.view.Gravity.END;
+        drawer.addView(edge, elp);
         // 宽度在 onMeasure 里按屏宽比例写进 LayoutParams；先丢到屏幕外，避免首帧闪一下
         drawer.setTranslationX(-100000f);
         addView(drawer, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
@@ -97,6 +107,7 @@ public final class DrawerHost extends FrameLayout {
     public void applyTheme() {
         content.setBackgroundColor(Ui.BG);
         drawer.setBackgroundColor(Ui.BG);
+        if (edge != null) edge.setBackgroundColor(Ui.SEP);
     }
 
     public boolean isOpen() { return open; }

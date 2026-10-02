@@ -83,7 +83,7 @@ public final class Ui {
     public static int INK            = 0xFF000000;
     public static int INK_SUB        = 0xFF8E8E93;
     public static int INK_FAINT      = 0xFFAEAEB2;
-    public static int LINE           = 0xFFE5E5EA;
+    public static int LINE           = 0x0F000000;
     public static int SEP            = 0xFFC6C6C8;
     public static int PRESS          = 0xFFD1D1D6;
     public static int OK             = 0xFF34C759;
@@ -119,6 +119,19 @@ public final class Ui {
     public static int SCAN_TIP_BG    = 0x99000000;
     public static int SCAN_PANEL_BG  = 0xE6101010;
 
+    // ---- 高级感三件套（2026-10-02「看着并不高级」返工）
+    //
+    // HAIRLINE：卡片 1px 极低对比描边。它替掉了原来的 LINE 用作卡片描边 —— 浅色下是
+    //           #0000000F（约 6% 黑），深色下是 #FFFFFF14（约 8% 白）。iOS 的卡片从不
+    //           用「看得见的灰边」，靠的就是这种几乎看不见、但让边缘不发虚的发丝线。
+    // SHADOW  ：卡片柔和阴影的基色（只给 elevation 用；自绘阴影成本高，交给系统）。
+    // BRAND_G1/G2：主按钮的细腻纵向渐变（#0A84FF → #0071E3）。纯色实心按钮一眼就是
+    //           「系统默认控件」，一段极窄的同色系渐变就能把它从"土"里拉出来。
+    public static int HAIRLINE       = 0x0F000000;
+    public static int SHADOW         = 0x14000000;
+    public static int BRAND_G1       = 0xFF0A84FF;
+    public static int BRAND_G2       = 0xFF0071E3;
+
     /** 当前生效的是不是深色色板。 */
     private static boolean dark = false;
 
@@ -140,14 +153,14 @@ public final class Ui {
             BG             = 0xFF000000;   // 分组背景：纯黑
             SURFACE        = 0xFF1C1C1E;   // 卡片 / 顶部栏：比背景亮一档
             SURFACE_2      = 0xFF2C2C2E;   // 组内嵌套卡片（更亮一层）
-            BRAND          = 0xFF0A84FF;   // systemBlue（深色下**不**提亮，iOS 就是这个值）
+            BRAND          = 0xFF4CA2FF;   // systemBlue 深色档：比浅色档提亮一档（深底上更通透）
             BRAND_FILL     = 0xFF0A84FF;
-            BRAND_DEEP     = 0xFF0A84FF;
+            BRAND_DEEP     = 0xFF6FB8FF;
             BRAND_SOFT     = 0xFF0A2540;   // 蓝色 12% 的深色淡底
             INK            = 0xFFFFFFFF;
             INK_SUB        = 0xFF98989F;
             INK_FAINT      = 0xFF7C7C80;
-            LINE           = 0xFF2C2C2E;   // 卡片发丝线：很淡，只用来"分界"
+            LINE           = 0x1FFFFFFF;   // 卡片发丝线：8% 白（深色下唯一能"立起卡片"的东西）
             SEP            = 0xFF38383A;   // iOS opaqueSeparator
             PRESS          = 0xFF3A3A3C;
             OK             = 0xFF30D158;
@@ -181,6 +194,10 @@ public final class Ui {
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
+            HAIRLINE       = 0x14FFFFFF;   // 深色卡片发丝线：#FFFFFF14（用户指定的深色描边）
+            SHADOW         = 0x33000000;   // 纯黑底上阴影不可见，留着只为代码一致
+            BRAND_G1       = 0xFF0A84FF;   // 渐变填充与白字对比度与浅色档一致，不随主题变
+            BRAND_G2       = 0xFF0071E3;
         } else {
             // ---- 浅色：iOS systemGroupedBackground #F2F2F7 + 纯白卡片 + #0A84FF 主色
             BG             = 0xFFF2F2F7;
@@ -193,7 +210,7 @@ public final class Ui {
             INK            = 0xFF000000;
             INK_SUB        = 0xFF8E8E93;
             INK_FAINT      = 0xFFAEAEB2;
-            LINE           = 0xFFE5E5EA;
+            LINE           = 0x0F000000;   // 卡片发丝线：6% 黑（几乎看不见，但边缘不发虚）
             SEP            = 0xFFC6C6C8;
             PRESS          = 0xFFD1D1D6;
             OK             = 0xFF34C759;
@@ -227,6 +244,10 @@ public final class Ui {
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
+            HAIRLINE       = 0x0F000000;   // 浅色卡片发丝线：#0000000F
+            SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
+            BRAND_G1       = 0xFF0A84FF;
+            BRAND_G2       = 0xFF0071E3;
         }
     }
 
@@ -352,8 +373,22 @@ public final class Ui {
         t.setTextColor(color);
         t.setLineSpacing(dp(c, 3), 1.06f);
         t.setIncludeFontPadding(false);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        // 「加粗」分两档（2026-10-02 高级感返工）：
+        //   · 大标题（≥24sp）才用真 Bold —— 那是唯一需要"压得住画面"的地方；
+        //   · 其余一律 medium。中文字形笔画密，DEFAULT_BOLD 在 17sp 上会把字糊成一团，
+        //     这正是"看着不精致"的一个主要来源；medium 有分量又不糊。
+        if (bold) t.setTypeface(sizeSp >= 24f ? Typeface.DEFAULT_BOLD : medium());
+        // 大标题收紧字距（-0.02em），是 iOS Large Title 的关键细节：字大 + 字距松 = 廉价
+        if (sizeSp >= 30f) t.setLetterSpacing(-0.02f);
         return t;
+    }
+
+    /** 中文正文/按钮/标题统一用的 medium 字重（sans-serif-medium，系统自带，无依赖）。 */
+    private static Typeface MEDIUM;
+
+    public static Typeface medium() {
+        if (MEDIUM == null) MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+        return MEDIUM;
     }
 
     public static LinearLayout row(Context c) {
@@ -446,7 +481,7 @@ public final class Ui {
                     case android.view.MotionEvent.ACTION_DOWN:
                         down = true;
                         view.animate().cancel();
-                        view.animate().alpha(0.55f)
+                        view.animate().alpha(0.72f)
                                 .scaleX(scale).scaleY(scale).setDuration(90).start();
                         break;
                     case android.view.MotionEvent.ACTION_UP:
@@ -661,16 +696,105 @@ public final class Ui {
     }
 
     /**
-     * 一张 iOS 分组卡片：纯白/深灰底、14dp 圆角、**极细**发丝描边（不是粗彩边）。
-     * 卡片靠"底色与分组背景的色差"立起来（iOS 的做法），不靠 elevation 阴影
-     * —— Android 的 elevation 在自绘背景上表现很差，会把浅色卡片画成一坨脏阴影。
+     * 一张 iOS 分组卡片：纯白/深灰底、14dp 圆角、**1px 极低对比**发丝描边 + 一层极浅阴影。
+     *
+     * <p>2026-10-02 高级感返工：旧版只有「白底 + 灰边」，卡片是**平贴**在灰底上的，
+     * 用户的原话就是"看着并不高级，一点也没"。现在改成本项目的层次公式：
+     * <pre>
+     *   背景 #F2F2F7  +  卡片 #FFFFFF  +  1px #0000000F 描边  +  elevation 2dp 柔和阴影
+     * </pre>
+     * 阴影交给系统 elevation（硬件模糊，质量比自绘的同心圆假阴影高得多）；
+     * {@link CardBg#getOutline} 把外轮廓交给系统，所以阴影严格贴着 14dp 圆角走，
+     * 不会出现"方角影子 + 圆角卡片"那种廉价错位。
+     *
+     * <p>深色档不靠阴影（黑底上阴影本来也看不见），靠 #1C1C1E 卡片 + #FFFFFF14 描边。
      */
     public static LinearLayout card(Context c) {
+        return card(c, 0x00000000);
+    }
+
+    /**
+     * 带左侧强调条的卡片：3dp 主色条贴在卡片左缘（圆角内裁剪）。
+     *
+     * <p>替代旧版的「整卡一圈蓝框」—— 那是用户点名的"土"元素。一整圈彩边会抢走内容的注意力，
+     * 左侧一条 3dp 的强调条只提示"这是当前项"，安静得多。
+     *
+     * @param accent 强调条颜色；{@code 0x00000000} = 不画条（等价于 {@link #card}）
+     */
+    public static LinearLayout accentCard(Context c, int accent) {
+        return card(c, accent);
+    }
+
+    private static LinearLayout card(Context c, int accent) {
         LinearLayout c0 = col(c);
-        c0.setBackground(roundStroke(dp(c, R_CARD), SURFACE, dp(c, 0.5f), LINE));
+        c0.setBackground(new CardBg(dp(c, R_CARD), SURFACE, dp(c, 1f), LINE, accent, dp(c, 3f)));
+        c0.setElevation(dp(c, 2f));
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return c0;
+    }
+
+    /**
+     * 卡片底：圆角填充 + 1px 发丝描边 + 可选左侧 3dp 强调条。
+     *
+     * <p>为什么要自绘而不是 {@code LayerDrawable}：强调条要"被卡片圆角裁掉"才不露方角，
+     * 而 LayerDrawable 的层内缩是**创建时**按像素定死的 —— 手搓 View 树里卡片宽度要等
+     * 测量后才知道，创建时根本拿不到。自绘可以在 draw() 里用当帧的真实 bounds 裁剪。
+     */
+    public static final class CardBg extends android.graphics.drawable.Drawable {
+        private final android.graphics.Paint p =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path shape = new android.graphics.Path();
+        private final float radius, stroke, barW;
+        private final int fill, line, accent;
+
+        public CardBg(float radius, int fill, float stroke, int line, int accent, float barW) {
+            this.radius = radius;
+            this.fill = fill;
+            this.stroke = Math.max(1f, stroke);
+            this.line = line;
+            this.accent = accent;
+            this.barW = barW;
+        }
+
+        @Override
+        public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            float w = b.width(), h = b.height();
+            float inset = stroke / 2f;
+            shape.reset();
+            shape.addRoundRect(new android.graphics.RectF(inset, inset, w - inset, h - inset),
+                    radius, radius, android.graphics.Path.Direction.CW);
+
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setColor(fill);
+            cv.drawPath(shape, p);
+
+            if (android.graphics.Color.alpha(accent) != 0 && barW > 0f) {
+                cv.save();
+                cv.clipPath(shape);
+                p.setColor(accent);
+                cv.drawRect(0f, 0f, barW, h, p);
+                cv.restore();
+            }
+
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(stroke);
+            p.setColor(line);
+            cv.drawPath(shape, p);
+        }
+
+        @Override public void setAlpha(int a) { p.setAlpha(a); invalidateSelf(); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { p.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
+
+        /** 外轮廓 = 那张圆角矩形，系统 elevation 的阴影就贴着它画。 */
+        @Override public void getOutline(android.graphics.Outline o) {
+            android.graphics.Rect b = getBounds();
+            float inset = stroke / 2f;
+            o.setRoundRect(Math.round(inset), Math.round(inset),
+                    Math.round(b.width() - inset), Math.round(b.height() - inset), radius);
+        }
     }
 
     /** 卡片里的一行：最小 52dp 高、左右 16dp 内边距（iOS 的列表行规格）。 */
@@ -683,10 +807,235 @@ public final class Ui {
         return r;
     }
 
-    /** iOS 的 "›" 细箭头（列表行右侧的"可以进去"暗示）。 */
+    /**
+     * iOS 的 "›" 细箭头（列表行右侧的"可以进去"暗示）。
+     *
+     * <p>2026-10-02：不再是 "›" 这个字符。字符箭头的粗细/角度由字体决定，不同机器上
+     * 还不一样，放大就是"字符拼的"。现在换成手写矢量
+     * {@code res/drawable/ic_chevron_right.xml}（1.75dp 线宽、圆角端点）。
+     */
     public static TextView chevron(Context c) {
-        TextView t = text(c, "›", S_TITLE3, INK_FAINT, false);
-        t.setPadding(dp(c, 6), 0, 0, 0);
+        return iconBox(c, com.dsh.mobile.R.drawable.ic_chevron_right, 0x00000000, INK_FAINT,
+                18f, 0f, 16f);
+    }
+
+    // ------------------------------------------------------------ 矢量图标（手写，无依赖）
+
+    /**
+     * 取一个矢量图标并按 {@code color} 上色（{@code res/drawable/ic_*.xml}，统一 1.75dp 线宽）。
+     *
+     * <p>为什么要自己写矢量而不是用字符：显示器 🖥、齿轮 ⚙ 这类 emoji/符号在不同 ROM 上
+     * 字形完全不同，有的还是彩色 emoji —— 那是"看着不高级"最直接的来源。矢量图标尺寸、
+     * 线宽、端点全部可控，放大缩小都锐利。
+     */
+    public static android.graphics.drawable.Drawable iconDrawable(Context c, int resId,
+                                                                  float sizeDp, int color) {
+        if (c == null || resId == 0) return null;
+        android.graphics.drawable.Drawable d;
+        try {
+            d = c.getResources().getDrawable(resId, c.getTheme());
+        } catch (Throwable t) {
+            return null;
+        }
+        if (d == null) return null;
+        d = d.mutate();
+        d.setTint(color);
+        int s = dp(c, sizeDp);
+        d.setBounds(0, 0, s, s);
+        return d;
+    }
+
+    /**
+     * 「圆角底 + 居中矢量图标」的合成底。
+     *
+     * <p>为什么做成 Drawable 而不是 {@code ImageView}：本 App 的圆形按钮字段全是
+     * {@code TextView}（主题切换时各 View 直接改它们的字色/底色）。把它换成 ImageView
+     * 会牵动一批字段类型和 applyTheme 分支；做成**背景**就能保持字段类型不变 ——
+     * 文本留空，图形由背景画，{@link #setIcon} 负责换图换色。
+     */
+    public static final class IconBg extends android.graphics.drawable.Drawable {
+        private final Context ctx;
+        private final GradientDrawable box;
+        private final int fill;
+        private float radiusDp, iconDp;
+        private android.graphics.drawable.Drawable glyph;
+
+        public IconBg(Context c, int resId, int color, int fill, float radiusDp, float iconDp) {
+            this.ctx = c;
+            this.fill = fill;
+            this.radiusDp = radiusDp;
+            this.iconDp = iconDp;
+            box = round(dp(c, radiusDp), fill);
+            glyph = iconDrawable(c, resId, iconDp, color);
+        }
+
+        /** 换图形与颜色（底色、尺寸沿用创建时的参数）。 */
+        public void setGlyph(int resId, int color) {
+            glyph = iconDrawable(ctx, resId, iconDp, color);
+            invalidateSelf();
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            box.setBounds(b);
+            box.draw(cv);
+            if (glyph == null) return;
+            int s = Math.min(dp(ctx, iconDp), Math.min(b.width(), b.height()));
+            int cx = b.centerX(), cy = b.centerY();
+            glyph.setBounds(cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2);
+            glyph.draw(cv);
+        }
+
+        @Override public void setAlpha(int a) { box.setAlpha(a); if (glyph != null) glyph.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) {
+            box.setColorFilter(f);
+            if (glyph != null) glyph.setColorFilter(f);
+        }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+        @Override public void getOutline(android.graphics.Outline o) { box.getOutline(o); }
+    }
+
+    /**
+     * 圆形图标按钮（默认 36dp 触区 + 19dp 图标），替代原来的 {@link #circleButton} 字符版。
+     * 返回的仍然是 {@code TextView}（空文本），字段类型与 applyTheme 分支都不用改。
+     */
+    public static TextView circleIconButton(Context c, int resId, int fill, int fg) {
+        return circleIconButton(c, resId, fill, fg, 19f, 36f);
+    }
+
+    public static TextView circleIconButton(Context c, int resId, int fill, int fg,
+                                            float iconDp, float boxDp) {
+        TextView t = new TextView(c);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(new IconBg(c, resId, fg, fill, boxDp / 2f, iconDp));
+        t.setLayoutParams(new LinearLayout.LayoutParams(dp(c, boxDp), dp(c, boxDp)));
+        t.setClickable(true);
+        tap(t, 0.92f);
+        return t;
+    }
+
+    /**
+     * 圆角方块图标（如设备卡左侧那个 42dp 图标底）：圆角 {@code radiusDp}、
+     * 底色 {@code fill}、图标 {@code iconDp} 居中。
+     *
+     * @param radiusDp 圆角；{@code 0} = 直角，{@code boxDp/2} = 圆形
+     */
+    public static TextView iconBox(Context c, int resId, int fill, int fg,
+                                   float boxDp, float radiusDp, float iconDp) {
+        TextView t = new TextView(c);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(new IconBg(c, resId, fg, fill, radiusDp, iconDp));
+        t.setLayoutParams(new LinearLayout.LayoutParams(dp(c, boxDp), dp(c, boxDp)));
+        return t;
+    }
+
+    /** 换掉 {@link #circleIconButton} / {@link #iconBox} 的图形与颜色（尺寸、底色沿用）。 */
+    public static void setIcon(TextView v, int resId, int color) {
+        if (v == null) return;
+        android.graphics.drawable.Drawable d = v.getBackground();
+        if (d instanceof IconBg) {
+            ((IconBg) d).setGlyph(resId, color);
+            v.invalidate();
+        }
+    }
+
+    /**
+     * 连**底色**一起换掉的版本（运行中的发送键：↑ 蓝底 → ■ 灰底）。
+     *
+     * <p>{@link IconBg} 的底色是创建时烘进去的，换底色只能重建一个底。
+     * 尺寸参数（{@code boxDp}/{@code iconDp}）由调用方按原样传回，避免出现"换个图标就缩水"。
+     */
+    public static void setIconBg(TextView v, int resId, int color, int fill,
+                                 float boxDp, float iconDp) {
+        if (v == null) return;
+        v.setBackground(new IconBg(v.getContext(), resId, color, fill, boxDp / 2f, iconDp));
+        v.invalidate();
+    }
+
+    /**
+     * 把任意 drawable 包成「固定尺寸」的。
+     *
+     * <p>为什么必须包：{@code TextView.setCompoundDrawablesWithIntrinsicBounds} 会用
+     * drawable 的 **intrinsic** 尺寸去 setBounds（矢量 XML 里写的是 24dp），
+     * 也就是说"传进去的尺寸参数"会被它覆盖掉 —— 想按 14dp 显示就必须让 intrinsic 也是 14dp。
+     */
+    private static final class FixedSizeDrawable extends android.graphics.drawable.Drawable {
+        private final android.graphics.drawable.Drawable inner;
+        private final int size;
+
+        FixedSizeDrawable(android.graphics.drawable.Drawable inner, int size) {
+            this.inner = inner;
+            this.size = size;
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            inner.setBounds(getBounds());
+            inner.draw(cv);
+        }
+        @Override public int getIntrinsicWidth() { return size; }
+        @Override public int getIntrinsicHeight() { return size; }
+        @Override public void setAlpha(int a) { inner.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { inner.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** 指定尺寸的矢量图标（用于 compound drawable，见 {@link FixedSizeDrawable}）。 */
+    private static android.graphics.drawable.Drawable sizedIcon(Context c, int resId,
+                                                                int color, float sizeDp) {
+        android.graphics.drawable.Drawable d = iconDrawable(c, resId, sizeDp, color);
+        return d == null ? null : new FixedSizeDrawable(d, dp(c, sizeDp));
+    }
+
+    /** 给文字加一个左侧矢量小图标（如「N 子智能体」前面的双人图标）。 */
+    public static void setLeadingIcon(TextView t, int resId, int color, float sizeDp, float gapDp) {
+        if (t == null) return;
+        t.setCompoundDrawablesWithIntrinsicBounds(
+                sizedIcon(t.getContext(), resId, color, sizeDp), null, null, null);
+        t.setCompoundDrawablePadding(dp(t.getContext(), gapDp));
+    }
+
+    /** 给文字加一个**上方**矢量图标（空态那种"大图标 + 一句话"的排版）。 */
+    public static void setTopIcon(TextView t, int resId, int color, float sizeDp, float gapDp) {
+        if (t == null) return;
+        t.setCompoundDrawablesWithIntrinsicBounds(
+                null, sizedIcon(t.getContext(), resId, color, sizeDp), null, null);
+        t.setCompoundDrawablePadding(dp(t.getContext(), gapDp));
+    }
+
+    /**
+     * 小圆点（8dp）：在线状态、工具状态用的"●"。字符点在不同字重下大小不一，
+     * 而且会被行高带偏；一个真 View 的圆点尺寸绝对可控、垂直居中永远正确。
+     */
+    public static View dot(Context c, float sizeDp, int color) {
+        View v = new View(c);
+        v.setBackground(pill(color));
+        v.setLayoutParams(new LinearLayout.LayoutParams(dp(c, sizeDp), dp(c, sizeDp)));
+        return v;
+    }
+
+    /** 圆点 + 灰字 的状态组合（在线/离线、运行中/已完成）。 */
+    public static LinearLayout dotLabel(Context c, float dotDp, int dotColor,
+                                        String text, float sizeSp, int textColor) {
+        LinearLayout r = row(c);
+        r.addView(dot(c, dotDp, dotColor));
+        TextView t = text(c, text, sizeSp, textColor, false);
+        t.setPadding(dp(c, 7), 0, 0, 0);
+        r.addView(t);
+        return r;
+    }
+
+    /**
+     * 页脚一行低对比小字（版本号 / 一句提示）。
+     *
+     * <p>「我的设备」页在只有一张卡时下半屏是一大片空白，页面会显得"没做完"。
+     * iOS 的做法是在内容后面留一句安静的灰字把页面收住，而不是硬撑内容。
+     */
+    public static TextView footer(Context c, String s) {
+        TextView t = text(c, s, S_CAP1, INK_FAINT, false);
+        t.setGravity(Gravity.CENTER);
+        t.setLineSpacing(dp(c, 3), 1.1f);
+        t.setLetterSpacing(0.01f);
+        t.setPadding(dp(c, 8), dp(c, 28), dp(c, 8), dp(c, 8));
         return t;
     }
 
@@ -738,23 +1087,74 @@ public final class Ui {
         return e;
     }
 
-    /** 主按钮：主色实心圆角（保存 / 连接这类正向操作），带 iOS 按压反馈。 */
+    /**
+     * 主按钮：**真胶囊**（圆角 = 高度一半）+ 细腻的蓝色纵向渐变 + 白字 17sp medium。
+     *
+     * <p>2026-10-02 高级感返工：旧版是 14dp 圆角的纯色实心块 —— 圆角不是胶囊、
+     * 纯色无光感，观感就是"一个系统默认按钮"。现在两处改：
+     * ① {@link #brandPill()} 把圆角设成 999（无论多高都是胶囊）；
+     * ② 用 {@code GradientDrawable.setColors} 铺一层 #0A84FF → #0071E3 的极窄渐变，
+     *    上沿微亮、下沿微沉，按钮立刻有了"实体"的光感。
+     */
     public static TextView primaryButton(Context c, String s) {
-        TextView t = text(c, s, S_CALLOUT, ON_BRAND, true);
+        TextView t = text(c, s, S_HEAD, ON_BRAND, false);
+        t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(c, 14), dp(c, 14), dp(c, 14), dp(c, 14));
-        t.setBackground(round(dp(c, 14), BRAND_FILL));
+        t.setMinHeight(dp(c, 50));
+        t.setPadding(dp(c, 20), dp(c, 15), dp(c, 20), dp(c, 15));
+        t.setBackground(brandPill());
         t.setClickable(true);
         tap(t);
         return t;
     }
 
-    /** 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），无边框，带按压反馈。 */
+    /**
+     * 主色渐变填充（上 #0A84FF → 下 #0071E3）。
+     *
+     * @param radiusDp 圆角；传 {@code 999} = 胶囊（按钮）。**气泡不能传 999**：
+     *                 圆角会被夹到 min(宽,高)/2，多行气泡会变成"体育场形"。
+     */
+    public static GradientDrawable brandGradient(float radiusDp) {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM, new int[] { BRAND_G1, BRAND_G2 });
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setCornerRadius(radiusDp);
+        return d;
+    }
+
+    /** 主按钮的胶囊底：细腻蓝色渐变（上 #0A84FF → 下 #0071E3），圆角 = 高度一半。 */
+    public static GradientDrawable brandPill() {
+        return brandGradient(999f);
+    }
+
+    /** 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），**无边框**胶囊，带按压反馈。 */
     public static TextView secondaryButton(Context c, String s) {
-        TextView t = text(c, s, S_CALLOUT, BRAND, false);
+        TextView t = text(c, s, S_HEAD, BRAND, false);
+        t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(c, 14), dp(c, 14), dp(c, 14), dp(c, 14));
-        t.setBackground(round(dp(c, 14), CHIP_BG));
+        t.setMinHeight(dp(c, 50));
+        t.setPadding(dp(c, 20), dp(c, 15), dp(c, 20), dp(c, 15));
+        t.setBackground(pill(CHIP_BG));
+        t.setClickable(true);
+        tap(t);
+        return t;
+    }
+
+    /**
+     * 纯文字按钮（**无底色**）：取消、以及删除这类危险操作。
+     *
+     * <p>危险操作绝不能做成一块大红底 —— 那是"土"的另一半来源。iOS 的删除入口就是
+     * 一行红字，视觉权重低但语义明确，不会把整个页面的注意力拽过去。
+     *
+     * @param color 文字色（危险操作用 {@link #ERR}）
+     */
+    public static TextView textButton(Context c, String s, int color) {
+        TextView t = text(c, s, S_HEAD, color, false);
+        t.setTypeface(medium());
+        t.setGravity(Gravity.CENTER);
+        t.setMinHeight(dp(c, 46));
+        t.setPadding(dp(c, 14), dp(c, 13), dp(c, 14), dp(c, 13));
+        t.setBackground(pill(0x00000000));
         t.setClickable(true);
         tap(t);
         return t;
