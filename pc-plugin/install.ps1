@@ -8,8 +8,9 @@
 它会做四件事：
  1. 把 pc-plugin\dsh-mobile-access 复制到 ~/.dsh/local-plugins/dsh-mobile-access（旧目录先备份）
  2. 把安装包 dist\dsh-mobile.apk 放进插件目录的 app\（面板据此提供「扫码下载 App」）
- 3. 在目标 profile 的 package.json 里登记依赖与 bundles
-    （同时确保 dsh-plugin-mobile-gateway 也在，协议层依赖它）
+ 3. 在目标 profile 的 package.json 里登记依赖与 bundle
+    （dsh-plugin-mobile-gateway 只登记依赖；它的宿主行由本插件的 cordis.patch.yml 挂载，
+     旧版写进 bundles 的残留项会被摘掉，避免同一个行被两个 bundle 层各插一次）
  4. 在目标 profile 的 cordis.patch.yml 里补一段 mobile-gateway 配置（lanPort 3091，避开 dsh-pocket 的 3081）
 
 改完需要**重启一次 DSH** 才生效。原文件都会先备份成 *.bak-install。
@@ -109,10 +110,15 @@ if (-not $pkg.dependencies.PSObject.Properties[$pluginName]) {
   } else { Info "依赖已有 $pluginName" }
 }
 
+# 只把本插件登记为 bundle：dsh-plugin-mobile-gateway 现在由本插件自己的
+# cordis.patch.yml 挂载（id: mobile-gateway），这里不再把它塞进 bundles；
+# 已经装过旧版的要把残留项摘掉，否则同一个行会被两个 bundle 层各插一次。
 $bundles = @($pkg.dsh.profile.bundles)
-foreach ($b in @($gatewayName, $pluginName)) {
-  if ($bundles -notcontains $b) { $bundles += $b; Ok "bundles + $b" }
-  else { Info "bundles 已有 $b" }
+if ($bundles -notcontains $pluginName) { $bundles += $pluginName; Ok "bundles + $pluginName" }
+else { Info "bundles 已有 $pluginName" }
+if ($bundles -contains $gatewayName) {
+  $bundles = @($bundles | Where-Object { $_ -ne $gatewayName })
+  Ok "bundles - $gatewayName（改由本插件的 patch 挂载，避免重复行）"
 }
 $pkg.dsh.profile.bundles = $bundles
 $pkg | ConvertTo-Json -Depth 20 | Set-Content $pkgPath -Encoding utf8

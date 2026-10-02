@@ -19,7 +19,9 @@ cd dsh-mobile-android
 pwsh -File .\pc-plugin\install.ps1
 ```
 
-脚本会：把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、在 DSH profile 里登记依赖。
+脚本会：把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、在 DSH profile 里登记依赖与 bundle。
+**只装这一个插件就够了** —— 协议层 `dsh-plugin-mobile-gateway` 已声明为本插件的依赖，
+由脚本一并登记；它的行也由本插件自己的组合声明挂载，不用你另外装第二个插件。
 
 > 用 SSH 的话，第一条命令换成 `git clone git@github.com:James-Xue6/dsh-mobile-android.git`。
 
@@ -42,7 +44,8 @@ pwsh -File .\pc-plugin\install.ps1
 在同一张卡片上点 **「生成内网二维码」**（在家用）或 **「生成公网二维码」**（出门用），用 App 扫它。
 **内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
 
-> 电脑端需要 `dsh-plugin-mobile-gateway`（协议层依赖）。安装脚本会自动登记；没装的话从 DSH 插件市场装一次。
+> 电脑端的协议层是第三方 MIT 插件 `dsh-plugin-mobile-gateway`，它**已声明为本插件的依赖**：
+> 安装脚本会一并登记，挂载也由本插件的组合声明负责 —— 不需要你单独装第二个插件。
 
 ---
 
@@ -71,7 +74,7 @@ pwsh -File .\pc-plugin\install.ps1
 
 **重启 DSH 后找不到「移动设备」按钮**
 - 插件装完必须**重启一次 DSH 桌面版**才生效。
-- 还不行就确认 `dsh-plugin-mobile-gateway` 已装（DSH 插件市场里搜一下）。
+- 还不行就确认协议层依赖 `dsh-plugin-mobile-gateway` 已随本插件装好（profile 的 `package.json` 依赖里应有它）。
 
 **覆盖安装报「应用未安装」**
 - 说明签名和旧版不一致。只能用原来的签名密钥库（`%USERPROFILE%\.dsh-mobile-keys\dshmobile.jks`）重新打包；
@@ -121,6 +124,7 @@ dsh-mobile-android/
 
 App 只实现 `dsh-mobile-v1` 协议（WebSocket + JSON），不碰 DSH 内部；
 协议层由第三方 MIT 插件 `dsh-plugin-mobile-gateway` 承担，本仓库的 `pc-plugin/` 只做接入编排与界面。
+安装面只有 `dsh-mobile-access` 一个包：它声明依赖网关，并在自己的 `cordis.patch.yml` 里挂载网关的行。
 
 ```
 Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desktop profile)

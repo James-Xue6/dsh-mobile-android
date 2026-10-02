@@ -4,3 +4,39 @@
 - insert:
     - id: mobile-access
       name: dsh-mobile-access
+
+# ── 依赖包 dsh-plugin-mobile-gateway 的组合声明 ──────────────────────────
+# 本包已把网关声明为 dependencies，因此安装本包即自动安装网关；这里再把
+# 网关原本由它自己 bundle patch 提供的两条声明搬过来，安装方就只需要装
+# 本包一个，网关作为依赖自动装好并挂载（协议层，无独立界面）。
+#
+# 维护点：下面 config 是照抄 dsh-plugin-mobile-gateway@0.9.0 的默认值。
+# 网关升级若改了这些默认值，这里要跟着改一次（否则会以上游为准变成本包为准）。
+# 例：上游默认 lanPort 3081；安装脚本会在 profile 的 cordis.patch.yml 里
+# 覆盖成 3091（避开 dsh-pocket 曾占用的 3081），该覆盖仍按层序生效。
+- insert:
+    - id: mobile-gateway
+      name: 'dsh-plugin-mobile-gateway'
+      config:
+        # Secure by default: every mobile WebSocket must authenticate with a
+        # paired device credential. Pair/revoke APIs remain local-machine only.
+        gatewayEnabled: false
+        gatewayWaitTimeoutMs: 300000
+        requireAuth: true
+        adminLoopbackOnly: true
+        pairingTtlMs: 300000
+        # DSH WebUI remains loopback-only on 3080. This row owns the
+        # authenticated, WebSocket-only LAN listener for phones.
+        lanEnabled: true
+        lanHost: 0.0.0.0
+        lanPort: 3081
+        # Written automatically by `sudo npx dsh-plugin-mobile-gateway setup`.
+        publicUrlFile: /etc/dsh-mobile-gateway/public-url
+
+# 网关的 `search` 查询通道需要全量会话索引，而 dsh-web-app 默认把它关成
+# `openAt: never`。这条把部署打开为按需加载：node:sqlite 与内存索引都推迟到
+# 第一次搜索时才建立，不影响启动。patch 会整体替换该行 config，故两键都重述。
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: first-search

@@ -14,6 +14,10 @@ pwsh -File .\pc-plugin\install.ps1
 脚本会：复制插件到 `~/.dsh/local-plugins/`、把 `dist/dsh-mobile.apk` 放进插件目录
 （并把 `app/version.txt` 写成该 APK 的 `versionName`，面板显示的就是这个包的真实版本）、
 在 profile 的 `package.json` 登记依赖与 bundles、补一段 `mobile-gateway` 配置（lanPort 3091）。
+
+**装这一个包就够了**：协议层 `dsh-plugin-mobile-gateway` 已写进本包 `dependencies`，
+本包的 `cordis.patch.yml` 也把它的宿主行（以及手机 `search` 通道需要的
+`session-query-sqlite → openAt: first-search`）一并挂载，安装方不需要再单独装第二个插件。
 **改完重启一次 DSH 生效。**
 
 ## 二维码里编的到底是什么（别改错）
@@ -108,5 +112,12 @@ DSH 的 `/api/*` 有浏览器信任围栏（未知路径 401）；实测：
 
 ## 依赖
 
-- `dsh-plugin-mobile-gateway` 0.9.0 及以上（提供全部协议能力）
+- `dsh-plugin-mobile-gateway` 0.9.0 及以上（提供全部协议能力）——**已声明为本包 `dependencies`**，
+  装本包即自动装上；它的宿主行由本包 `cordis.patch.yml` 挂载（MIT，版权归其作者）
 - 生成「安装包/配对」二维码时复用网关依赖里的 `qrcode`；解析不到会优雅降级为纯链接
+
+## 变更
+
+- **1.0.1** —— 把协议层依赖并入本包的安装面：新增 `dependencies.dsh-plugin-mobile-gateway`，
+  并在 `cordis.patch.yml` 里挂载网关的宿主行与 `session-query-sqlite` 覆盖；
+  安装脚本不再把网关写进 profile 的 `bundles`（旧版残留项会被摘掉）。安装方只装本包一个。

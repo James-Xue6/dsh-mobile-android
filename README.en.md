@@ -21,7 +21,9 @@ pwsh -File .\pc-plugin\install.ps1
 ```
 
 The script copies the plugin into `~/.dsh/local-plugins/`, drops the APK into the plugin directory, and
-registers the dependency in your DSH profile.
+registers the dependency and bundle in your DSH profile.
+**Installing this one plugin is enough** — the protocol layer `dsh-plugin-mobile-gateway` is declared as its
+dependency and registered by the same script, and its row is mounted by this plugin's own bundle patch.
 
 > With SSH, replace the first command with `git clone git@github.com:James-Xue6/dsh-mobile-android.git`.
 
@@ -46,8 +48,9 @@ On the same card click **"Generate LAN QR code"** (at home) or **"Generate publi
 with the app. **Both the LAN and the public address are filled in at once**, so you can use the LAN at home and
 switch to the public address when you go out, with no manual typing.
 
-> The computer needs `dsh-plugin-mobile-gateway` (the protocol layer). The install script registers it
-> automatically; if it is missing, install it once from the DSH plugin marketplace.
+> The protocol layer is the third-party MIT plugin `dsh-plugin-mobile-gateway`, declared as a **dependency**
+> of this plugin: the install script registers it and this plugin's own bundle patch mounts its row, so you
+> never install a second plugin by hand.
 
 ---
 
@@ -76,7 +79,8 @@ switch to the public address when you go out, with no manual typing.
 
 **The "Mobile devices" button is missing after restarting DSH**
 - The plugin only takes effect after you **restart the DSH desktop app once**.
-- If it is still missing, confirm `dsh-plugin-mobile-gateway` is installed (search for it in the DSH plugin marketplace).
+- If it is still missing, confirm the protocol dependency `dsh-plugin-mobile-gateway` came in with this
+  plugin (it should be listed in the profile's `package.json` dependencies).
 
 **Over-installation fails with "App not installed"**
 - The signing key differs from the previous build. Rebuild with the original keystore
@@ -128,7 +132,9 @@ dsh-mobile-android/
 
 The app implements only the `dsh-mobile-v1` protocol (WebSocket + JSON) and never touches DSH internals;
 the protocol layer is the third-party MIT plugin `dsh-plugin-mobile-gateway`, while `pc-plugin/` in this
-repository only does access orchestration and UI.
+repository only does access orchestration and UI. There is exactly one package to install,
+`dsh-mobile-access`: it declares the gateway as a dependency and mounts the gateway row from its own
+`cordis.patch.yml`.
 
 ```
 Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desktop profile)
