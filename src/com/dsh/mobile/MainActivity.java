@@ -625,7 +625,13 @@ public final class MainActivity extends Activity implements
             }
         }
         if (screen == Screen.CHAT && convo != null) {
-            convo.setBanner(st == GatewayClient.State.READY ? null : detail, err);
+            // READY 默认不挂横幅（连接正常不该常驻一条提示）；但 hello 暴露了协议/能力问题时
+            // 必须挂出来（评审 P1-16）—— 否则这条告警只活在设置页诊断里，普通用户看不到，
+            // "照单全收"等于没修。用 error 配色让它醒目。
+            String helloWarn = gw.helloWarning();
+            boolean warnReady = st == GatewayClient.State.READY && helloWarn != null && !helloWarn.isEmpty();
+            convo.setBanner(st == GatewayClient.State.READY ? (warnReady ? helloWarn : null) : detail,
+                    err || warnReady);
         }
         if (screen == Screen.SETTINGS && settingsView != null) {
             settingsView.setStatus(detail, err);

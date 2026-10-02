@@ -64,6 +64,20 @@ public final class GatewayClient {
     }
 
     private static final String PROTO = "dsh-mobile-v1";
+    /** 本 App 实现的 hello.protocol。对端宣告别的值就是版本错配（评审 P1-16）。 */
+    private static final int SUPPORTED_PROTOCOL = 3;
+    /** App 依赖的能力 -> 给用户看的功能名（缺了就在横幅里点名，评审 P1-16）。 */
+    private static final String[][] REQUIRED_CAPS = {
+            {"images", "发图片"},
+            {"file-downloads", "文件下载"},
+            {"session-create", "新建对话"},
+            {"session-rename", "重命名对话"},
+            {"session-archive", "归档对话"},
+            {"commands", "斜杠命令"},
+            {"tasks", "任务面板"},
+            {"goals", "目标面板"},
+            {"session-cancel", "停止回合"},
+    };
     private static final long PING_INTERVAL_MS = 25_000L;
     /**
      * 假连接判定阈值：连续 3 个 ping 周期（75s）没有收到任何入站帧（含 pong / 服务端 ping）
@@ -101,6 +115,10 @@ public final class GatewayClient {
     private final Handler main = new Handler(Looper.getMainLooper());
     /** 代际：每次 open() 递增；旧连接的迟到回调据此丢弃，避免重连风暴。 */
     private volatile int generation = 0;
+    /** 最近一次 hello 暴露的协议/能力问题（空 = 正常）。用于横幅与设置页诊断（评审 P1-16）。 */
+    private volatile String helloWarning = "";
+    /** 最近一次 hello 宣告的能力集合；null = 对端没发该字段（视为未知，不做收敛，保持旧行为）。 */
+    private volatile java.util.Set<String> capabilities = null;
 
     public void setListener(Listener l) { this.listener = l; }
     public Listener listener() { return listener; }
@@ -154,6 +172,18 @@ public final class GatewayClient {
 
     public State state() { return state; }
     public String url() { return url; }
+
+    /**
+     * hello 暴露的协议/能力问题（空字符串 = 正常）。UI 据此在 READY 状态也挂出醒目横幅 ——
+     * 只写进设置页诊断的话，普通用户永远看不到，"照单全收"就没被真正修掉（评审 P1-16）。
+     */
+    public String helloWarning() { return helloWarning; }
+
+    /** 对端是否宣告了某个能力。对端根本没发 capabilities 字段时返回 true（保持旧行为，不乱收敛）。 */
+    public boolean hasCapability(String cap) {
+        java.util.Set<String> c = capabilities;
+        return c == null || c.contains(cap);
+    }
 
     // ------------------------------------------------------------ 连接
 
@@ -307,7 +337,11 @@ public final class GatewayClient {
         ws = null;
         if (old != null) old.close(1000, "reconnect");
 
-        setState(State.CONNECTING, "正在连接 " + url);
+        // 横幅只给"人话"：真实地址（内网 IP / 公网隧道域名）属于技术细节，
+        // 会跟着状态一路显示在聊天页顶部横幅和会话列表标题上，对非技术用户是纯噪音，
+        // 还把公网域名暴露在锁屏/截屏之外的用户视线里。地址改记进 trace（设置页诊断区）。
+        rec("连接 " + url);
+        setState(State.CONNECTING, "正在连接电脑…");
 
         List<String> protos = new ArrayList<>();
         protos.add(PROTO);
@@ -357,11 +391,26 @@ public final class GatewayClient {
                     }
                     if (code == 4004) { wantConnected = false; setState(State.GATEWAY_OFF, "网关已关闭（请在电脑端开启移动网关）"); return; }
                     if (code == 4003) {
-                        // 4003 = 服务端重新开启了鉴权，现有 token 已作废：必须重新配对，
+                        // 4003 = 服务端拒绝这条已鉴权连接，现有 token 作废：必须重新配对，
                         // 无脑重连每 15s 撞一次没有意义（评审 P1-4）。wantConnected 一并置 false，
                         // 否则网络变化回调还会把这条注定失败的连接再拉起来。
+                        //
+                        // 4003 有**两种**成因（真实网关 lib/index.mjs:2742/2788 分别发
+                        // "authentication enabled" 与 "device revoked"），改前两种都显示
+                        // "服务端已重新开启鉴权"—— 设备被移除的用户会照着"重新开启鉴权"去电脑端
+                        // 找开关，永远找不到。这里按 reason 分流成两条可执行的指引。
                         wantConnected = false;
-                        setState(State.UNAUTHORIZED, "服务端已重新开启鉴权，请重新连接");
+                        String why = reason == null ? "" : reason.toLowerCase(Locale.ROOT);
+                        rec("! 4003 close reason=" + reason);
+                        String msg;
+                        if (why.contains("revoked")) {
+                            msg = "这台设备已被电脑端移除授权，请在电脑端重新生成配对二维码后扫码配对";
+                        } else if (why.contains("authentication")) {
+                            msg = "电脑端已开启鉴权，请在电脑端重新生成配对二维码后扫码配对";
+                        } else {
+                            msg = "电脑端拒绝了这次连接（设备凭证已失效），请重新扫码配对";
+                        }
+                        setState(State.UNAUTHORIZED, msg);
                         return;
                     }
                     String detail = (reason == null || reason.isEmpty() || "connection lost".equals(reason))
@@ -378,7 +427,12 @@ public final class GatewayClient {
                     stopPing();
                     if (manualClose || !wantConnected) return;
                     String msg = error == null ? "未知错误" : String.valueOf(error.getMessage());
-                    if (msg.contains("401")) { wantConnected = false; setState(State.UNAUTHORIZED, msg); return; }
+                    if (msg.contains("401")) {
+                        wantConnected = false;
+                        rec("! 401 " + msg);
+                        setState(State.UNAUTHORIZED, "电脑端拒绝了连接：设备令牌无效，请重新扫码配对");
+                        return;
+                    }
                     if (msg.contains("503")) {
                         // 503 = 电脑端网关还没开。真实场景就是"先开 App、后开网关"：
                         // 把 wantConnected 置 false 会让这个冷启动场景彻底失去自愈能力
@@ -387,14 +441,16 @@ public final class GatewayClient {
                         // 5 分钟；同时把退避标成"顶格"，让网络变化回调可以立刻补一次
                         // （用户开完网关常伴随网络抖动，不必干等 5 分钟）。
                         reconnectAttempt.set(Math.max(reconnectAttempt.get(), BACKOFF_MAX_ATTEMPTS));
-                        scheduleReconnect("网关未开启(503)，稍后自动重试", GATEWAY_OFF_RETRY_MS);
+                        scheduleReconnect("网关未开启(503)，稍后自动重试",
+                                "电脑端的移动网关还没开启，稍后自动重试", GATEWAY_OFF_RETRY_MS);
                         // 放在 scheduleReconnect 之后：两帧都 post 到主线程，后一帧胜出，
                         // 用户看到的是明确的"网关没开"红字而不是含糊的"正在连接"。
-                        setState(State.GATEWAY_OFF, msg);
+                        rec("! 503 " + msg);
+                        setState(State.GATEWAY_OFF, "电脑端的「移动网关」没有开启，请先在电脑上开启后重试");
                         return;
                     }
                     noteShortLived();   // 存活 <5s 记一次短命罚分（P1-2）
-                    scheduleReconnect(msg);
+                    scheduleReconnect(msg, null, 0L);
                 }
             }, trustAllCerts);
             clientRef[0] = client;
@@ -402,17 +458,26 @@ public final class GatewayClient {
             client.connect();
         } catch (IOException e) {
             wantConnected = false;
-            setState(State.FAILED, e.getMessage());
+            rec("! 建立连接失败 " + e.getMessage());
+            setState(State.FAILED, "连不上这个电脑地址，请检查地址与网络后重试");
         }
     }
 
-    private void scheduleReconnect(String detail) { scheduleReconnect(detail, 0L); }
+    private void scheduleReconnect(String detail) { scheduleReconnect(detail, null, 0L); }
 
     /**
      * @param minDelayMs 本次重连的最短间隔（0 = 只用指数退避）。
      *        503「网关没开」用它把间隔拉长到 5 分钟。
      */
-    private void scheduleReconnect(String detail, long minDelayMs) {
+    private void scheduleReconnect(String detail, long minDelayMs) { scheduleReconnect(detail, null, minDelayMs); }
+
+    /**
+     * @param detail  技术原因（异常消息 / 关闭原因）。只进 trace 与 onReconnectScheduled，
+     *                因为端点故障切换要靠它识别 "404"/隧道域名；绝不直接显示给用户。
+     * @param userText 给用户看的重连原因；null/空 = 用通用文案。
+     * @param minDelayMs 本次重连的最短间隔（0 = 只用指数退避）。
+     */
+    private void scheduleReconnect(String detail, String userText, long minDelayMs) {
         if (!wantConnected || manualClose) return;
         final Listener l2 = listener;
         if (l2 != null) main.post(() -> l2.onReconnectScheduled(detail));
@@ -427,7 +492,13 @@ public final class GatewayClient {
             long penalty = Math.min(BACKOFF_CEILING_MS, 800L * (1L << Math.min(n + shortLived, 7)));
             if (penalty > delay) delay = penalty;
         }
-        setState(State.CONNECTING, detail + " · " + (delay / 1000) + "s 后重试");
+        // 改前这里是 detail + " · Ns 后重试"，detail 直接来自异常消息 / 关闭原因，
+        // 真机上就出现过 "rim-country-gets-photos.trycloudflare.com · 51s 后重试" ——
+        // 公网隧道域名 + 英文异常对用户是噪音，也把内部拓扑写在了屏幕上。
+        // 改后只给"第几次、多少秒"，技术原因进 trace（设置页诊断区）。
+        String human = (userText == null || userText.isEmpty()) ? "和电脑断开了，正在重连…" : userText;
+        rec("重连 #" + n + " · " + detail + " · " + (delay / 1000) + "s");
+        setState(State.CONNECTING, human + "（第 " + n + " 次，" + (delay / 1000) + "s 后重试）");
         main.removeCallbacks(reconnectTask);
         main.postDelayed(reconnectTask, delay);
     }
@@ -811,11 +882,12 @@ public final class GatewayClient {
             // 不再无条件 reconnectAttempt.set(0)（评审 P1-2，那会造成 1.6s 一轮的无限热重连）：
             // 改为 READY 稳定存活 READY_STABLE_MS 后才清零。
             armReadyStable(ws);
+            checkHello(f);   // 协议版本 / 能力校验：先算清楚再决定 READY 挂什么文案（评审 P1-16）
         }
         if (l == null) return;
         switch (kind) {
             case "hello":
-                setState(State.READY, "已连接");
+                setState(State.READY, helloWarning.isEmpty() ? "已连接" : helloWarning);
                 l.onHello(f);
                 break;
             case "paired":
@@ -880,6 +952,62 @@ public final class GatewayClient {
                 l.onOther(kind, f);
                 break;
         }
+    }
+
+    /**
+     * hello 的协议版本与能力校验（评审 P1-16）。
+     *
+     * 改前是"照单全收"：网关宣告 protocol=4（或能力大缺）时 App 一声不响地按 v3 语义继续收发，
+     * 用户只会在后续遇到莫名行为。改后把问题显式化：
+     *   - protocol 字段存在且不是 3 → 明确说明是哪一侧需要升级；
+     *   - capabilities 存在但缺了 App 依赖的项 → 点名受影响的功能。
+     * 结论写进 helloWarning（横幅 + 设置页诊断），并 rec() 落进 trace。
+     *
+     * 刻意**不**中断连接、不据此拒绝收发：
+     *   1) 协议字段缺失的老网关必须继续可用（只在字段存在时判定）；
+     *   2) v3→v4 是否向后兼容由网关决定，App 无权替用户判定"不能用"。
+     * 若日后要求硬拒绝，只需在这里改成 setState(UNAUTHORIZED, ...) 并让本方法返回是否致命。
+     */
+    private void checkHello(JSONObject f) {
+        StringBuilder w = new StringBuilder();
+        if (f.has("protocol")) {
+            int p = f.optInt("protocol", SUPPORTED_PROTOCOL);
+            if (p != SUPPORTED_PROTOCOL) {
+                w.append(p > SUPPORTED_PROTOCOL
+                        ? "App 需要升级：电脑端网关协议版本 " + p + "，本 App 只支持 " + SUPPORTED_PROTOCOL
+                        : "电脑端网关版本过旧：协议版本 " + p + "，本 App 需要 " + SUPPORTED_PROTOCOL);
+                rec("! hello.protocol=" + p + " ≠ " + SUPPORTED_PROTOCOL);
+            }
+        }
+        java.util.Set<String> caps = null;
+        JSONArray arr = f.optJSONArray("capabilities");
+        if (arr != null) {
+            caps = new java.util.HashSet<>();
+            for (int i = 0; i < arr.length(); i++) {
+                String c = arr.optString(i, "");
+                if (c != null && !c.isEmpty()) caps.add(c);
+            }
+            List<String> missing = new ArrayList<>();
+            for (String[] r : REQUIRED_CAPS) {
+                if (!caps.contains(r[0])) missing.add(r[1]);
+            }
+            if (!missing.isEmpty()) {
+                if (w.length() > 0) w.append("；");
+                w.append("电脑端网关能力不完整，以下功能可能不可用：").append(joinCn(missing));
+                rec("! hello.capabilities 缺少 " + missing.size() + " 项: " + missing);
+            }
+        }
+        capabilities = caps;
+        helloWarning = w.toString();
+    }
+
+    private static String joinCn(List<String> xs) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < xs.size(); i++) {
+            if (i > 0) sb.append('、');
+            sb.append(xs.get(i));
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------------ 明文放行白名单

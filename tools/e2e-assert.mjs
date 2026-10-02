@@ -168,18 +168,21 @@ function analyzeReset(f, expectRetry) {
 function analyzeProto4(f) {
   const r = [];
   r.push(chk('hello 宣告 protocol=4（已被记录）', f.helloProtocols.includes(4), 'protocols=' + JSON.stringify(f.helloProtocols)));
-  const rejected = f.rejects.length > 0 || (f.protocolErrors || 0) > 0 || f.has(/协议版本/);
-  r.push(chk('[如实记录] 协议版本不匹配未被拒绝/未提示', !rejected, rejected ? '有拒绝/错误' : '当前实现照单全收'));
-  r.push(chk('[期望] 应做协议版本校验 → 未实现', false, '未实现（如实记录，非本轮回归）'));
+  // 本轮实现：GatewayClient.checkHello() 在 protocol≠3 时给出明确文案（含"协议版本"字样），
+  // 该文案随 READY 一起进 harness.log 的 state= 行，所以这里能从日志断言。
+  const warned = f.has(/协议版本/);
+  r.push(chk('[已实现] protocol≠3 时 App 明确提示协议版本不匹配', warned, warned ? '已提示' : '无提示'));
+  const ready = f.states.filter(s => /READY/.test(s.text)).length;
+  r.push(chk('[已实现] 提示不阻断连接（仍进 READY，仅横幅+诊断）', ready > 0, 'READY 帧数=' + ready));
   return r;
 }
 
 function analyzeNocaps(f) {
   const r = [];
   r.push(chk('hello capabilities 被记录且仅剩 session-cancel', f.capabilities === 'session-cancel', 'caps=' + f.capabilities));
-  const gated = f.has(/能力|capability|capabilities.*(不支持|隐藏)/);
-  r.push(chk('[如实记录] 能力缺失未做入口收敛/提示', !gated, gated ? '有提示' : '当前实现照单全收'));
-  r.push(chk('[期望] 应做能力校验 → 未实现', false, '未实现（如实记录，非本轮回归）'));
+  // 本轮实现：checkHello() 发现 App 依赖的能力缺失时点名受影响功能（文案含"能力"）。
+  const noticed = f.has(/能力/);
+  r.push(chk('[已实现] 能力缺失时 App 明确提示受影响功能', noticed, noticed ? '已提示' : '无提示'));
   return r;
 }
 
