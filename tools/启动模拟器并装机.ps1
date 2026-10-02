@@ -51,6 +51,10 @@ if (-not $env:ANDROID_AVD_HOME)   { if (Test-Path $avdHome)  { $env:ANDROID_AVD_
 if (-not $env:ANDROID_USER_HOME)  { if (Test-Path $userHome) { $env:ANDROID_USER_HOME  = (Resolve-Path $userHome).Path } }
 if (-not $env:ANDROID_SDK_ROOT)  { $env:ANDROID_SDK_ROOT = $SdkRoot }
 $env:ANDROID_HOME = $env:ANDROID_SDK_ROOT
+  # 让 emulator 的 .android 落在工作区（避开 C:\Users\...\.android 的 error 5）
+  if (-not $env:ANDROID_EMULATOR_HOME) { $env:ANDROID_EMULATOR_HOME = Split-Path -Parent $root }
+  if (-not $env:ANDROID_USER_HOME) { $env:ANDROID_USER_HOME = Join-Path (Split-Path -Parent $root) '.android' }
+
 
 Say "================================================================"
 Say " DSH 掌上通 · 起模拟器 + 装机"

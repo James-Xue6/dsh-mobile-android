@@ -1,7 +1,9 @@
 @echo off
-chcp 65001 >nul
-rem åŒå‡»å³å¯ï¼šèµ· AVD dshphone â†’ ç­‰å¼€æœº â†’ è¦†ç›–å®‰è£… APK â†’ æ‰“å¼€ App
-rem æƒ³å¸¦å‚æ•°å°±ç›´æŽ¥ç”¨ pwsh è°ƒ .ps1ï¼ˆè§ tools\ä½¿ç”¨è¯´æ˜Ž.mdï¼‰
-pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0å¯åŠ¨æ¨¡æ‹Ÿå™¨å¹¶è£…æœº.ps1" %*
+chcp 936 >nul
+rem Ë«»÷¼´¿É£ºÆð AVD dshphone ¡ú µÈ¿ª»ú ¡ú ¸²¸Ç°²×° APK ¡ú ´ò¿ª App
+rem ±àÂëËµÃ÷£º±¾ÎÄ¼þÓÃ GBK ±£´æ£¬Óë¿ØÖÆÌ¨ chcp 936 Æ¥Åä£¨²»Òª¸Ä³É UTF-8£¬·ñÔòÖÐÎÄÂ·¾¶»áÂÒÂë£©
+set "PWSH=C:\Program Files\PowerShell\7\pwsh.exe"
+if not exist "%PWSH%" set "PWSH=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Æô¶¯Ä£ÄâÆ÷²¢×°»ú.ps1" %*
 echo.
 pause
