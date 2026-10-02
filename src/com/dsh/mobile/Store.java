@@ -28,8 +28,10 @@ public final class Store {
     private static final String K_LAN = "lan_url";
     private static final String K_WAN = "wan_url";
     /**
-     * 「这台设备怎么选线路」的旧字段镜像：auto（自动，默认）/ lan（只用内网）/ wan（只用公网）。
-     * 真身是 {@link Device#netMode}；这个键只在「设备表还是空的」这种中间态下兜底。
+     * 「当前生效设备怎么选线路」的旧字段：auto（自动，默认）/ lan（只用内网）/ wan（只用公网）。
+     * **它是真身**，设备表里的 {@link Device#netMode} 是它的镜像 —— 与 {@link #K_LAN}/{@link #K_WAN}
+     * 同一套设计（写入落旧字段，再由 {@link #syncLegacyIntoActive()} 同步进当前生效的那台）。
+     * 设备表为空（全新安装还没配过对）时它就是唯一的档位来源。
      */
     private static final String K_NET_MODE = "net_mode";
     /** 一次性清洗标记：把历史上存成「内网地址」的虚拟网卡地址（172.16/12 等）清掉，只做一次。 */
@@ -201,6 +203,11 @@ public final class Store {
     public String feedbackCfg() { return sp.getString(K_FEEDBACK_CFG, ""); }
     public void setFeedbackCfg(String v) { sp.edit().putString(K_FEEDBACK_CFG, v == null ? "" : v).apply(); }
 
+    /**
+     * ⚠️ 兼容旧接口，App 内部已不再使用：{@code false} 现在等于「自动」，**不是**「内网优先」
+     * （老版本只有这一个布尔，写死 false 的语义已经由 {@link RoutePolicy} 的自动档取代）。
+     * 落盘的 {@link #K_USE_WAN} 仍按「是不是手动只用公网」写，供老版本降级读取。
+     */
     public boolean useWan() { return RoutePolicy.WAN.equals(netMode()); }
     public void setUseWan(boolean v) { setNetMode(v ? RoutePolicy.WAN : RoutePolicy.AUTO); }
 

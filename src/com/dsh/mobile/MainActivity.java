@@ -3746,7 +3746,11 @@ public final class MainActivity extends Activity implements
      */
     @Override
     public RoutePolicy.Pick routeOf(Store.Device d) {
-        RoutePolicy.Pick p = Store.pickOf(d);
+        // 当前生效的那台：档位以 Store.netMode()（旧字段真身）为准，与「实际连的是哪条」同一个结论；
+        // 别的设备按它自己存的档位算。
+        RoutePolicy.Pick p = (d != null && d.id != null && d.id.equals(store.activeDeviceId()))
+                ? store.pickActive()
+                : Store.pickOf(d);
         if (d == null || d.id == null || gw == null) return p;
         if (!d.id.equals(store.activeDeviceId())) return p;
         if (gw.state() != GatewayClient.State.READY || lastConnectUrl.isEmpty()) return p;
