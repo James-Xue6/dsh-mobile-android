@@ -625,8 +625,19 @@ public final class MainActivity extends Activity implements
         return base.isEmpty() ? route : base + " · " + route;
     }
 
-    /** 网络种类变了：立刻重画线路文案（不重开连接，等下一次连接/重连才换线路）。 */
+    /**
+     * 网络种类变了：立刻重画线路文案（**不重开连接**，线路切换只在下次连接/重连生效，
+     * 不打断正在进行的会话）。
+     *
+     * <p>⚠️ {@code registerDefaultNetworkCallback} 的回调跑在 ConnectivityManager 自己的
+     * 后台线程上，而这里要动 View —— 必须先切回主线程，否则会撞
+     * 「Only the original thread that created a view hierarchy can touch its views」。
+     */
     private void refreshRouteUI() {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            uiHandler.post(this::refreshRouteUI);
+            return;
+        }
         if (screen == Screen.DEVICE) refreshDevices();
         if (convo != null && screen == Screen.CHAT) convo.setSubtitleText(subtitleText());
     }
