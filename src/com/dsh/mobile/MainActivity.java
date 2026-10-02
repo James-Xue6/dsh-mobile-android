@@ -3862,7 +3862,7 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onOpenFeedback() {
-        final android.widget.EditText ed = new android.widget.EditText(this);
+        final android.widget.EditText ed = new android.widget.EditText(Ui.dialogContext(this));
         ed.setHint("哪里别扭、想要什么功能、哪里报错…");
         ed.setMinLines(4);
         ed.setMaxLines(10);
@@ -4621,7 +4621,7 @@ public final class MainActivity extends Activity implements
      * 另外「配对」的回调自己接管：解析失败时**不关对话框、不清输入**，把原因写在框里。
      */
     private void showPairInputDialog(String initial) {
-        final android.widget.EditText input = new android.widget.EditText(this);
+        final android.widget.EditText input = new android.widget.EditText(Ui.dialogContext(this));
         input.setHint("粘贴电脑端生成的配对串（Base64URL）");
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
                 | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE

@@ -194,7 +194,14 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             @Override public void onScroll(AbsListView view, int first, int visible, int total) {
                 atBottom = computeAtBottom();
                 if (toBottom != null) toBottom.setVisibility(atBottom ? GONE : VISIBLE);
-                if (first == 0 && total > 0 && view.canScrollVertically(-1)) host.onLoadMore();
+                // 触顶就请求更早的一页。`canScrollVertically(-1)` 只在"第一条被顶出去一截"
+                // 时为真 —— 恰好停在最顶端、再往下拽时它是 false，那时就什么都不会加载
+                // （用户报的"往上看不到更早的内容"有一部分就是这个）。
+                // 所以补一条：**手指还按在列表上**时到顶也算触顶（userTouching）。
+                // 不加 userTouching 的裸 first==0 会被布局/补页引起的 onScroll 反复触发，
+                // 变成"停在顶部就把整段历史一路拉完"。
+                if (first == 0 && total > 0
+                        && (view.canScrollVertically(-1) || userTouching)) host.onLoadMore();
             }
         });
 
