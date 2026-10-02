@@ -11,6 +11,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.dsh.mobile.model.SessionInfo;
+import com.dsh.mobile.model.WorkspaceGroup;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,8 @@ public final class SessionListView extends FrameLayout {
         void onArchive(SessionInfo s);
         /** 展开/折叠某父会话名下的子会话（子智能体 / 专家团）。 */
         void onToggleChildren(SessionInfo s);
+        /** 点某工作区分组标题右侧的「⋯」：弹出该工作区的操作菜单（新建任务等）。 */
+        void onWorkspaceMenu(WorkspaceGroup g);
     }
 
     private final Context ctx;
@@ -176,7 +179,7 @@ public final class SessionListView extends FrameLayout {
         requestLayout();
     }
 
-    /** rows 元素为 String（工作区标题）或 SessionInfo（会话卡片）。 */
+    /** rows 元素为 WorkspaceGroup（工作区标题）或 SessionInfo（会话卡片）。 */
     public void setRows(List<Object> rows) {
         adapter.set(rows);
         boolean hasSession = false;
@@ -209,19 +212,37 @@ public final class SessionListView extends FrameLayout {
         @Override public long getItemId(int position) { return position; }
         @Override public int getViewTypeCount() { return 2; }
         @Override public int getItemViewType(int position) {
-            return data.get(position) instanceof String ? 0 : 1;
+            return data.get(position) instanceof WorkspaceGroup ? 0 : 1;
         }
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             Object row = data.get(position);
-            if (row instanceof String) {
-                // 工作区分组标题：iOS 组标题的规格（13sp 灰字 + 一点字间距）
-                LinearLayout head = Ui.col(ctx);
-                head.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 18), 0, Ui.dp(ctx, 6));
-                TextView gt = Ui.text(ctx, (String) row, Ui.S_FOOT, Ui.INK_SUB, false);
+            if (row instanceof WorkspaceGroup) {
+                // 工作区分组标题：iOS 组标题的规格（13sp 灰字 + 一点字间距），
+                // 右侧挂一个「⋯」—— 用户要的就是"点开能在这个工作区里新建任务"。
+                WorkspaceGroup g = (WorkspaceGroup) row;
+                LinearLayout head = Ui.row(ctx);
+                head.setGravity(Gravity.CENTER_VERTICAL);
+                head.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 10), 0, Ui.dp(ctx, 2));
+
+                TextView gt = Ui.text(ctx, g.label, Ui.S_FOOT, Ui.INK_SUB, false);
                 gt.setLetterSpacing(0.06f);
+                gt.setSingleLine(true);
+                gt.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                gt.setLayoutParams(new LinearLayout.LayoutParams(0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
                 head.addView(gt);
+
+                // 没有工作目录的分组（「其他」/ IM 会话）不给「⋯」：点了也无处可派，
+                // 挂一个摆设只会误导。整行的点击仍留给下面的会话卡片。
+                if (g.canCreateSession()) {
+                    TextView more = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_more,
+                            android.graphics.Color.TRANSPARENT, Ui.INK_SUB, 15f, 28f);
+                    more.setContentDescription("工作区选项：" + g.label);
+                    more.setOnClickListener(v -> host.onWorkspaceMenu(g));
+                    head.addView(more);
+                }
                 return head;
             }
             SessionInfo s = (SessionInfo) row;
@@ -347,13 +368,13 @@ public final class SessionListView extends FrameLayout {
         /** 这一项是不是所在分组卡的**第一行**（上一项是工作区标题，或就是列表开头）。 */
         private boolean cardTop(int pos) {
             if (pos <= 0) return true;
-            return data.get(pos - 1) instanceof String;
+            return data.get(pos - 1) instanceof WorkspaceGroup;
         }
 
         /** 这一项是不是所在分组卡的**最后一行**（下一项是工作区标题，或就到列表末尾）。 */
         private boolean cardBottom(int pos) {
             if (pos >= data.size() - 1) return true;
-            return data.get(pos + 1) instanceof String;
+            return data.get(pos + 1) instanceof WorkspaceGroup;
         }
     }
 }

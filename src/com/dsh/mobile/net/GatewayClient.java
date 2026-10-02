@@ -691,11 +691,30 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
-    /** sessionId 为空表示新建会话。 */
+    /** sessionId 为空表示新建会话（落到宿主默认工作区）。 */
     public void sendMessage(String sessionId, String text) {
+        sendMessage(sessionId, text, null, null);
+    }
+
+    /**
+     * 新建会话时指定工作区。
+     *
+     * 网关把 message 帧上的 workspaceId / cwd 透传给宿主 sessions.create
+     * （dsh-plugin-mobile-gateway/lib/index.mjs:529-542：新会话分支读 msg.workspaceId、
+     * 没有再读 msg.cwd，两者同时给时 workspaceId 胜出并记一条 log）。宿主侧契约
+     * （app.asar SessionCreateRequest = { workspaceId?, cwd?, sessionId?, agentPreset? }）
+     * 则**明确拒绝同时给两个**："session.create accepts workspaceId or cwd, not both"，
+     * 所以这里做互斥：有 workspaceId 就只发它，否则只发 cwd —— 与电脑端
+     * （uiWorkspace.connectWorkspace → sessions.create({ workspaceId })）语义一致。
+     *
+     * @param workspaceId 工作区注册表 id；空则不发
+     * @param cwd         工作目录绝对路径；仅在 workspaceId 为空时发
+     */
+    public void sendMessage(String sessionId, String text, String workspaceId, String cwd) {
         try {
             JSONObject o = base("message");
             if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            else putNewSessionWorkspace(o, workspaceId, cwd);
             o.put("text", text == null ? "" : text);
             o.put("mode", "queue");
             o.put("clientTimeZone", TimeZone.getDefault().getID());
@@ -703,12 +722,30 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /** 把新会话的工作区定位参数写进帧（互斥：workspaceId 优先，绝不两个都发）。 */
+    private void putNewSessionWorkspace(JSONObject o, String workspaceId, String cwd) {
+        try {
+            if (workspaceId != null && !workspaceId.trim().isEmpty()) {
+                o.put("workspaceId", workspaceId.trim());
+                return;
+            }
+            if (cwd != null && !cwd.trim().isEmpty()) o.put("cwd", cwd.trim());
+        } catch (Throwable ignored) { }
+    }
+
     /** 带图片发送（protocol：images[] 里放标准 Base64，不带 data: 前缀）。 */
     public void sendMessageWithImage(String sessionId, String text, String mediaType,
                                      String base64, String name) {
+        sendMessageWithImage(sessionId, text, mediaType, base64, name, null, null);
+    }
+
+    /** 带图片的新建会话也可以指定工作区（语义同 {@link #sendMessage}）。 */
+    public void sendMessageWithImage(String sessionId, String text, String mediaType,
+                                     String base64, String name, String workspaceId, String cwd) {
         try {
             JSONObject o = base("message");
             if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            else putNewSessionWorkspace(o, workspaceId, cwd);
             o.put("text", text == null ? "" : text);
             o.put("mode", "queue");
             o.put("clientTimeZone", TimeZone.getDefault().getID());

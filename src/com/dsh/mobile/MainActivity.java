@@ -16,6 +16,7 @@ import android.widget.Toast;
 import com.dsh.mobile.model.ChatItem;
 import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
+import com.dsh.mobile.model.WorkspaceGroup;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.net.LanAddress;
 import com.dsh.mobile.net.NetStatus;
@@ -29,6 +30,7 @@ import com.dsh.mobile.ui.SessionListView;
 import com.dsh.mobile.ui.SettingsView;
 import com.dsh.mobile.ui.SubagentSheet;
 import com.dsh.mobile.ui.Ui;
+import com.dsh.mobile.ui.WorkspaceSheet;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -54,7 +56,8 @@ public final class MainActivity extends Activity implements
         SessionListView.Host,
         ConversationView.Host,
         SettingsView.Host,
-        DeviceHubView.Host {
+        DeviceHubView.Host,
+        WorkspaceSheet.Host {
 
     private static final int REQ_QR = 1001;
     private static final int REQ_VOICE = 1002;
@@ -111,6 +114,26 @@ public final class MainActivity extends Activity implements
 
     private final List<SessionInfo> sessions = new ArrayList<>();
     private final Set<String> archivedIds = new HashSet<>();
+
+    /**
+     * 工作区注册表（来自网关 workspaces 帧 = 宿主 workspace.list 的 WorkspaceBaseline）。
+     * key 是规范化后的目录路径，值是 workspaceId / 工作区显示名。
+     *
+     * 为什么需要它：抽屉里的分组标题改前只有一个目录名，派新任务时没有可用的工作区标识。
+     * 有了 workspaceId 就能完全照电脑端那样 `sessions.create({ workspaceId })`
+     * （app.asar uiWorkspace.connectWorkspace）；取不到时退回用完整 cwd 派发。
+     */
+    private final Map<String, String> workspaceIdByPath = new HashMap<>();
+    private final Map<String, String> workspaceTitleByPath = new HashMap<>();
+
+    /**
+     * 「在此工作区新建任务」选中的目标。currentSessionId 为空、且这里非空时，
+     * 下一条消息的 message 帧会带上 workspaceId / cwd —— 这就是用户报的那个 bug 的修复点。
+     * 走普通「＋」或点开一条已有会话时清空。
+     */
+    private String pendingNewWorkspaceId = "";
+    private String pendingNewWorkspaceCwd = "";
+    private String pendingNewWorkspaceLabel = "";
 
     private final List<ChatItem> items = new ArrayList<>();
     private final Map<String, ChatItem> byKey = new HashMap<>();
@@ -1342,7 +1365,7 @@ public final class MainActivity extends Activity implements
 
         java.util.LinkedHashMap<String, List<SessionInfo>> groups = new java.util.LinkedHashMap<>();
         for (SessionInfo s : roots) {
-            String key = workspaceLabel(s);
+            String key = workspaceKey(s);
             List<SessionInfo> g = groups.get(key);
             if (g == null) { g = new ArrayList<>(); groups.put(key, g); }
             g.add(s);
@@ -1362,7 +1385,7 @@ public final class MainActivity extends Activity implements
             HashSet<String> chain = new HashSet<>();
             for (SessionInfo s : g) emitSession(s, 0, childrenOf, flat, chain);
             renumberUntitled(flat);
-            rows.add(k + "  ·  " + g.size());
+            rows.add(workspaceGroupOf(k, g));
             rows.addAll(flat);
         }
         return rows;
@@ -1445,13 +1468,81 @@ public final class MainActivity extends Activity implements
         return m;
     }
 
-    private static String workspaceLabel(SessionInfo s) {
-        if (s.id != null && s.id.startsWith("im:")) return "IM 会话";
-        String c = s.cwd == null ? "" : s.cwd.replace('\\', '/');
+    /**
+     * 分组键：IM 会话单独一组、没有工作目录的并进「其他」、其余按**完整**工作目录分。
+     *
+     * 改前按目录名（末段）分组，两个同名目录（如两个仓库都叫 app）会被并成一组，
+     * 用户根本看不出它们不是同一个工作区。现在按完整路径分组，键统一小写以便
+     * 与工作区注册表里的路径对上（Windows 路径大小写不敏感）。
+     */
+    private static String workspaceKey(SessionInfo s) {
+        if (s.id != null && s.id.startsWith("im:")) return "im:";
+        return pathKey(s.cwd);
+    }
+
+    /** 规范化路径：统一反斜杠、去掉尾部分隔符。空串原样返回。 */
+    private static String normPath(String p) {
+        if (p == null) return "";
+        String s = p.trim().replace('/', '\\');
+        while (s.length() > 1 && s.endsWith("\\")) s = s.substring(0, s.length() - 1);
+        return s;
+    }
+
+    /** 分组用的键：规范化 + 小写（仅用于配对，绝不拿来当 cwd 发出去）。 */
+    private static String pathKey(String p) {
+        String s = normPath(p);
+        return s.isEmpty() ? "" : s.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** 目录名（末段）；空路径返回「其他」。 */
+    private static String tailOf(String p) {
+        String c = normPath(p);
         if (c.isEmpty()) return "其他";
-        int i = c.lastIndexOf('/');
+        int i = c.lastIndexOf('\\');
         String tail = i >= 0 ? c.substring(i + 1) : c;
-        return tail.isEmpty() ? "其他" : tail;
+        return tail.isEmpty() ? c : tail;
+    }
+
+    /**
+     * 分组键 + 该组会话 -> 抽屉标题行。
+     *
+     * 显示名优先用工作区注册表里的 title（与电脑端一致），取不到时退回目录名；
+     * path 取该组第一条会话的 cwd（**保留原始大小写**，用于派发新会话）；
+     * workspaceId 取注册表里的 id，有了它就完全照电脑端的 sessions.create({ workspaceId }) 走。
+     */
+    private WorkspaceGroup workspaceGroupOf(String key, List<SessionInfo> group) {
+        int count = group == null ? 0 : group.size();
+        if ("im:".equals(key)) return new WorkspaceGroup("IM 会话", "", "", count);
+        if (key.isEmpty()) return new WorkspaceGroup("其他", "", "", count);
+        String path = (group == null || group.isEmpty()) ? "" : normPath(group.get(0).cwd);
+        String title = workspaceTitleByPath.get(key);
+        String label = (title != null && !title.trim().isEmpty()) ? title.trim() : tailOf(path);
+        String id = workspaceIdByPath.get(key);
+        return new WorkspaceGroup(label, path, id == null ? "" : id, count);
+    }
+
+    /**
+     * 网关 workspaces 帧 = 宿主 workspace.list 的 WorkspaceBaseline
+     * （app.asar: { items: readonly WorkspaceView[], archivedSessionIds, pinnedSessionIds }；
+     * WorkspaceView = { workspaceId, path, title, sessionIds, createdAt, updatedAt }）。
+     * 建成「规范化路径 -> workspaceId / title」两张表，供分组标题与「⋯」菜单使用。
+     */
+    private void applyWorkspaces(JSONObject frame) {
+        JSONArray items = frame.optJSONArray("items");
+        if (items == null) return;
+        workspaceIdByPath.clear();
+        workspaceTitleByPath.clear();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject w = items.optJSONObject(i);
+            if (w == null) continue;
+            String path = w.optString("path", "");
+            String id = w.optString("workspaceId", "");
+            if (path.isEmpty() || id.isEmpty()) continue;
+            String key = pathKey(path);
+            workspaceIdByPath.put(key, id);
+            String title = w.optString("title", "");
+            if (!title.trim().isEmpty()) workspaceTitleByPath.put(key, title.trim());
+        }
     }
 
     /** 目标 / 任务 -> 顶部提要文本 */
@@ -1853,6 +1944,7 @@ public final class MainActivity extends Activity implements
         // 网关告诉我们的身份/版本落进"当前这台设备"：离线时卡片也能显示名字与版本标签
         store.updateActiveMeta(gid, gname, dshVer);
         gw.requestSessions();
+        gw.requestWorkspaces();   // 抽屉分组标题与「⋯」菜单需要工作区 id/标题
         refreshListStatus();
         refreshDevices();
     }
@@ -2306,6 +2398,8 @@ public final class MainActivity extends Activity implements
         cancelSendWatchdog();
         if (currentSessionId.isEmpty() && sessionId != null && !sessionId.isEmpty()) {
             currentSessionId = sessionId;
+            // 会话已经建出来了，目标工作区已生效：清掉 pending，免得下一条新会话又误带上它
+            clearPendingWorkspace();
             subscribeCurrent();
         }
     }
@@ -2836,6 +2930,12 @@ public final class MainActivity extends Activity implements
             if (frame.optString("sessionId", currentSessionId).equals(currentSessionId)) {
                 applyGoal(frame.optJSONObject("goal"));
             }
+            return;
+        }
+        if ("workspaces".equals(kind)) {
+            // 工作区注册表到了：分组标题能显示工作区名，且「⋯」菜单可以带上 workspaceId
+            applyWorkspaces(frame);
+            if (listScreen != null) listScreen.setRows(buildRows());
             return;
         }
         if ("session-archives".equals(kind)) {
@@ -3624,6 +3724,7 @@ public final class MainActivity extends Activity implements
     public void onOpenSession(SessionInfo s) {
         pendingBySession.remove(s.id);
         s.pending = 0;
+        clearPendingWorkspace();   // 进了已有会话：之前选的工作区目标作废
         currentSessionId = s.id;
         currentTitle = s.display();
         currentCwd = s.cwd;
@@ -3719,6 +3820,14 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onNewChat() {
+        startBlankChat();
+        // 「＋」与「⋯」的区别必须让用户看得见：这里是宿主默认工作区，不是某个指定工作区
+        Toast.makeText(this, "将在默认工作区新建任务", Toast.LENGTH_SHORT).show();
+    }
+
+    /** 开一条空白对话（清空当前会话/列表、收起抽屉、进对话页）。调用方决定要不要带工作区。 */
+    private void startBlankChat() {
+        clearPendingWorkspace();   // 普通「＋」= 用宿主默认工作区，不带任何工作区参数
         currentSessionId = "";
         currentTitle = "新对话";
         currentCwd = "";
@@ -3735,6 +3844,49 @@ public final class MainActivity extends Activity implements
         closeDrawer();          // 新建/派任务 -> 抽屉收起，进入空白对话
         if (listScreen != null) listScreen.setCurrentSession("");
         showChat();
+    }
+
+    /**
+     * 抽屉里某个工作区标题右侧「⋯」→ 该工作区的操作菜单。
+     *
+     * 弹窗只做一件事（在此工作区新建任务），但**先让用户确认在操作哪个工作区**：
+     * 标题就是工作区名、副标题是完整路径 —— 这正是改前缺失的那一环。
+     */
+    @Override
+    public void onWorkspaceMenu(WorkspaceGroup g) {
+        if (g == null || !g.canCreateSession()) return;
+        WorkspaceSheet.show(this, g, this);
+    }
+
+    /**
+     * 「在此工作区新建任务」：开一条空白对话，并把目标工作区挂到 pending 上。
+     *
+     * 协议上「新建会话」不是一个独立动作，而是**第一条 message 帧不带 sessionId**
+     * 时由网关调宿主 sessions.create 建出来的（lib/index.mjs:526-542）。所以这里只记下目标，
+     * 等用户在输入框敲下第一句再带着 workspaceId/cwd 一起发出去 —— 与电脑端
+     * 「选中工作区 → 开空白会话 → 发消息」的节奏一致。
+     */
+    @Override
+    public void onNewTaskHere(WorkspaceGroup g) {
+        if (g == null || !g.canCreateSession()) return;
+        startBlankChat();   // 清空当前会话并进空白对话（内部会清 pending）
+        pendingNewWorkspaceId = g.workspaceId == null ? "" : g.workspaceId;
+        pendingNewWorkspaceCwd = g.path == null ? "" : g.path;
+        pendingNewWorkspaceLabel = g.label == null ? "" : g.label;
+        // 顶栏副标题本来就会显示 currentCwd，先填上就能让用户立刻看见"这次建在哪个工作区"
+        currentCwd = pendingNewWorkspaceCwd;
+        if (convo != null) convo.setSubtitleText(subtitleText());
+        Toast.makeText(this, pendingNewWorkspaceId.isEmpty()
+                        ? "将在「" + pendingNewWorkspaceLabel + "」新建任务（按目录）"
+                        : "将在「" + pendingNewWorkspaceLabel + "」新建任务",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /** 清掉「在此工作区新建任务」的目标（普通「＋」、点开已有会话、会话已建出来时调用）。 */
+    private void clearPendingWorkspace() {
+        pendingNewWorkspaceId = "";
+        pendingNewWorkspaceCwd = "";
+        pendingNewWorkspaceLabel = "";
     }
 
     @Override
@@ -3898,7 +4050,9 @@ public final class MainActivity extends Activity implements
             byKey.put("pending-user", pend);
             items.add(pend);
             if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
-            gw.sendMessage("", text);
+            // 带上「⋯」菜单选中的工作区（普通「＋」时两者都为空 = 宿主默认工作区）。
+            // 这就是用户报的那个 bug 的修复点：新会话第一次不再只能落进默认工作区。
+            gw.sendMessage("", text, pendingNewWorkspaceId, pendingNewWorkspaceCwd);
         } else {
             gw.sendMessage(currentSessionId, text);
         }
@@ -5416,7 +5570,9 @@ public final class MainActivity extends Activity implements
                         return;
                     }
                     if (currentSessionId.isEmpty()) pendingUserText = "[图片]";
-                    gw.sendMessageWithImage(currentSessionId, "", mt, b64, name);
+                    // 新会话带图也要能落到「⋯」菜单选中的工作区（语义同 onSend 的文本路径）
+                    gw.sendMessageWithImage(currentSessionId, "", mt, b64, name,
+                            pendingNewWorkspaceId, pendingNewWorkspaceCwd);
                     setRunning(true);
                     if (convo != null) convo.setRunning(true, runningHint());
                     // 大负载（base64 单帧可达 ~4MB）：看门狗按负载放大到 120s，
