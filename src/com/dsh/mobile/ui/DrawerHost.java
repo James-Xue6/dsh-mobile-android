@@ -41,8 +41,6 @@ public final class DrawerHost extends FrameLayout {
     private final FrameLayout content;
     private final View scrim;
     private final FrameLayout drawer;
-    /** 抽屉右缘的发丝线（主题切换要换色）。 */
-    private final View edge;
 
     /** 抽屉当前平移量：0 = 全开，-drawerWidth = 全关。 */
     private float tx;
@@ -75,16 +73,16 @@ public final class DrawerHost extends FrameLayout {
         addView(scrim, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         drawer = new FrameLayout(ctx);
-        drawer.setBackgroundColor(Ui.BG);
-        drawer.setElevation(Ui.dp(ctx, 10));
-        // 抽屉右缘一条 1px 发丝线：抽屉与内容层本来只靠阴影分界，而深色档阴影在纯黑底上
-        // 根本看不见 —— 补一条亮线，两层在任何主题下都"分得开"（层次感的关键小细节）。
-        edge = new View(ctx);
-        edge.setBackgroundColor(Ui.SEP);
-        FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
-                Math.max(1, Ui.dp(ctx, 0.5f)), FrameLayout.LayoutParams.MATCH_PARENT);
-        elp.gravity = android.view.Gravity.END;
-        drawer.addView(edge, elp);
+        drawer.setElevation(Ui.dp(ctx, 6));
+        // 抽屉这一层原本写了 elevation，但底色是 ColorDrawable —— 它**不提供 outline**，
+        // 所以那层阴影一直没生效（抽屉与内容层只靠 45% 黑遮罩分界）。
+        // 显式给一个矩形 outline，elevation 才真的画出影子。
+        drawer.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(View v, android.graphics.Outline o) {
+                o.setRect(0, 0, v.getWidth(), v.getHeight());
+            }
+        });
+        applyDrawerBg();
         // 宽度在 onMeasure 里按屏宽比例写进 LayoutParams；先丢到屏幕外，避免首帧闪一下
         drawer.setTranslationX(-100000f);
         addView(drawer, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
@@ -106,8 +104,28 @@ public final class DrawerHost extends FrameLayout {
      */
     public void applyTheme() {
         content.setBackgroundColor(Ui.BG);
-        drawer.setBackgroundColor(Ui.BG);
-        if (edge != null) edge.setBackgroundColor(Ui.SEP);
+        applyDrawerBg();
+    }
+
+    /**
+     * 抽屉底板：底色 + 右缘 1px 发丝线。
+     *
+     * <p>为什么用 LayerDrawable 而不是加一个子 View：抽屉里的会话列表是**构造之后**
+     * 由宿主 {@code drawer().addView(...)} 加进来的，后加的子 View 会盖在边缘线上面；
+     * 而 LayerDrawable 是"背景"，永远在所有子 View 之下，与添加顺序无关。
+     *
+     * <p>深色档阴影在纯黑底上本来就看不见，这条 1px 亮线是两层在任何主题下都"分得开"的保证。
+     */
+    private void applyDrawerBg() {
+        Context c = getContext();
+        android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
+                new android.graphics.drawable.Drawable[] {
+                        new android.graphics.drawable.ColorDrawable(Ui.BG),
+                        new android.graphics.drawable.ColorDrawable(Ui.SEP) });
+        ld.setLayerGravity(1, android.view.Gravity.END);
+        ld.setLayerWidth(1, Math.max(1, Ui.dp(c, 0.5f)));
+        ld.setLayerHeight(1, LayoutParams.MATCH_PARENT);
+        drawer.setBackground(ld);
     }
 
     public boolean isOpen() { return open; }
