@@ -161,6 +161,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         subtitle = Ui.text(ctx, "", Ui.S_CAP1, Ui.INK_FAINT, false);
         subtitle.setSingleLine(true);
+        subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titles.addView(title);
         titles.addView(subtitle);
         bar.addView(titles);
@@ -201,9 +202,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planView.setVisibility(GONE);
         LinearLayout.LayoutParams planLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        planLp.leftMargin = Ui.dp(ctx, 12);
-        planLp.rightMargin = Ui.dp(ctx, 12);
-        planLp.topMargin = Ui.dp(ctx, 8);
+        planLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        planLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+        planLp.topMargin = Ui.dp(ctx, 6);
         planView.setLayoutParams(planLp);
         addView(planView);
 
@@ -223,7 +224,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setDivider(null);
         list.setDividerHeight(0);
         list.setCacheColorHint(0);
-        list.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 10), Ui.dp(ctx, 16), Ui.dp(ctx, 10));
+        list.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8));
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
@@ -315,8 +316,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         subEntry.setOnClickListener(v -> host.onOpenSubagents());
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        slp.leftMargin = Ui.dp(ctx, 10);
-        slp.rightMargin = Ui.dp(ctx, 10);
+        slp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        slp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
         slp.topMargin = Ui.dp(ctx, 6);
         subEntry.setLayoutParams(slp);
         subEntry.setVisibility(GONE);
@@ -340,8 +341,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         LinearLayout inputBar = Ui.row(ctx);
         inputBar.setBackground(new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
                 Ui.LINE, 0x00000000, 0f));
-        inputBar.setElevation(Ui.dp(ctx, 3f));
-        inputBar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8));
+        // **不给玻璃挂 elevation**（2026-10-03 模拟器实测）：半透明填充会把系统阴影从底下
+        // 透出来，在控件内部画出一圈灰环 + 一块白心。深色感改由棱光上边 + 下棱微暗承担。
+        inputBar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6));
 
         input = new EditText(ctx);
         input.setHint("给 Agent 派个任务…");
@@ -360,8 +362,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         input.setLayoutParams(ilp);
 
         pick = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_plus,
-                Ui.CHIP_BG, Ui.INK_SUB, 18f, 38f);
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(Ui.dp(ctx, 38), Ui.dp(ctx, 38));
+                Ui.CHIP_BG, Ui.INK_SUB, 18f, 34f);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(Ui.dp(ctx, 34), Ui.dp(ctx, 34));
         plp.rightMargin = Ui.dp(ctx, 6);
         pick.setLayoutParams(plp);
         pick.setOnClickListener(v -> host.onPickImage());
@@ -369,8 +371,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         inputBar.addView(input);
 
         action = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_arrow_up,
-                Ui.BRAND_FILL, Ui.ON_BRAND, 20f, 42f);
-        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(Ui.dp(ctx, 42), Ui.dp(ctx, 42));
+                Ui.BRAND_FILL, Ui.ON_BRAND, 20f, 36f);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(Ui.dp(ctx, 36), Ui.dp(ctx, 36));
         alp.leftMargin = Ui.dp(ctx, 8);
         action.setLayoutParams(alp);
         action.setOnClickListener(v -> {
@@ -382,11 +384,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
         input.setOnLongClickListener(v -> { host.onVoiceInput(); return true; });
         inputBar.addView(action);
-        // 悬浮：左右 12dp、下方 12dp（与内容留白 12~16dp 的规范一致）
+        // 悬浮：左右 16dp（与全 App 的 M_SIDE 对齐）、下方 12dp
         LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        ibLp.leftMargin = Ui.dp(ctx, 12);
-        ibLp.rightMargin = Ui.dp(ctx, 12);
+        ibLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        ibLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
         ibLp.topMargin = Ui.dp(ctx, 6);
         ibLp.bottomMargin = Ui.dp(ctx, 12);
         addView(inputBar, ibLp);

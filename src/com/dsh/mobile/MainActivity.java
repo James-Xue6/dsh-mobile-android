@@ -463,6 +463,15 @@ public final class MainActivity extends Activity implements
         listScreen = new SessionListView(this, this);
         drawerHost.drawer().addView(listScreen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 左缘手势拉开抽屉时也要刷新会话行与顶栏状态（原来只有 openDrawer() 那条路会刷，
+        // 手势拉开看到的是空抽屉）。见 DrawerHost.setOnOpened。
+        drawerHost.setOnOpened(() -> {
+            if (listScreen != null) {
+                listScreen.setCurrentSession(currentSessionId);
+                listScreen.setRows(buildRows());
+            }
+            refreshListStatus();
+        });
 
         // 冷启动落在「我的设备」页：先看见自己添加过的电脑（在线/离线写在卡片上），
         // 点某台的「连接/进入」才进对话页（用户要求：我的设备在对话页之前）。

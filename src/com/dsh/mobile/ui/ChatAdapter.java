@@ -161,7 +161,7 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setGravity(Gravity.END);
 
         TextView bubble = Ui.text(ctx, it.text, Ui.S_BODY, Ui.ON_BRAND, false);
-        bubble.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 11), Ui.dp(ctx, 15), Ui.dp(ctx, 11));
+        bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 14), Ui.dp(ctx, 10));
         bubble.setMaxWidth(maxBubble);
         // 用户气泡：细腻的蓝色渐变（上 #0A84FF → 下 #0071E3）+ 18dp 圆角。
         // 纯色实心块在深色/浅色下都是一块"死色"，一段极窄渐变就把它变成了有光感的实体。
@@ -212,7 +212,7 @@ public final class ChatAdapter extends BaseAdapter {
         bubble.setTextColor(Ui.INK);
         bubble.setLineSpacing(Ui.dp(ctx, 4), 1.08f);
         bubble.setIncludeFontPadding(false);
-        bubble.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 12), Ui.dp(ctx, 15), Ui.dp(ctx, 12));
+        bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
         bubble.setMaxWidth(maxBubble);
         // iOS 助手气泡：浅灰实体（无描边），与左侧对齐；用户气泡才是蓝色
         bubble.setBackground(Ui.round(Ui.dp(ctx, 18), Ui.CHIP_BG));
@@ -402,7 +402,7 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
@@ -476,7 +476,7 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
@@ -711,7 +711,7 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());

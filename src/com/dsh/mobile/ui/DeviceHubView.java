@@ -85,7 +85,7 @@ public final class DeviceHubView extends LinearLayout {
         LinearLayout head = Ui.col(ctx);
         this.head = head;
         head.setBackgroundColor(Ui.BG);
-        head.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 6));
+        head.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 4));
 
         LinearLayout top = Ui.row(ctx);
         TextView title = Ui.text(ctx, "我的设备", Ui.S_LARGE, Ui.INK, true);
@@ -102,11 +102,11 @@ public final class DeviceHubView extends LinearLayout {
         head.addView(top);
 
         TextView sub = Ui.text(ctx, "管理你的电脑 · 连接后进入对话", Ui.S_SUB, Ui.INK_SUB, false);
-        sub.setPadding(0, Ui.dp(ctx, 3), 0, 0);
+        sub.setPadding(0, Ui.dp(ctx, Ui.G_TITLE_SUB), 0, 0);
         head.addView(sub);
 
         status = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_FAINT, false);
-        status.setPadding(0, Ui.dp(ctx, 6), 0, 0);
+        status.setPadding(0, Ui.dp(ctx, Ui.G_SECTION), 0, 0);
         head.addView(status);
         addView(head, Ui.fill());
 
@@ -118,8 +118,8 @@ public final class DeviceHubView extends LinearLayout {
         scroll.setVerticalScrollBarEnabled(false);
         LinearLayout body = Ui.col(ctx);
         this.body = body;
-        // iOS 分组列表：左右外边距 16dp
-        body.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 4), Ui.dp(ctx, 16), Ui.dp(ctx, 28));
+        // iOS 分组列表：左右外边距 16dp（全 App 统一 M_SIDE），上下只留必要的一点点
+        body.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 20));
         scroll.addView(body);
         addView(scroll);
         buildBody();
@@ -139,24 +139,29 @@ public final class DeviceHubView extends LinearLayout {
         LinearLayout empty = Ui.col(ctx);
         emptyView = empty;
         empty.setGravity(Gravity.CENTER);
-        empty.setPadding(0, Ui.dp(ctx, 56), 0, Ui.dp(ctx, 20));
+        empty.setPadding(0, 0, 0, Ui.dp(ctx, 16));
         empty.setVisibility(GONE);
+        // 空态图标：一枚**玻璃方砖**（不是光秃秃一个字形）—— 玻璃层次在空页面上也得有一处落点
         TextView emptyIcon = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_monitor,
-                0x00000000, Ui.alpha(Ui.INK_SUB, 0.55f), 48f, 0f, Ui.I_EMPTY);
+                Ui.alpha(Ui.INK_SUB, 0.10f), Ui.alpha(Ui.INK_SUB, 0.85f), 72f, 22f, 32f);
         emptyIcon.setLayoutParams(new LinearLayout.LayoutParams(
-                Ui.dp(ctx, 48), Ui.dp(ctx, 48)));
+                Ui.dp(ctx, 72), Ui.dp(ctx, 72)));
         empty.addView(emptyIcon);
         TextView emptyText = Ui.text(ctx, "还没有添加设备", Ui.S_BODY, Ui.INK_SUB, false);
         emptyText.setGravity(Gravity.CENTER);
-        emptyText.setPadding(0, Ui.dp(ctx, 14), 0, 0);
+        emptyText.setPadding(0, Ui.dp(ctx, 10), 0, 0);
         empty.addView(emptyText);
         TextView emptyHint = Ui.text(ctx, "电脑端 DSH 打开「移动设备」面板，扫码即可添加",
                 Ui.S_FOOT, Ui.INK_FAINT, false);
         emptyHint.setGravity(Gravity.CENTER);
-        emptyHint.setPadding(Ui.dp(ctx, 24), Ui.dp(ctx, 6), Ui.dp(ctx, 24), 0);
+        emptyHint.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 4), Ui.dp(ctx, 16), 0);
         emptyHint.setLineSpacing(Ui.dp(ctx, 3), 1.15f);
         empty.addView(emptyHint);
-        body.addView(empty, Ui.fill());
+        // 空态**吃掉一半剩余高度**（gravity=CENTER）：一个设备都没有时，图标/文案/入口卡
+        // 落在页面偏上的视觉重心上，而不是挤在顶端、下半屏空一大片（用户点名的"留白比例不对"）。
+        // 有设备时 empty 是 GONE（权重 0），下面的 spacer 拿走全部剩余高度，页脚照旧贴底。
+        body.addView(empty, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         body.addView(addCard());
 
@@ -164,7 +169,7 @@ public final class DeviceHubView extends LinearLayout {
         View spacer = new View(ctx);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        slp.topMargin = Ui.dp(ctx, 8);
+        slp.topMargin = Ui.dp(ctx, 4);
         spacer.setLayoutParams(slp);
         body.addView(spacer);
         body.addView(Ui.footer(ctx, "DSH 掌上通 · 与电脑端 DSH 直连\n数据只在你的设备之间流转"));
@@ -235,10 +240,10 @@ public final class DeviceHubView extends LinearLayout {
 
         LinearLayout card = Ui.col(ctx);
         card.setBackground(Ui.featureFill(ctx, Ui.gradientFor(d.id == null ? d.displayName() : d.id)));
-        card.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 16));
+        card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 15), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 15));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        clp.bottomMargin = Ui.dp(ctx, 24);          // 分组卡片之间 24dp
+        clp.bottomMargin = Ui.dp(ctx, Ui.M_GAP);          // 分组卡片之间 14dp（12~16 取中）
         card.setLayoutParams(clp);
 
         // 第一行：图标 + 设备名 + 在线状态
@@ -286,7 +291,7 @@ public final class DeviceHubView extends LinearLayout {
 
         // 第二行：标签（内网·固定 / 公网 / 版本号）—— 统一"白字 + 22% 白底"
         LinearLayout tags = Ui.row(ctx);
-        tags.setPadding(0, Ui.dp(ctx, 12), 0, 0);
+        tags.setPadding(0, Ui.dp(ctx, 10), 0, 0);
         // 只要手机真的连得上才算「内网 · 固定」：虚拟网卡（172.16/12）等假内网地址不给这个标签
         if (d.hasUsableLan()) tags.addView(tag("内网 · 固定"));
         if (d.wanUrl != null && !d.wanUrl.isEmpty()) tags.addView(tag("公网"));
@@ -307,7 +312,7 @@ public final class DeviceHubView extends LinearLayout {
             }
         }
         TextView addr = Ui.text(ctx, addrLine, Ui.S_FOOT, w88, false);
-        addr.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        addr.setPadding(0, Ui.dp(ctx, 8), 0, 0);
         card.addView(addr);
 
         // 第四行：进入/重连 + 修改名称 + 删除
@@ -315,7 +320,7 @@ public final class DeviceHubView extends LinearLayout {
         // 文案必须和"在线/离线"一致，不能骗人：只有真的 READY（online）才写「进入对话」；
         // 离线时写「重连」，点下去由宿主先连、连上了才切页（连接失败会明确提示）。
         LinearLayout btns = Ui.row(ctx);
-        btns.setPadding(0, Ui.dp(ctx, 16), 0, 0);
+        btns.setPadding(0, Ui.dp(ctx, 12), 0, 0);
 
         boolean busy = isActive && connecting && !online;
         TextView enter = Ui.pillButton(ctx, online ? "进入对话" : (busy ? "重连中…" : (isActive ? "重连" : "连接")),
@@ -366,33 +371,26 @@ public final class DeviceHubView extends LinearLayout {
     }
 
     /**
-     * 「＋ 添加设备」卡片。iOS 的"新增"行：纯卡片色打底、主色文字、无虚线框
-     * （iOS 里虚线框是外来语汇，靠主色文字 + 居中排版就已经是明确的可点入口）。
+     * 「＋ 添加设备」卡片：**一张整体卡片**，一行两列 —— 左图标 / 左对齐的两行文字 / 右细箭头。
+     *
+     * <p>2026-10-03 返工（用户原话「灰卡里套了个白方框，文字还不对齐」）：旧版把主文字居中、
+     * 副文字左对齐，两种对齐混在一张卡里；再加上玻璃卡挂了 elevation，阴影从半透明体下透出来
+     * 画出一圈灰环 + 白心，看上去就是个"坏掉的白方框"。现在：
+     * <ul>
+     *   <li>整卡就是一个 {@link Ui#entryCard} —— 图标 + 主文字「添加设备」+ 次文字 + 细箭头；</li>
+     *   <li>没有内嵌白框（那圈"白框"本来就是 elevation 阴影透出来的假象）；</li>
+     *   <li>主/次两行文字都左对齐到同一条基线，图标固定 36dp 列宽。</li>
+     * </ul>
      */
     private View addCard() {
-        LinearLayout card = Ui.card(ctx);
-        card.setGravity(Gravity.CENTER);
-        card.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 26), Ui.dp(ctx, 18), Ui.dp(ctx, 26));
-
-        // 「＋ 添加设备」：加号换成手写矢量（旧版是"＋"全角字符，字重/基线都跟着字体跑）
-        // 比例检查：字形 18dp vs 旁边 15.5sp 正文（行高 ≈ 21dp）= 0.86 —— 已在 0.9 附近，
-        // 属于"内联小加号"，**不再缩**（再小就和文字脱节了）。
-        LinearLayout line = Ui.row(ctx);
-        line.setGravity(Gravity.CENTER);
-        line.addView(Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_plus,
-                0x00000000, Ui.BRAND, 20f, 0f, 18f));
-        TextView t = Ui.text(ctx, "添加设备", Ui.S_BODY, Ui.BRAND, false);
-        t.setTypeface(Ui.medium());
-        t.setPadding(Ui.dp(ctx, 7), 0, 0, 0);
-        t.setContentDescription("添加设备");
-        line.addView(t);
-        card.addView(line);
-
-        TextView s = Ui.text(ctx, "扫码或输入设备连接", Ui.S_FOOT, Ui.INK_SUB, false);
-        s.setPadding(0, Ui.dp(ctx, 6), 0, 0);
-        card.addView(s);
-
+        LinearLayout card = Ui.entryCardGradient(ctx, com.dsh.mobile.R.drawable.ic_plus,
+                Ui.GRAD_BRAND, "添加设备", "扫码或输入设备连接");
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dp(ctx, 4);
+        card.setLayoutParams(lp);
         card.setClickable(true);
+        card.setContentDescription("添加设备");
         card.setOnClickListener(v -> showAddSheet());
         Ui.tap(card, 0.98f);
         return card;
@@ -458,12 +456,12 @@ public final class DeviceHubView extends LinearLayout {
     /** 弹窗里的一行选择项：iOS 的做法 —— 卡片色的行、按下整行高亮、右侧 "›" 箭头。 */
     private LinearLayout option(String title, String desc, final Dialog dlg, final boolean scan) {
         LinearLayout row = Ui.row(ctx);
-        row.setMinimumHeight(Ui.dp(ctx, 60));
-        row.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 10), Ui.dp(ctx, 12));
+        row.setMinimumHeight(Ui.dp(ctx, 56));
+        row.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 10), Ui.dp(ctx, 11));
         Ui.tapRow(row, Ui.round(Ui.dp(ctx, 14), Ui.FIELD_BG), Ui.PRESS);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = Ui.dp(ctx, 8);
+        lp.topMargin = Ui.dp(ctx, 6);
         row.setLayoutParams(lp);
 
         // 字形 22→20dp（Ui.I_BODY）、底 24→22dp：旁边是 15.5sp 的标题行（行高 ≈ 21dp）。

@@ -117,8 +117,8 @@ public final class SettingsView extends LinearLayout {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         scroll.setVerticalScrollBarEnabled(false);
         LinearLayout body = Ui.col(ctx);
-        // iOS 分组列表：左右外边距 16dp，卡片之间 24dp 留白
-        body.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 32));
+        // iOS 分组列表：左右外边距 16dp，卡片之间 14dp 留白
+        body.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 24));
         scroll.addView(body);
         addView(scroll);
 
@@ -505,13 +505,13 @@ public final class SettingsView extends LinearLayout {
 
     // ------------------------------------------------------------ 小工具
 
-    /** iOS 分组卡片：纯卡片色 + 14dp 圆角 + 极细发丝描边（卡片之间 24dp）。 */
+    /** iOS 分组卡片：卡片色 + 20dp 圆角 + 极细发丝描边（卡片之间 14dp）。 */
     private LinearLayout card() {
         LinearLayout c = Ui.card(ctx);
-        c.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
+        c.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 13), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Ui.dp(ctx, 24);
+        lp.bottomMargin = Ui.dp(ctx, Ui.M_GAP);
         c.setLayoutParams(lp);
         return c;
     }
@@ -529,13 +529,13 @@ public final class SettingsView extends LinearLayout {
         LinearLayout wrap = Ui.card(ctx);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Ui.dp(ctx, 24);
+        lp.bottomMargin = Ui.dp(ctx, Ui.M_GAP);
         wrap.setLayoutParams(lp);
 
         LinearLayout head = Ui.row(ctx);
         head.setLayoutParams(Ui.fill());
-        head.setMinimumHeight(Ui.dp(ctx, 46));
-        head.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 12));
+        head.setMinimumHeight(Ui.dp(ctx, 44));
+        head.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 11), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 11));
         head.setClickable(true);
         TextView t = Ui.text(ctx, title, Ui.S_FOOT, Ui.INK_SUB, false);
         t.setLetterSpacing(0.06f);   // 汉字也吃一点字间距 = iOS 组标题的"大写感"
@@ -552,7 +552,7 @@ public final class SettingsView extends LinearLayout {
 
         final LinearLayout box = Ui.col(ctx);
         box.setLayoutParams(Ui.fill());
-        box.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 2), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
+        box.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 2), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 14));
         box.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         head.setOnClickListener(v -> {

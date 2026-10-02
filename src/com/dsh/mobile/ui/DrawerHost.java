@@ -77,15 +77,9 @@ public final class DrawerHost extends FrameLayout {
         addView(scrim, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         drawer = new FrameLayout(ctx);
-        drawer.setElevation(Ui.dp(ctx, 6));
-        // 抽屉这一层原本写了 elevation，但底色是 ColorDrawable —— 它**不提供 outline**，
-        // 所以那层阴影一直没生效（抽屉与内容层只靠 45% 黑遮罩分界）。
-        // 显式给一个矩形 outline，elevation 才真的画出影子。
-        drawer.setOutlineProvider(new android.view.ViewOutlineProvider() {
-            @Override public void getOutline(View v, android.graphics.Outline o) {
-                o.setRect(0, 0, v.getWidth(), v.getHeight());
-            }
-        });
+        // **不给抽屉挂 elevation**（2026-10-03 模拟器实测）：抽屉底板是 88% 不透明的玻璃，
+        // 系统的 elevation 阴影同样会从半透明体下面透出来，在面板内部画出一圈灰环。
+        // 抽屉与内容层的分界改由「遮罩 + 右缘 1px 发丝线（见 applyDrawerBg）+ 真模糊」承担。
         applyDrawerBg();
         // 宽度在 onMeasure 里按屏宽比例写进 LayoutParams；先丢到屏幕外，避免首帧闪一下
         drawer.setTranslationX(-100000f);
@@ -95,6 +89,22 @@ public final class DrawerHost extends FrameLayout {
         touchSlop = vc.getScaledTouchSlop();
         edgeZone = Ui.dp(ctx, 22);
     }
+
+    /** 抽屉「刚被拉开」的回调（含左缘手势拉开）。 */
+    public interface OnOpened { void onOpened(); }
+
+    private OnOpened onOpened;
+    /** 上一帧抽屉是否已经露出（用于把回调收敛成"每次拉开只响一次"）。 */
+    private boolean revealed;
+
+    /**
+     * 装一个「抽屉刚露出」的回调。
+     *
+     * <p>为什么需要它：宿主原来只在 {@code openDrawer()} 那条路里刷新会话行 —— 用**左缘手势**
+     * 拉开抽屉时那条路不走，抽屉里就是上一次的（首次启动时是空的）内容。用户看到的是
+     * 「拉开抽屉一片空白」。这里把"露出"这件事从手势里抽出来，宿主挂一次回调即可。
+     */
+    public void setOnOpened(OnOpened l) { onOpened = l; }
 
     /** 内容层：对话页 / 设置页放这里。 */
     public FrameLayout content() { return content; }
@@ -217,10 +227,17 @@ public final class DrawerHost extends FrameLayout {
         // 真模糊：只要抽屉露出一条，就把内容层糊掉（iOS 抽屉后面那种磨砂）。
         // 只在"有/无"两个状态间切一次，不在每帧重挂 —— 模糊结果会被缓存成离屏贴图。
         if (p > 0.02f) {
+            if (!revealed) {
+                revealed = true;
+                if (onOpened != null) onOpened.onOpened();
+            }
             if (!blurred) blurred = Ui.setBackdropBlur(content, BLUR_DP);
-        } else if (blurred) {
-            Ui.clearBackdropBlur(content);
-            blurred = false;
+        } else {
+            revealed = false;
+            if (blurred) {
+                Ui.clearBackdropBlur(content);
+                blurred = false;
+            }
         }
     }
 

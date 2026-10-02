@@ -170,6 +170,8 @@ public final class Ui {
     public static final int[] GRAD_BLUE   = { 0xFF63BDF0, 0xFF3D93DD };
     public static final int[] GRAD_ROSE   = { 0xFFF06A7A, 0xFFD93F55 };
     public static final int[] GRAD_TEAL   = { 0xFF4FBFC9, 0xFF2E9AAD };
+    /** 主色渐变（入口卡专用）：与系统蓝同族，比 {@link #BRAND_FILL} 更有"光"。 */
+    public static final int[] GRAD_BRAND  = { 0xFF4FA2FF, 0xFF0B6BE0 };
     /** 全部渐变（{@link #gradientFor(String)} 按 key 稳定取一组）。 */
     public static final int[][] GRADIENTS = {
             GRAD_ORANGE, GRAD_PURPLE, GRAD_INDIGO, GRAD_BLUE, GRAD_ROSE, GRAD_TEAL };
@@ -250,8 +252,8 @@ public final class Ui {
             BRAND_G2       = 0xFF0071E3;
             // 液态玻璃（深色）：黑 45~60% 的玻璃体；纯黑底上白棱才看得见，所以深色档
             // 严格按规范的 15% 白（浅色档相反，见下）。
-            GLASS          = 0x8F1C1C1E;   // #1C1C1E 56%
-            GLASS_SHEET    = 0xE61C1C1E;   // 90%
+            GLASS          = 0xE61C1C1E;   // #1C1C1E 90%（与 sheet 同档：深色档太透会把黑底"洗灰"）
+            GLASS_SHEET    = 0xF21C1C1E;   // 95%
             GLASS_BAR      = 0x99000000;   // #000 60%
             GLASS_RIM      = 0x26FFFFFF;   // 白 15%
             GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
@@ -308,11 +310,15 @@ public final class Ui {
             SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
             BRAND_G1       = 0xFF0A84FF;
             BRAND_G2       = 0xFF0071E3;
-            // 液态玻璃（浅色）：卡片体 60% 白 → 落在 #F2F2F7 上约 #FAFAFC，比页面亮一档。
-            // GLASS_RIM 用**纯白**而不是规范的 10~14%：浅色卡片本身近白，12% 白等于没画；
-            // 1px 纯白棱在 #FAFAFC 上才是那条看得见的高光边（设计文档里已标注该取舍）。
-            GLASS          = 0x99FFFFFF;   // 白 60%
-            GLASS_SHEET    = 0xE0FFFFFF;   // 白 88%
+            // 液态玻璃（浅色）：卡片体 88% 白 → 落在 #F2F2F7 上约 #FDFDFE，**和 iOS 的纯白卡片同档**。
+            // 2026-10-03 从 60% 提到 88%：60% 落在 #F2F2F7 上只有 #FAFAFC，卡片和页面底只差 8 级，
+            // 截图上看就是"一整块灰，没有卡片"——这正是"不是 iOS 26、太素"的直接原因。
+            // 玻璃感不再靠"透"，改由**上棱 1px 纯白 + 下棱微暗 + 发丝描边**承担（见 CardBg）。
+            GLASS          = 0xE0FFFFFF;   // 白 88%
+            // GLASS_SHEET 提到 95%：弹窗/抽屉里全是文字，本 ROM 的真模糊不生效（实测），
+            // 88% 时背后的对话正文会以 12% 透上来（子智能体弹窗里能读出一行行"鬼影"），
+            // 可读性优先 → 直接当"厚玻璃"用。这就是规范里"模糊不可用时的回退"。
+            GLASS_SHEET    = 0xF2FFFFFF;   // 白 95%
             GLASS_BAR      = 0xCCFFFFFF;   // 白 80%
             GLASS_RIM      = 0xFFFFFFFF;   // 纯白 1px
             GLASS_LO       = 0x0F000000;   // 黑 6%（下棱微暗）
@@ -356,6 +362,27 @@ public final class Ui {
     public static final float R_PILL  = 999f;
     /** iOS 列表行最小高度。 */
     public static final float H_ROW   = 52f;
+
+    // ============================================================ 间距节奏（2026-10-03「边缘过大」返工）
+    //
+    // 用户原话：「还有边缘过大的问题」。上一轮把外边距写成了 24~40dp 的一堆散值，
+    // 页面主体被挤成中间一条，留白比例完全不对。这里按参考图（iOS 健康页 / 设置页）
+    // 把全 App 的横向节奏收敛成**三个数**，视图里只许引用它们，不许再写字面量：
+    //
+    //   M_SIDE     16dp —— 屏幕左右安全边距（页面级）
+    //   M_CARD_PAD 16dp —— 卡片内左右内边距（卡片级）
+    //   M_GAP      14dp —— 卡片之间的垂直间距（12~16dp 之间取中）
+    //
+    // 垂直方向同理，用「大标题 → 副标题 → 内容」三段固定间距，空态/分组标题一律套用：
+    //   G_TITLE_SUB  5dp  —— 大标题到副标题（4~6dp）
+    //   G_SUB_BODY  18dp  —— 副标题到第一块内容（16~20dp）
+    //   G_SECTION    6dp  —— 组标题到组内容
+    public static final float M_SIDE     = 16f;
+    public static final float M_CARD_PAD = 16f;
+    public static final float M_GAP      = 14f;
+    public static final float G_TITLE_SUB = 5f;
+    public static final float G_SUB_BODY  = 18f;
+    public static final float G_SECTION   = 6f;
 
     /**
      * 系统 AlertDialog 的统一入口。
@@ -972,7 +999,7 @@ public final class Ui {
     public static TextView segmentItem(Context c, String s) {
         TextView t = text(c, s, S_FOOT, INK, false);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(c, 4), dp(c, 7), dp(c, 4), dp(c, 7));
+        t.setPadding(dp(c, 4), dp(c, 6), dp(c, 4), dp(c, 6));
         t.setClickable(true);
         paintSegment(t, false);
         return t;
@@ -1026,13 +1053,94 @@ public final class Ui {
     private static LinearLayout card(Context c, int accent) {
         LinearLayout c0 = col(c);
         // 玻璃卡：GLASS 半透明体 + 发丝描边 + 顶部棱光/高光（都在 CardBg 里）。
-        // 注意填充是**半透明**的，所以下面那层 elevation 阴影是从卡片轮廓投出去的，
-        // 不会被卡片自己盖住。
+        //
+        // **不要再给玻璃卡 setElevation（2026-10-03 模拟器实测）**：卡片填充是半透明的，
+        // 系统的 elevation 阴影会从半透明体**下面透出来**，在卡内画出一圈灰环 + 中间一块
+        // 白心（模拟器截图 1080x1920 逐像素采样：卡内 18dp 一圈 = #E5E5E7，正中 = #FAFAFC，
+        // 看上去就是"灰卡里套了个白方框"——正是用户报的那个坏卡片）。
+        // 对照实验：同一次构建把填充换成不透明品红 → 环消失；只去掉 elevation → 环也消失。
+        // 结论：**半透明 = 不能挂 elevation**。深度感改由「上棱高光 + 下棱微暗 + 发丝描边」承担。
         c0.setBackground(new CardBg(dp(c, R_CARD), GLASS, dp(c, 1f), LINE, accent, dp(c, 3f)));
-        c0.setElevation(dp(c, 2f));
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return c0;
+    }
+
+    /**
+     * 「入口卡」：**一张整体卡片** = 左侧圆角小图标 + 两行文字（主/次）+ 右侧细箭头。
+     *
+     * <p>2026-10-03 修用户点名的坏卡片：旧版「＋ 添加设备」把「＋ 添加设备」做成一整行
+     * **居中**的文字，下面再挂一行左对齐的说明 —— 居中和左对齐混在一张卡里，看起来就像
+     * "灰卡里套了个白方框、字还没对齐"。现在统一成参考图那种**一行两列**的入口行：
+     * 图标列固定宽、文字列左对齐、箭头贴右缘，主次两行永远左对齐到同一条基线。
+     *
+     * <p>卡片本身仍是玻璃（{@link #card}），没有任何内嵌白框。
+     *
+     * @param iconRes 左侧矢量图标（18~20dp 的 {@link #I_BODY} 档）
+     * @param tint    图标色（一般 {@link #BRAND}）
+     */
+    public static LinearLayout entryCard(Context c, int iconRes, int tint, String title, String sub) {
+        return entryCard(c, null, iconRes, tint, tintSoft(tint), INK, INK_SUB, INK_FAINT, title, sub);
+    }
+
+    /**
+     * 渐变版入口卡：整卡就是一张 {@link #featureFill} 大圆角渐变卡（参考图 B 的制式），
+     * 文字全白、图标底 22% 白、箭头 85% 白。
+     *
+     * <p>用它的是「需要突出的入口」——本 App 目前只有「＋ 添加设备」这一处：
+     * 一个设备都没有时它就是整页唯一的主操作，白灰卡会让页面看起来"没做完"，
+     * 一张渐变卡则给了页面重心，也把参考图里那套彩色卡真正用上（用户点名缺这个）。
+     */
+    public static LinearLayout entryCardGradient(Context c, int iconRes, int[] grad,
+                                                 String title, String sub) {
+        final int white = 0xFFFFFFFF;
+        return entryCard(c, grad, iconRes, white, alpha(white, 0.22f),
+                white, alpha(white, 0.82f), alpha(white, 0.85f), title, sub);
+    }
+
+    /**
+     * 入口卡的内核：一张卡 + 一行三列（图标 / 左对齐两行文字 / 右箭头）。
+     *
+     * @param grad {@code null} = 玻璃卡；非 null = 大圆角渐变卡（无描边无阴影）
+     */
+    private static LinearLayout entryCard(Context c, int[] grad, int iconRes, int tint, int tileFill,
+                                          int titleColor, int subColor, int chevColor,
+                                          String title, String sub) {
+        LinearLayout card = col(c);
+        card.setBackground(grad == null
+                ? new CardBg(dp(c, R_CARD), GLASS, dp(c, 1f), LINE, 0x00000000, dp(c, 3f))
+                : featureFill(c, grad));
+        card.setPadding(dp(c, M_CARD_PAD), dp(c, 13), dp(c, 12), dp(c, 13));
+        card.setMinimumHeight(dp(c, 64));
+
+        LinearLayout row = row(c);
+        row.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(iconBox(c, iconRes, tileFill, tint, 36f, 11f, I_BODY));
+
+        LinearLayout texts = col(c);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = dp(c, 12);
+        texts.setLayoutParams(tlp);
+        TextView t = text(c, title, S_BODY, titleColor, false);
+        t.setTypeface(medium());
+        texts.addView(t);
+        if (sub != null && !sub.isEmpty()) {
+            TextView s = text(c, sub, S_FOOT, subColor, false);
+            s.setPadding(0, dp(c, 3), 0, 0);
+            texts.addView(s);
+        }
+        row.addView(texts);
+        row.addView(iconBox(c, com.dsh.mobile.R.drawable.ic_chevron_right,
+                0x00000000, chevColor, 18f, 0f, 16f));
+        card.addView(row);
+        return card;
+    }
+
+    /** 图标底：把强调色稀释成 12% 的淡底（浅色/深色两档都成立，不引入新色板项）。 */
+    public static int tintSoft(int color) {
+        return alpha(color, 0.12f);
     }
 
     /**
@@ -1143,7 +1251,7 @@ public final class Ui {
     public static LinearLayout cardRow(Context c) {
         LinearLayout r = row(c);
         r.setMinimumHeight(dp(c, H_ROW));
-        r.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10));
+        r.setPadding(dp(c, M_CARD_PAD), dp(c, 8), dp(c, M_CARD_PAD), dp(c, 8));
         r.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return r;
@@ -1410,7 +1518,7 @@ public final class Ui {
         t.setGravity(Gravity.CENTER);
         t.setLineSpacing(dp(c, 3), 1.1f);
         t.setLetterSpacing(0.01f);
-        t.setPadding(dp(c, 8), dp(c, 28), dp(c, 8), dp(c, 8));
+        t.setPadding(dp(c, 8), dp(c, 14), dp(c, 8), dp(c, 8));
         return t;
     }
 
@@ -1435,7 +1543,7 @@ public final class Ui {
     /** 字段上方的小号灰标签。 */
     public static TextView fieldLabel(Context c, String s) {
         TextView t = text(c, s, S_FOOT, INK_SUB, false);
-        t.setPadding(0, dp(c, 12), 0, dp(c, 5));
+        t.setPadding(0, dp(c, 10), 0, dp(c, 4));
         return t;
     }
 
@@ -1457,7 +1565,7 @@ public final class Ui {
         e.setHintTextColor(INK_FAINT);
         e.setTextColor(INK);
         e.setBackground(round(dp(c, 10), FIELD_BG));
-        e.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
+        e.setPadding(dp(c, 14), dp(c, 11), dp(c, 14), dp(c, 11));
         e.setSingleLine(true);
         return e;
     }
@@ -1482,7 +1590,7 @@ public final class Ui {
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
         t.setMinHeight(dp(c, B_BTN_TOUCH));
-        t.setPadding(dp(c, 18), dp(c, 10), dp(c, 18), dp(c, 10));
+        t.setPadding(dp(c, 16), dp(c, 9), dp(c, 16), dp(c, 9));
         t.setBackground(insetV(c, brandPill(), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
@@ -1517,7 +1625,7 @@ public final class Ui {
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
         t.setMinHeight(dp(c, B_BTN_TOUCH));
-        t.setPadding(dp(c, 18), dp(c, 10), dp(c, 18), dp(c, 10));
+        t.setPadding(dp(c, 16), dp(c, 9), dp(c, 16), dp(c, 9));
         t.setBackground(insetV(c, pill(CHIP_BG), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
@@ -1540,7 +1648,7 @@ public final class Ui {
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
         t.setMinHeight(dp(c, B_BTN_TOUCH));
-        t.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10));
+        t.setPadding(dp(c, 14), dp(c, 9), dp(c, 14), dp(c, 9));
         t.setBackground(insetV(c, pill(fill), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
@@ -1573,8 +1681,12 @@ public final class Ui {
     /**
      * 按钮的**视觉**高度（dp）：胶囊真正画出来的高度。
      * 视图高度是 {@link #B_BTN_TOUCH}（48dp，热区），多出来的部分由 {@link #insetV} 缩掉。
+     *
+     * <p>2026-10-03「边缘/留白返工」：42 → 36dp。参考图里 iOS 26 的胶囊控件（Save /
+     * Translate / 6:49）都是 32~36dp 的**细胶囊**，42dp 的按钮并排两个就像两块砖，
+     * 也是"边缘过大"的一部分。热区仍由 {@link #B_BTN_TOUCH} 48dp 保证。
      */
-    public static final float B_BTN_H = 42f;
+    public static final float B_BTN_H = 36f;
     /** 按钮的**可点**高度（dp）：iOS 最小触区，视觉再小也不许低于它。 */
     public static final float B_BTN_TOUCH = 48f;
 
@@ -1606,7 +1718,7 @@ public final class Ui {
         LinearLayout box = col(c);
         box.setBackground(new CardBg(dp(c, R_SHEET), GLASS_SHEET, dp(c, 1f), LINE,
                 0x00000000, 0f).topOnly(true));
-        box.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 16));
+        box.setPadding(dp(c, M_CARD_PAD), dp(c, 8), dp(c, M_CARD_PAD), dp(c, 14));
         return box;
     }
 

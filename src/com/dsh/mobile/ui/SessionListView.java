@@ -65,7 +65,7 @@ public final class SessionListView extends FrameLayout {
         // ---- 头部（iOS 大标题）
         header = Ui.col(ctx);
         header.setBackgroundColor(Ui.BG);
-        header.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 6));
+        header.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, 10), Ui.dp(ctx, 4));
 
         LinearLayout top = Ui.row(ctx);
         TextView t = Ui.text(ctx, "对话", Ui.S_LARGE, Ui.INK, true);
@@ -99,7 +99,7 @@ public final class SessionListView extends FrameLayout {
         header.addView(top);
 
         statusLine = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_FAINT, false);
-        statusLine.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 2), 0, Ui.dp(ctx, 8));
+        statusLine.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 4), 0, Ui.dp(ctx, 6));
         header.addView(statusLine);
         root.addView(header, Ui.fill());
 
@@ -111,8 +111,8 @@ public final class SessionListView extends FrameLayout {
         list.setDividerHeight(0);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         list.setVerticalScrollBarEnabled(false);
-        // iOS 分组列表：左右外边距 16dp（组内条目自己画圆角与分隔线）
-        list.setPadding(Ui.dp(ctx, 16), 0, Ui.dp(ctx, 16), Ui.dp(ctx, 90));
+        // iOS 分组列表：左右外边距 16dp（全 App 统一 M_SIDE；组内条目自己画圆角与分隔线）
+        list.setPadding(Ui.dp(ctx, Ui.M_SIDE), 0, Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 90));
         list.setClipToPadding(false);
         LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -260,9 +260,9 @@ public final class SessionListView extends FrameLayout {
 
             int depth = Math.max(0, s.childDepth);
             LinearLayout card = Ui.row(ctx);
-            card.setMinimumHeight(Ui.dp(ctx, 56));
-            card.setPadding(Ui.dp(ctx, 16) + Ui.dp(ctx, 18) * depth,
-                    Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
+            card.setMinimumHeight(Ui.dp(ctx, 52));
+            card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD) + Ui.dp(ctx, 18) * depth,
+                    Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 10));
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             card.setLayoutParams(rlp);
