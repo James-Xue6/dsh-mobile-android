@@ -748,16 +748,32 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /** 标题探测：抓历史开头的这一小窗（标题事件实测都在 seq 14~32）。 */
+    private static final int TITLE_PROBE_BEFORE_SEQ = 80;
+    /** 标题探测的消息上限：窗口小 → 载荷小 → 不拖慢首屏。 */
+    private static final int TITLE_PROBE_MAX_MESSAGES = 40;
+
     /**
-     * 拉一个会话的历史，仅用于从 session/title 事件里抽标题。
-     * 网关的 sessions 列表不带 title（宿主侧就没给），只能这样拿。
+     * 探测一个会话的标题。网关的 sessions 列表不带 title，标题只能从历史的
+     * `session/title` 事件里抽。
+     *
+     * 为什么不能再用 `maxMessages: 500`：宿主的历史分页是**从尾部往前**切的
+     * （paginate 从 end 往回数 maxMessages 条消息再 slice），所以不带游标的请求
+     * 拿到的是**最后 500 条**。实测标题事件都落在 seq 14~32（很靠前），而最长
+     * 的会话有 1292 条消息——窗口一长，标题就被切出窗口，**永远抽不到**，
+     * 界面只能退回工作区名。这里改成带 beforeSeq 的**开头小窗**：既稳定命中标题，
+     * 又把单次载荷从几百条降到几十条。beforeSeq 必须配 historyFormatVersion。
+     *
+     * 请求**不带** view=conversation，因此响应也不会带 view 字段：调用方据此把
+     * 标题探针的响应与会话历史页区分开，避免污染正在打开的对话。
      */
-    public void requestSessionTitle(String sessionId) {
+    public void requestSessionTitle(String sessionId, int historyFormatVersion) {
         try {
             JSONObject o = base("history");
             o.put("sessionId", sessionId);
-            o.put("view", "conversation");
-            o.put("maxMessages", 500);
+            o.put("beforeSeq", TITLE_PROBE_BEFORE_SEQ);
+            o.put("maxMessages", TITLE_PROBE_MAX_MESSAGES);
+            o.put("historyFormatVersion", historyFormatVersion);
             sendRaw(o);
         } catch (Throwable ignored) { }
     }

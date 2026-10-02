@@ -25,6 +25,8 @@ public final class SessionListView extends FrameLayout {
         void onRefresh();
         void onRename(SessionInfo s);
         void onArchive(SessionInfo s);
+        /** 展开/折叠某父会话名下的子会话（子智能体 / 专家团）。 */
+        void onToggleChildren(SessionInfo s);
     }
 
     private final Context ctx;
@@ -140,11 +142,13 @@ public final class SessionListView extends FrameLayout {
             SessionInfo s = (SessionInfo) row;
 
             LinearLayout outer = Ui.col(ctx);
-            outer.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4));
+            // 子会话缩进 + 淡底：一眼看出它挂在上面那个父会话下面，而不是一条独立对话
+            outer.setPadding(Ui.dp(ctx, 22) * s.childDepth, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4));
 
             LinearLayout card = Ui.row(ctx);
             card.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 13), Ui.dp(ctx, 13), Ui.dp(ctx, 13));
-            card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
+            card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16),
+                    s.childDepth > 0 ? Ui.BRAND_SOFT : Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
             card.setElevation(Ui.dp(ctx, 0.5f));
 
             LinearLayout texts = Ui.col(ctx);
@@ -152,7 +156,9 @@ public final class SessionListView extends FrameLayout {
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
             texts.setLayoutParams(tlp);
 
-            TextView title = Ui.text(ctx, s.display(), 15.5f, Ui.INK, true);
+            String shownTitle = s.displayForList();
+            if (s.childDepth > 0) shownTitle = "└ " + shownTitle;
+            TextView title = Ui.text(ctx, shownTitle, 15.5f, Ui.INK, true);
             title.setSingleLine(true);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             texts.addView(title);
@@ -179,6 +185,20 @@ public final class SessionListView extends FrameLayout {
                 texts.addView(st);
             }
             card.addView(texts);
+
+            // 折叠开关：父会话名下挂着子智能体/专家团会话时给一个可点的入口（默认折叠）
+            if (s.childCount > 0) {
+                TextView tog = Ui.text(ctx, (s.expanded ? "▾ " : "▸ ") + s.childCount + " 子会话",
+                        11.5f, Ui.BRAND, true);
+                tog.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
+                tog.setBackground(Ui.pill(Ui.BRAND_SOFT));
+                LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                glp.rightMargin = Ui.dp(ctx, 6);
+                tog.setLayoutParams(glp);
+                tog.setOnClickListener(v -> host.onToggleChildren(s));
+                card.addView(tog);
+            }
 
             if (s.pending > 0) {
                 TextView badge = Ui.text(ctx, s.pending == 1 ? "❓ 待回答" : "⚠ 待批准",

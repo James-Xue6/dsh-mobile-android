@@ -124,12 +124,33 @@ public final class MainActivity extends Activity implements
     private String planPhase = "";
     private String planTodos = "";
 
-    // 标题懒加载队列（网关不返回 title，只能逐个从历史里抽）
+    // 标题懒加载队列（网关不返回 title，只能逐个从历史的**开头小窗**里抽）
     private final java.util.ArrayDeque<String> titleQueue = new java.util.ArrayDeque<>();
+    /**
+     * 已入队 / 在途的会话：只用来去重，**不是**"进过就永不重试"的黑洞。
+     * 拿到标题、超时用尽、或断线重连时都会从这里放行，允许重新探测。
+     */
     private final Set<String> titleRequested = new HashSet<>();
     private final Set<String> titleAwaiting = new HashSet<>();
+    /** 每个会话已发出的探针次数（超时重试上限）。 */
+    private final java.util.Map<String, Integer> titleAttempts = new java.util.HashMap<>();
+    /** 在途探针的截止时刻：到点还没回就当丢了，重入队。 */
+    private final java.util.Map<String, Long> titleDeadline = new java.util.HashMap<>();
+    /** 探针回了但没抽到标题（标题事件可能还没生成），到这个时刻再补一次。 */
+    private final java.util.Map<String, Long> titleDeferredUntil = new java.util.HashMap<>();
     private int titleInFlight = 0;
     private static final int TITLE_MAX_INFLIGHT = 2;
+    /** 单会话最多探测次数（首次 + 2 次重试）。 */
+    private static final int TITLE_MAX_TRIES = 3;
+    /** 探针超时：10 秒没回就重入队（断线/丢帧后仍能自愈）。 */
+    private static final long TITLE_TIMEOUT_MS = 10_000L;
+    /** 空结果后的补探间隔：新会话的标题常常晚一拍才生成。 */
+    private static final long TITLE_EMPTY_RETRY_MS = 8_000L;
+    /** 标题重试扫描任务的当前排程（null = 没排）。 */
+    private Runnable titleSweep;
+
+    /** 已展开的子会话分组（父会话 id）。默认折叠：子智能体/专家团会话不铺在主列表里。 */
+    private final Set<String> expandedParents = new HashSet<>();
 
     // ============================================================ 生命周期
 
@@ -409,11 +430,37 @@ public final class MainActivity extends Activity implements
         return out;
     }
 
-    /** 按工作区分组：rows = [「工作区 · N」, 会话, 会话, 「工作区 · N」, ...] */
+    private static final Comparator<SessionInfo> BY_UPDATED_DESC = new Comparator<SessionInfo>() {
+        @Override public int compare(SessionInfo a, SessionInfo b) {
+            return Long.compare(b.updatedAt, a.updatedAt);
+        }
+    };
+
+    /**
+     * 按工作区分组：rows = [「工作区 · N」, 顶层会话, (展开时)缩进子会话, ...]。
+     *
+     * 子智能体 / 专家团成员的会话（origin=subagent）不再平铺在主列表里，而是缩进挂在
+     * 父会话下面、默认折叠——保留可发现性，又不会把主列表淹掉。父会话不可见时子会话
+     * 自己升为顶层，绝不会凭空消失。
+     */
     private List<Object> buildRows() {
         List<SessionInfo> vis = visibleSessions();
-        java.util.LinkedHashMap<String, List<SessionInfo>> groups = new java.util.LinkedHashMap<>();
+        java.util.Map<String, SessionInfo> byId = new java.util.HashMap<>();
+        for (SessionInfo s : vis) byId.put(s.id, s);
+
+        java.util.LinkedHashMap<String, List<SessionInfo>> childrenOf = new java.util.LinkedHashMap<>();
+        List<SessionInfo> roots = new ArrayList<>();
         for (SessionInfo s : vis) {
+            String p = s.parentSessionId == null ? "" : s.parentSessionId;
+            SessionInfo parent = (p.isEmpty() || p.equals(s.id)) ? null : byId.get(p);
+            if (parent == null) { roots.add(s); continue; }
+            List<SessionInfo> g = childrenOf.get(p);
+            if (g == null) { g = new ArrayList<>(); childrenOf.put(p, g); }
+            g.add(s);
+        }
+
+        java.util.LinkedHashMap<String, List<SessionInfo>> groups = new java.util.LinkedHashMap<>();
+        for (SessionInfo s : roots) {
             String key = workspaceLabel(s);
             List<SessionInfo> g = groups.get(key);
             if (g == null) { g = new ArrayList<>(); groups.put(key, g); }
@@ -425,18 +472,63 @@ public final class MainActivity extends Activity implements
                 return Long.compare(latestAt(groups.get(b)), latestAt(groups.get(a)));
             }
         });
+
         List<Object> rows = new ArrayList<>();
         for (String k : keys) {
             List<SessionInfo> g = groups.get(k);
+            Collections.sort(g, BY_UPDATED_DESC);
+            List<SessionInfo> flat = new ArrayList<>();
+            HashSet<String> chain = new HashSet<>();
+            for (SessionInfo s : g) emitSession(s, 0, childrenOf, flat, chain);
+            renumberUntitled(flat);
             rows.add(k + "  ·  " + g.size());
-            Collections.sort(g, new Comparator<SessionInfo>() {
-                @Override public int compare(SessionInfo a, SessionInfo b) {
-                    return Long.compare(b.updatedAt, a.updatedAt);
-                }
-            });
-            rows.addAll(g);
+            rows.addAll(flat);
         }
         return rows;
+    }
+
+    /** 深度优先摊平：父会话在前，展开时紧跟缩进后的子会话。 */
+    private void emitSession(SessionInfo s, int depth,
+                             java.util.Map<String, List<SessionInfo>> childrenOf,
+                             List<SessionInfo> out, Set<String> chain) {
+        // chain 只装"当前这条祖先链"，用来防父子链成环；出栈就删，
+        // 免得把 id 相同的重复条目也一并吞掉（那样列表会凭空少几行）。
+        if (s == null || depth > 16 || !chain.add(s.id)) return;
+        s.childDepth = Math.min(depth, 4);
+        List<SessionInfo> kids = childrenOf.get(s.id);
+        s.childCount = kids == null ? 0 : kids.size();
+        s.expanded = s.childCount > 0 && expandedParents.contains(s.id);
+        out.add(s);
+        if (s.expanded) {
+            List<SessionInfo> sorted = new ArrayList<>(kids);
+            Collections.sort(sorted, BY_UPDATED_DESC);
+            for (SessionInfo c : sorted) emitSession(c, depth + 1, childrenOf, out, chain);
+        }
+        chain.remove(s.id);
+    }
+
+    /** 同一分组里有多个「未命名会话」时才编号，免得几条长得一模一样分不清。 */
+    private static void renumberUntitled(List<SessionInfo> emitted) {
+        int n = 0;
+        for (SessionInfo s : emitted) if (s.title == null || s.title.trim().isEmpty()) n++;
+        int i = 0;
+        for (SessionInfo s : emitted) {
+            if (n >= 2 && (s.title == null || s.title.trim().isEmpty())) s.untitledSeq = ++i;
+            else s.untitledSeq = 0;
+        }
+    }
+
+    /** 顶层会话数：子会话折叠在父会话下面，不单独算一条。 */
+    private int topLevelSessionCount() {
+        List<SessionInfo> vis = visibleSessions();
+        Set<String> ids = new HashSet<>();
+        for (SessionInfo s : vis) ids.add(s.id);
+        int n = 0;
+        for (SessionInfo s : vis) {
+            String p = s.parentSessionId == null ? "" : s.parentSessionId;
+            if (p.isEmpty() || p.equals(s.id) || !ids.contains(p)) n++;
+        }
+        return n;
     }
 
     private static long latestAt(List<SessionInfo> l) {
@@ -634,7 +726,7 @@ public final class MainActivity extends Activity implements
         if (listScreen == null) return;
         String s;
         if (gw.state() == GatewayClient.State.READY) {
-            int visible = visibleSessions().size();
+            int visible = topLevelSessionCount();
             s = visible + " 个对话 · " + (store.gatewayName().isEmpty() ? hostOf(store.url()) : store.gatewayName());
         } else if (!store.paired()) {
             s = "还没配对 · 点右上角齿轮设置";
@@ -694,6 +786,9 @@ public final class MainActivity extends Activity implements
                     setRunning(false);
                 }
             }
+            // 重连后重新补标题：断线期间丢掉的探针不该让某个会话永远没有标题
+            // （旧实现里 titleRequested 只进不出，丢了就再也不会重试）。
+            resetTitleProbesForRetry();
             gw.requestSessions();
             // 断线会丢掉网关侧的订阅，重连后必须重新订阅，否则当前会话不再实时更新
             if (!currentSessionId.isEmpty()) {
@@ -776,24 +871,22 @@ public final class MainActivity extends Activity implements
                 if (o == null) continue;
                 SessionInfo s = new SessionInfo();
                 s.id = o.optString("sessionId", o.optString("id", ""));
-                s.title = o.optString("title", "");
+                s.title = titleFromItem(o);
                 s.cwd = o.optString("cwd", "");
                 s.agentPreset = o.optString("agentPreset", "");
                 s.updatedAt = o.optLong("updatedAt", 0L);
                 s.running = o.optBoolean("running", false);
                 s.blank = o.optBoolean("blank", false);
+                // 子智能体 / 专家团识别字段：网关原样透传宿主 session.list 的同名字段
+                s.parentSessionId = o.optString("parentSessionId", "");
+                s.origin = o.optString("origin", "");
                 s.raw = o;
+                // 拿到标题就落缓存（投影缓存命中时列表本身带 title，省掉一次历史请求）
+                if (!s.title.isEmpty()) store.cacheTitle(s.id, s.title);
                 if (!s.id.isEmpty()) sessions.add(s);
             }
         }
-        for (SessionInfo s : sessions) {
-            s.title = store.cachedTitle(s.id);
-            if (s.title.isEmpty() && !s.blank && !titleRequested.contains(s.id)) {
-                titleRequested.add(s.id);
-                titleQueue.add(s.id);
-            }
-        }
-        pumpTitleQueue();
+        enqueueMissingTitles();
 
         JSONArray arch = raw.optJSONArray("archivedSessionIds");
         if (arch != null) {
@@ -810,21 +903,40 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onHistory(String sessionId, JSONArray events, JSONObject meta) {
+        // 标题探针的请求不带 view=conversation，响应也就没有 view 字段；
+        // 会话历史页一定带。用这个把两者分开，探针响应绝不写进对话。
+        boolean isTitleProbe = !"conversation".equals(meta == null ? "" : meta.optString("view", ""));
+
         String found = extractTitle(events);
+        boolean wasAwaiting = titleAwaiting.remove(sessionId);
+        if (wasAwaiting) {
+            titleDeadline.remove(sessionId);
+            if (titleInFlight > 0) titleInFlight--;
+        }
         if (!found.isEmpty()) {
             store.cacheTitle(sessionId, found);
+            titleRequested.remove(sessionId);
+            titleAttempts.remove(sessionId);
+            titleDeferredUntil.remove(sessionId);
             for (SessionInfo si : sessions) if (si.id.equals(sessionId)) si.title = found;
             if (sessionId.equals(currentSessionId)) {
                 currentTitle = found;
                 if (convo != null) convo.setTitleText(found);
             }
             if (screen == Screen.LIST && listScreen != null) listScreen.setRows(buildRows());
+        } else if (wasAwaiting) {
+            // 探针回来了但没抽到标题：可能是标题事件还没生成（新会话），
+            // 过一会儿再补一次；次数用完就等重连（resetTitleProbesForRetry）再来。
+            if (attemptsOf(sessionId) < TITLE_MAX_TRIES) {
+                titleDeferredUntil.put(sessionId, System.currentTimeMillis() + TITLE_EMPTY_RETRY_MS);
+            } else {
+                titleRequested.remove(sessionId);
+            }
         }
-        if (titleAwaiting.remove(sessionId)) {
-            if (titleInFlight > 0) titleInFlight--;
-            pumpTitleQueue();
-        }
+        if (wasAwaiting) pumpTitleQueue();
+
         if (!sessionId.equals(currentSessionId)) return;
+        if (isTitleProbe) return;   // 标题探针：只更新标题，不碰会话历史
         cancelSendWatchdog();   // 该会话的历史回来了 = 连接与回合都是活的
 
         if (tailRefetchPending) {
@@ -1501,6 +1613,14 @@ public final class MainActivity extends Activity implements
         } else if ("session-title-changed".equals(kind)) {
             String sid = frame.optString("sessionId", "");
             String title = frame.optString("title", "");
+            if (!title.trim().isEmpty()) {
+                // 宿主/桌面端改了标题：立刻落缓存，并停掉这个会话的标题探针
+                store.cacheTitle(sid, title);
+                titleRequested.remove(sid);
+                titleAttempts.remove(sid);
+                titleDeferredUntil.remove(sid);
+                titleQueue.remove(sid);
+            }
             for (SessionInfo s : sessions) if (s.id.equals(sid)) s.title = title;
             if (sid.equals(currentSessionId)) {
                 currentTitle = title;
@@ -1923,15 +2043,116 @@ public final class MainActivity extends Activity implements
         return best;
     }
 
+    /**
+     * 列表项自带的标题。sessions 契约里 item 本身没有 title 字段（宿主没下发），
+     * 但 item.projections.values.title 在投影缓存命中时会有——有就白拿，省掉一次历史请求。
+     */
+    private static String titleFromItem(JSONObject o) {
+        if (o == null) return "";
+        String t = o.optString("title", "");
+        if (t != null && !t.trim().isEmpty()) return t.trim();
+        JSONObject proj = o.optJSONObject("projections");
+        if (proj == null) return "";
+        JSONObject values = proj.optJSONObject("values");
+        if (values == null) return "";
+        String pt = values.optString("title", "");
+        return pt == null ? "" : pt.trim();
+    }
+
+    /**
+     * 给所有「还没有标题、也不空」的会话排队探测标题。
+     *
+     * 每次 onSessions（含断线重连后的刷新）都会重新走一遍：已经拿到的走缓存，
+     * 还没拿到的只要没超过 TITLE_MAX_TRIES 就继续排——不会再出现"某次请求丢了，
+     * 这个会话就永远没有标题"。
+     */
+    private void enqueueMissingTitles() {
+        for (SessionInfo s : sessions) {
+            String cached = store.cachedTitle(s.id);
+            if (!cached.isEmpty()) { s.title = cached; continue; }
+            if (s.blank) continue;
+            if (titleRequested.contains(s.id)) continue;
+            if (attemptsOf(s.id) >= TITLE_MAX_TRIES) continue;
+            titleRequested.add(s.id);
+            titleQueue.add(s.id);
+        }
+        pumpTitleQueue();
+    }
+
+    private int attemptsOf(String sid) {
+        Integer n = titleAttempts.get(sid);
+        return n == null ? 0 : n;
+    }
+
     private void pumpTitleQueue() {
         while (titleInFlight < TITLE_MAX_INFLIGHT && !titleQueue.isEmpty()) {
             String sid = titleQueue.poll();
             if (sid == null || sid.isEmpty()) continue;
-            if (!store.cachedTitle(sid).isEmpty()) continue;
+            if (!store.cachedTitle(sid).isEmpty()) { titleRequested.remove(sid); continue; }
+            if (!titleRequested.contains(sid)) titleRequested.add(sid);
             titleInFlight++;
             titleAwaiting.add(sid);
-            gw.requestSessionTitle(sid);
+            titleAttempts.put(sid, attemptsOf(sid) + 1);
+            titleDeadline.put(sid, System.currentTimeMillis() + TITLE_TIMEOUT_MS);
+            gw.requestSessionTitle(sid, historyFormatVersion);
         }
+        armTitleSweep();
+    }
+
+    /**
+     * 排一次标题重试扫描。只在真有"在途"或"待补"探针时才排，扫完自动续期；
+     * 都空了就停，不常驻定时器。
+     */
+    private void armTitleSweep() {
+        if (titleSweep != null) return;
+        if (titleAwaiting.isEmpty() && titleDeferredUntil.isEmpty()) return;
+        titleSweep = new Runnable() {
+            @Override public void run() {
+                titleSweep = null;
+                titleSweepOnce();
+                if (!titleAwaiting.isEmpty() || !titleDeferredUntil.isEmpty()) armTitleSweep();
+            }
+        };
+        uiHandler.postDelayed(titleSweep, 1_000L);
+    }
+
+    /** 一次扫描：超时未回的探针重入队；空结果的到点补探。 */
+    private void titleSweepOnce() {
+        long now = System.currentTimeMillis();
+        for (String sid : new ArrayList<>(titleAwaiting)) {
+            Long dl = titleDeadline.get(sid);
+            if (dl == null || now < dl.longValue()) continue;
+            titleAwaiting.remove(sid);
+            titleDeadline.remove(sid);
+            if (titleInFlight > 0) titleInFlight--;
+            if (attemptsOf(sid) < TITLE_MAX_TRIES) {
+                titleQueue.add(sid);            // titleRequested 保留，拿到标题或放弃时才放开
+            } else {
+                titleRequested.remove(sid);     // 用尽次数：这一轮放弃，等重连再试
+            }
+        }
+        for (String sid : new ArrayList<>(titleDeferredUntil.keySet())) {
+            Long at = titleDeferredUntil.get(sid);
+            if (at == null || now < at.longValue()) continue;
+            titleDeferredUntil.remove(sid);
+            if (attemptsOf(sid) < TITLE_MAX_TRIES && store.cachedTitle(sid).isEmpty()) {
+                titleRequested.add(sid);
+                titleQueue.add(sid);
+            }
+        }
+        pumpTitleQueue();
+    }
+
+    /**
+     * 断线重连后清掉"这一轮放弃"的记录，让还没标题的会话重新排队补标题。
+     * 在途的探针要保留 titleRequested，避免同一个会话被重复探测。
+     */
+    private void resetTitleProbesForRetry() {
+        titleQueue.clear();
+        titleDeferredUntil.clear();
+        titleAttempts.clear();
+        titleRequested.clear();
+        for (String sid : titleAwaiting) titleRequested.add(sid);
     }
 
     private void rebuildOrder() {
@@ -2135,6 +2356,14 @@ public final class MainActivity extends Activity implements
         currentTitle = s.display();
         currentCwd = s.cwd;
         subscribeCurrent();
+    }
+
+    /** 展开/折叠某父会话名下的子会话（子智能体 / 专家团）。 */
+    @Override
+    public void onToggleChildren(SessionInfo s) {
+        if (s == null || s.id == null || s.id.isEmpty()) return;
+        if (!expandedParents.remove(s.id)) expandedParents.add(s.id);
+        if (listScreen != null) listScreen.setRows(buildRows());
     }
 
     @Override
