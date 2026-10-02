@@ -467,17 +467,6 @@ public final class Ui {
         return GRADIENTS[(h & 0x7fffffff) % GRADIENTS.length];
     }
 
-    /**
-     * 选中态的**浅灰圆角胶囊**（列表行 / 侧栏 / 分段 / 选项行）。
-     *
-     * <p>对齐参考图：选中 = 浅灰胶囊，**不是**蓝底白字。彩色只留给那一项里的图标/主按钮。
-     *
-     * @param radiusDp 圆角；列表行一般 10~14，参考图侧栏选中行约 10dp
-     */
-    public static GradientDrawable selectPill(Context c, float radiusDp) {
-        return round(dp(c, radiusDp), SELECT_BG);
-    }
-
     /** 卡片内的分隔线：1px 发丝线（{@link #HAIRLINE}），**不是** SEP 那种看得见的灰线。 */
     public static View cardDivider(Context c) {
         return barHairline(c);

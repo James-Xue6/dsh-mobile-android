@@ -747,7 +747,7 @@ public final class ChatAdapter extends BaseAdapter {
                     row.setOnLongClickListener(v -> { host.onCopyPath(path); return true; });
                 }
                 card.addView(row);
-                if (i < fs.length() - 1) card.addView(Ui.divider(ctx));
+                if (i < fs.length() - 1) card.addView(Ui.cardDivider(ctx));
             }
         }
         wrap.addView(card);

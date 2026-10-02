@@ -8,8 +8,8 @@
 # =====================================================================
 [CmdletBinding()]
 param(
-  [string]$Jdk        = 'F:\AI\程序开发\tools\jdk-21.0.12.1+1',
-  [string]$Sdk        = 'C:\Program Files (x86)\Android\android-sdk',
+    [string]$Jdk        = $(if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME 'bin\javac.exe'))) { $env:JAVA_HOME } else { $p = @('D:\AndroidStudio\jbr','C:\Program Files\Android\Android Studio\jbr','F:\AI\程序开发\tools\jdk-21.0.12.1+1') | Where-Object { Test-Path (Join-Path $_ 'bin\javac.exe') }; $p | Select-Object -First 1 }),
+  [string]$Sdk        = 'F:\AI\程序开发\android-sdk',
   [string]$BuildTools = '36.0.0',
   [string]$Platform   = 'android-36',
   [string]$Stage      = 'C:\dshstage',
@@ -250,3 +250,5 @@ $apkHash = (Get-FileHash -LiteralPath $final -Algorithm SHA256).Hash.ToLowerInva
 $hashFile = "$final.sha256"
 Set-Content -LiteralPath $hashFile -Value "$apkHash  dsh-mobile.apk" -Encoding ASCII
 Write-Host "校验值: $hashFile  ($apkHash)" -ForegroundColor Green
+
+
