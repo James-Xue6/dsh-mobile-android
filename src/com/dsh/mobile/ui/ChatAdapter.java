@@ -101,10 +101,10 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 5), 0, Ui.dp(ctx, 5));
         wrap.setGravity(Gravity.END);
 
-        TextView bubble = Ui.text(ctx, it.text, 15.5f, 0xFFFFFFFF, false);
+        TextView bubble = Ui.text(ctx, it.text, 15.5f, Ui.ON_BRAND, false);
         bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 14), Ui.dp(ctx, 10));
         bubble.setMaxWidth(maxBubble);
-        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 18), Ui.BRAND);
+        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 18), Ui.BRAND_FILL);
         bubble.setBackground(bg);
         bubble.setTextIsSelectable(true);
 
@@ -190,7 +190,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), 0xFFC7D2FE));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE_AGENT));
 
         TextView head = Ui.text(ctx, "👥 " + (it.agentName.isEmpty() ? "专家团回传" : it.agentName),
                 12.5f, Ui.BRAND, true);
@@ -312,7 +312,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), 0xFFFDE68A));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_APPROVAL));
         card.setLayoutParams(Ui.fill());
 
         TextView title = Ui.text(ctx, "需要你的批准", 14.5f, Ui.INK, true);
@@ -355,7 +355,7 @@ public final class ChatAdapter extends BaseAdapter {
             actions.setLayoutParams(Ui.fill());
             actions.setPadding(0, Ui.dp(ctx, 11), 0, 0);
 
-            TextView allow = actionButton("批准一次", Ui.BRAND, 0xFFFFFFFF);
+            TextView allow = actionButton("批准一次", Ui.BRAND_FILL, Ui.ON_BRAND);
             allow.setOnClickListener(v -> host.onApprove(it, "allowed-once"));
             LinearLayout.LayoutParams a1 = new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
@@ -364,7 +364,7 @@ public final class ChatAdapter extends BaseAdapter {
             actions.addView(allow);
 
             TextView deny = actionButton("拒绝", Ui.SURFACE, Ui.ERR);
-            deny.setBackground(Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1.2f), 0xFFFCA5A5));
+            deny.setBackground(Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_DANGER));
             deny.setOnClickListener(v -> host.onApprove(it, "rejected"));
             deny.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -384,7 +384,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), 0xFFBFD2FF));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_QUESTION));
         card.setLayoutParams(Ui.fill());
 
         card.addView(Ui.text(ctx, "Agent 在等你的回答", 14.5f, Ui.INK, true));
@@ -442,7 +442,7 @@ public final class ChatAdapter extends BaseAdapter {
             custom.setTextSize(14f);
             custom.setHintTextColor(Ui.INK_FAINT);
             custom.setTextColor(Ui.INK);
-            custom.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), 0xFFF7F8FC, Ui.dp(ctx, 0.8f), Ui.LINE));
+            custom.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.FIELD_BG, Ui.dp(ctx, 0.8f), Ui.LINE));
             custom.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 9), Ui.dp(ctx, 12), Ui.dp(ctx, 9));
             custom.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             custom.setMinLines(1);
@@ -480,7 +480,7 @@ public final class ChatAdapter extends BaseAdapter {
             actions.setLayoutParams(Ui.fill());
             actions.setPadding(0, Ui.dp(ctx, 11), 0, 0);
 
-            TextView submit = actionButton("提交", Ui.BRAND, 0xFFFFFFFF);
+            TextView submit = actionButton("提交", Ui.BRAND_FILL, Ui.ON_BRAND);
             submit.setOnClickListener(v -> {
                 // 网关会拒绝空答案（"custom answers must be non-empty strings"），先本地校验
                 for (int i = 0; i < ids.size(); i++) {
@@ -575,7 +575,7 @@ public final class ChatAdapter extends BaseAdapter {
             mark.setTextColor(on ? Ui.BRAND : Ui.INK_FAINT);
             row.setBackground(Ui.roundStroke(Ui.dp(ctx, 12),
                     on ? Ui.BRAND_SOFT : Ui.SURFACE,
-                    Ui.dp(ctx, 1.0f), on ? 0xFFC7D3FF : Ui.LINE));
+                    Ui.dp(ctx, 1.0f), on ? Ui.LINE_SELECTED : Ui.LINE));
         };
         paint.run();
 
@@ -606,7 +606,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), 0xFFBFE7CC));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_OK));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", 14.5f, Ui.INK, true));
 
@@ -632,7 +632,7 @@ public final class ChatAdapter extends BaseAdapter {
                     TextView p = Ui.text(ctx,
                             ds != null && !ds.isEmpty() ? ds : "点此下载到手机 · 长按复制路径",
                             11f,
-                            ds != null && ds.startsWith("已下载") ? 0xFF2FB344 : Ui.INK_FAINT,
+                            ds != null && ds.startsWith("已下载") ? Ui.LINK_OK : Ui.INK_FAINT,
                             false);
                     row.addView(p);
                     row.setLongClickable(true);

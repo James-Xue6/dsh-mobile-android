@@ -25,12 +25,14 @@ public final class SettingsView extends LinearLayout {
         void onSetDisplayMode(String mode);
         /** 「允许截屏」开关（默认开）。关掉后本 App 内截图/录屏会变黑。 */
         void onToggleAllowScreenshot(boolean on);
+        /** 主题三选一：system（跟随系统，默认） / light（浅色） / dark（深色）。 */
+        void onSetThemeMode(String mode);
     }
 
     private final Context ctx;
     private final Host host;
-    private final EditText lanField;
-    private final EditText wanField;
+    private EditText lanField;
+    private EditText wanField;
     private TextView useLanBtn;
     private TextView useWanBtn;
     private TextView aboutText;
@@ -39,20 +41,41 @@ public final class SettingsView extends LinearLayout {
     private TextView insecureBtn;
     private boolean insecureState;
     private TextView feedbackCount;
-    private final EditText tokenField;
-    private final EditText nameField;
-    private final TextView status;
-    private final TextView diag;
+    private EditText tokenField;
+    private EditText nameField;
+    private TextView status;
+    private TextView diag;
     private TextView modeFull;
     private TextView modeCompact;
     /** 「允许截屏」开关（复用设置页现有的 segment 开关样式，与「允许自签名证书」一致）。 */
     private TextView shotBtn;
     private boolean shotState = true;
+    /** 主题三分段：跟随系统 / 浅色 / 深色。 */
+    private TextView themeSystem;
+    private TextView themeLight;
+    private TextView themeDark;
+    private String themeMode = Theme.MODE_SYSTEM;
+    /**
+     * 分区的展开状态。主题切换会整棵树重建（配色是创建时烘进去的），
+     * 重建时靠这张表把用户已经展开/收起的区块原样还原，不至于"一切主题全折叠"。
+     */
+    private final java.util.Map<String, Boolean> sectionOpen = new java.util.HashMap<>();
 
     public SettingsView(Context ctx, Host host) {
         super(ctx);
         this.ctx = ctx;
         this.host = host;
+        build();
+    }
+
+    /**
+     * 按**当前**主题把整棵设置页建出来。
+     *
+     * 手搓 View 的配色是创建时烘进每个控件的，主题一变只有重建才不会有漏网之鱼；
+     * 重建前由 {@link #applyTheme()} 负责保住用户草稿与分区展开状态。
+     */
+    private void build() {
+        removeAllViews();
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
 
@@ -60,7 +83,7 @@ public final class SettingsView extends LinearLayout {
         LinearLayout bar = Ui.row(ctx);
         bar.setBackgroundColor(Ui.SURFACE);
         bar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
-        TextView back = Ui.circleButton(ctx, "‹", 0x00000000, Ui.INK);
+        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.INK);
         back.setTextSize(26f);
         back.setOnClickListener(v -> host.onBack());
         bar.addView(back);
@@ -166,6 +189,36 @@ public final class SettingsView extends LinearLayout {
         disp.addView(seg);
 
 
+        // ---- 主题（浅色 / 深色 / 跟随系统）
+        LinearLayout themeSec = section(body, "主题", false);
+        themeSec.addView(hint("「跟随系统」= 跟着手机的深色模式走：手机开深色，App 自己也变深色"
+                + "（系统切换时不用重启 App，这里会立刻跟着变）。"
+                + "「浅色」「深色」则锁死这一档，不受手机设置影响。"));
+        LinearLayout themeSeg = Ui.row(ctx);
+        themeSeg.setLayoutParams(Ui.fill());
+        themeSeg.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        themeSystem = segment("跟随系统");
+        themeLight = segment("浅色");
+        themeDark = segment("深色");
+        themeSystem.setOnClickListener(v -> {
+            host.onSetThemeMode(Theme.MODE_SYSTEM);
+            setThemeMode(Theme.MODE_SYSTEM);
+        });
+        themeLight.setOnClickListener(v -> {
+            host.onSetThemeMode(Theme.MODE_LIGHT);
+            setThemeMode(Theme.MODE_LIGHT);
+        });
+        themeDark.setOnClickListener(v -> {
+            host.onSetThemeMode(Theme.MODE_DARK);
+            setThemeMode(Theme.MODE_DARK);
+        });
+        themeSeg.addView(themeSystem, weight(1f, 0));
+        themeSeg.addView(themeLight, weight(1f, 6));
+        themeSeg.addView(themeDark, weight(1f, 6));
+        themeSec.addView(themeSeg);
+        paintTheme();
+
+
         // ---- 隐私（高级项，默认折叠；与「允许自签名证书」同一套开关样式）
         LinearLayout privacy = section(body, "隐私", false);
         privacy.addView(hint("关掉「允许截屏」后，本 App 内的截图/录屏会变成黑屏，"
@@ -249,13 +302,64 @@ public final class SettingsView extends LinearLayout {
 
     private void styleSeg(TextView t, boolean on) {
         if (t == null) return;
-        t.setTextColor(on ? 0xFFFFFFFF : Ui.INK);
+        t.setTextColor(on ? Ui.ON_BRAND : Ui.INK);
         t.setTypeface(on ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
-        t.setBackground(on ? Ui.round(Ui.dp(ctx, 999), Ui.BRAND)
+        t.setBackground(on ? Ui.round(Ui.dp(ctx, 999), Ui.BRAND_FILL)
                 : Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE));
     }
 
     public void setDisplayMode(String mode) { paintModes(mode); }
+
+    // ------------------------------------------------------------ 主题
+
+    private void paintTheme() {
+        styleSeg(themeSystem, Theme.MODE_SYSTEM.equals(themeMode));
+        styleSeg(themeLight, Theme.MODE_LIGHT.equals(themeMode));
+        styleSeg(themeDark, Theme.MODE_DARK.equals(themeMode));
+    }
+
+    /** 外部（宿主）同步当前主题档位。 */
+    public void setThemeMode(String mode) {
+        themeMode = Theme.normalize(mode);
+        paintTheme();
+    }
+
+    /**
+     * 主题变了：用新色板重建整棵树。
+     *
+     * 重建会丢两样东西，这里显式保住：
+     *   ① 用户正在输入但还没保存的草稿（地址 / 令牌 / 名称）；
+     *   ② 各分区的展开 / 收起状态（靠 sectionOpen 表，见 section()）。
+     * 其余状态（开关、分段、状态文字）由 build() 之后宿主重放一遍。
+     */
+    public void applyTheme() {
+        String lan = lanField == null ? "" : lanField.getText().toString();
+        String wan = wanField == null ? "" : wanField.getText().toString();
+        String token = tokenField == null ? "" : tokenField.getText().toString();
+        String name = nameField == null ? "" : nameField.getText().toString();
+        String about = aboutText == null ? "" : aboutText.getText().toString();
+        String update = updateHint == null ? "" : updateHint.getText().toString();
+        String st = status == null ? "" : status.getText().toString();
+        String diagnostics = diag == null ? "" : diag.getText().toString();
+        String fbHint = feedbackCount == null ? "" : feedbackCount.getText().toString();
+        boolean stError = false;   // 状态行的错误态由宿主重放，这里不猜
+        build();
+        if (!lan.isEmpty()) lanField.setText(lan);
+        if (!wan.isEmpty()) wanField.setText(wan);
+        if (!token.isEmpty()) tokenField.setText(token);
+        if (!name.isEmpty()) nameField.setText(name);
+        if (aboutText != null) aboutText.setText(about);
+        if (updateHint != null) updateHint.setText(update);
+        if (status != null) setStatus(st, stError);
+        if (diag != null) diag.setText(diagnostics);
+        if (feedbackCount != null) feedbackCount.setText(fbHint);
+        // 重放开关/分段：这些值本来就在本对象的字段里，重建后自己画回去
+        paintEndpoints(useWanState);
+        setInsecureTls(insecureState);
+        setAllowScreenshot(shotState);
+        paintModes(null);   // 显示模式由宿主随后 setDisplayMode() 覆盖
+        paintTheme();
+    }
 
     public void setFields(String lan, String wan, String token, String name, boolean useWan) {
         if (lan != null && !lan.isEmpty()) lanField.setText(lan);
@@ -333,6 +437,9 @@ public final class SettingsView extends LinearLayout {
      * 设置项一多，全部铺开太吵，所以只默认展开第一项。
      */
     private LinearLayout section(LinearLayout parent, String title, boolean expanded) {
+        // 主题切换会整棵树重建；展开状态记在 sectionOpen 里，重建后原样还原
+        Boolean remembered = sectionOpen.get(title);
+        final boolean open0 = remembered != null ? remembered : expanded;
         LinearLayout wrap = Ui.col(ctx);
         wrap.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -346,25 +453,26 @@ public final class SettingsView extends LinearLayout {
         head.setClickable(true);
         TextView t = Ui.text(ctx, title, 15.5f, Ui.INK, true);
         head.addView(t, weight(1f, 0));
-        final TextView arrow = Ui.text(ctx, expanded ? "\u25BE" : "\u25B8", 14f, Ui.INK_SUB, false);
+        final TextView arrow = Ui.text(ctx, open0 ? "\u25BE" : "\u25B8", 14f, Ui.INK_SUB, false);
         head.addView(arrow);
 
         final android.view.View line = new android.view.View(ctx);
         line.setBackgroundColor(Ui.LINE);
         line.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 0.8f)));
-        line.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
+        line.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         final LinearLayout box = Ui.col(ctx);
         box.setLayoutParams(Ui.fill());
         box.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
-        box.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
+        box.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         head.setOnClickListener(v -> {
             boolean show = box.getVisibility() != android.view.View.VISIBLE;
             box.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
             line.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
             arrow.setText(show ? "\u25BE" : "\u25B8");
+            sectionOpen.put(title, show);
         });
 
         wrap.addView(head);

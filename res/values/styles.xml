@@ -15,4 +15,22 @@
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:colorAccent">@color/brand</item>
     </style>
+
+    <!--
+      对话框主题：手搓界面能深浅切换，但系统 AlertDialog 的外观来自 Theme，
+      而 AppTheme 是 Light 系 —— 深色模式下会弹出一张刺眼的白底框，和界面完全脱节。
+      所以显式给它两套，由 Ui.dialog(ctx) 按当前主题挑一套。
+      只用框架自带的 Theme.Material.*.Dialog.Alert，不引入任何新依赖。
+    -->
+    <style name="DshDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+        <item name="android:textColorSecondary">#FF6B7280</item>
+    </style>
+
+    <style name="DshDialog.Dark" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:textColorPrimary">#FFE6E6E6</item>
+        <item name="android:textColorSecondary">#FFA8ADB8</item>
+    </style>
 </resources>

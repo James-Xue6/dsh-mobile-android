@@ -24,18 +24,206 @@ import java.util.List;
 /** 视觉常量、圆角工具、以及轻量 Markdown 渲染。整体对齐 DSH 桌面版配色。 */
 public final class Ui {
 
-    public static final int BG          = 0xFFF4F6FB;
-    public static final int SURFACE     = 0xFFFFFFFF;
-    public static final int BRAND       = 0xFF4D6BFE;
-    public static final int BRAND_DEEP  = 0xFF3A57E8;
-    public static final int BRAND_SOFT  = 0xFFEEF2FF;
-    public static final int INK         = 0xFF17181C;
-    public static final int INK_SUB     = 0xFF6B7280;
-    public static final int INK_FAINT   = 0xFF9CA3AF;
-    public static final int LINE        = 0xFFE8EBF2;
-    public static final int OK          = 0xFF16A34A;
-    public static final int ERR         = 0xFFDC2626;
-    public static final int WARN        = 0xFFD97706;
+    // ============================================================ 主题色板
+    //
+    // 全 App **只从这里取色**。下面每个字段都是「当前生效的那一档颜色」：启动时和每次
+    // 切换主题 / 系统深浅色变化时，由 applyTheme(dark) 用浅色/深色两套同名色整体重写。
+    //
+    // 视图里绝不要再写 0xAARRGGBB 字面量 —— 写死的那一处切主题时不会跟着变。
+    //
+    // 语义表（浅色 / 深色）：
+    //   正文    INK            #17181C / #E6E6E6      页面主要文字
+    //   次要    INK_SUB        #6B7280 / #A8ADB8      说明、副标题
+    //   弱化    INK_FAINT      #9CA3AF / #868C99      占位符、时间、空态
+    //   品牌    BRAND          #4D6BFE / #8FA6FF      品牌色**文字与描边**（要压在深底上）
+    //   品牌实心 BRAND_FILL    #4D6BFE / #3D5AF0      品牌色**填充块**（配 ON_BRAND 文字）
+    //   品牌深  BRAND_DEEP     #3A57E8 / #A9BCFF      选中态标题（压在 BRAND_SOFT 上）
+    //   品牌淡底 BRAND_SOFT    #EEF2FF / #1E2A4D      品牌色浅底（工具卡、当前会话卡）
+    //   背景    BG             #F4F6FB / #121212      页面底色
+    //   卡片    SURFACE        #FFFFFF / #1E1E1E      卡片、气泡、顶部栏底色
+    //   描边    LINE           #E8EBF2 / #2A2C31      分隔线、卡片描边
+    //   成功    OK             #16A34A / #4ADE80
+    //   错误    ERR            #DC2626 / #F87171
+    //   警告    WARN           #D97706 / #FBBF24
+    //   品牌上的字 ON_BRAND   #FFFFFF / #FFFFFF
+    //   警告上的字 ON_WARN    #FFFFFF / #201A00      深色下琥珀底必须配深字，白字看不清
+    //   输入框底 FIELD_BG     #F7F8FC / #232529
+    //   输入条底 FIELD_ALT_BG #F5F6FA / #232529
+    //   圆形小按钮底 CHIP_BG  #F1F3F9 / #26282D
+    //   停止按钮底 STOP_BG    #E5E9F5 / #2E3340
+    //   任务提要底 PLAN_BG    #F5F8FF / #1B2233
+    //   横幅-警告 BANNER_WARN_BG/FG  #FFF7E6/#92400E / #3A2E12/#FCD34D
+    //   横幅-错误 BANNER_ERR_BG/FG   #FEF2F2/#991B1B / #3A1D1D/#FCA5A5
+    //   卡片描边-专家团 LINE_AGENT     #C7D2FE / #3F5090
+    //   卡片描边-审批   LINE_APPROVAL  #FDE68A / #7A6420
+    //   卡片描边-拒绝   LINE_DANGER    #FCA5A5 / #7F3A3A
+    //   卡片描边-提问   LINE_QUESTION  #BFD2FF / #3F5A99
+    //   卡片描边-交付物 LINE_OK        #BFE7CC / #2F5A44
+    //   选项选中描边    LINE_SELECTED  #C7D3FF / #3D4E85
+    //   徽标底-在线 BADGE_OK_BG  #E7F7EC / #16351F
+    //   徽标底-离线 BADGE_OFF_BG #F1F3F7 / #26282C
+    //   下载成功    LINK_OK      #2FB344 / #4ADE80
+    //   代码块底    CODE_BG      #F1F3F9 / #26282E
+    //   扫码页（相机取景，两套主题下都保持深底，这是取景页的正确做法）
+    //     SCAN_BG #000000 / SCAN_TIP_BG #99000000 / SCAN_PANEL_BG #E6101010
+
+    public static int BG             = 0xFFF4F6FB;
+    public static int SURFACE        = 0xFFFFFFFF;
+    public static int BRAND          = 0xFF4D6BFE;
+    public static int BRAND_FILL     = 0xFF4D6BFE;
+    public static int BRAND_DEEP     = 0xFF3A57E8;
+    public static int BRAND_SOFT     = 0xFFEEF2FF;
+    public static int INK            = 0xFF17181C;
+    public static int INK_SUB        = 0xFF6B7280;
+    public static int INK_FAINT      = 0xFF9CA3AF;
+    public static int LINE           = 0xFFE8EBF2;
+    public static int OK             = 0xFF16A34A;
+    public static int ERR            = 0xFFDC2626;
+    public static int WARN           = 0xFFD97706;
+    public static int ON_BRAND       = 0xFFFFFFFF;
+    public static int ON_WARN        = 0xFFFFFFFF;
+    public static int FIELD_BG       = 0xFFF7F8FC;
+    public static int FIELD_ALT_BG   = 0xFFF5F6FA;
+    public static int CHIP_BG        = 0xFFF1F3F9;
+    public static int STOP_BG        = 0xFFE5E9F5;
+    public static int PLAN_BG        = 0xFFF5F8FF;
+    public static int BANNER_WARN_BG = 0xFFFFF7E6;
+    public static int BANNER_WARN_FG = 0xFF92400E;
+    public static int BANNER_ERR_BG  = 0xFFFEF2F2;
+    public static int BANNER_ERR_FG  = 0xFF991B1B;
+    public static int LINE_AGENT     = 0xFFC7D2FE;
+    public static int LINE_APPROVAL  = 0xFFFDE68A;
+    public static int LINE_DANGER    = 0xFFFCA5A5;
+    public static int LINE_QUESTION  = 0xFFBFD2FF;
+    public static int LINE_OK        = 0xFFBFE7CC;
+    public static int LINE_SELECTED  = 0xFFC7D3FF;
+    public static int BADGE_OK_BG    = 0xFFE7F7EC;
+    public static int BADGE_OFF_BG   = 0xFFF1F3F7;
+    public static int LINK_OK        = 0xFF2FB344;
+    public static int CODE_BG        = 0xFFF1F3F9;
+    /** 扫码页固定深色（相机取景页，两个主题下都不该变白）。 */
+    public static int SCAN_BG        = 0xFF000000;
+    public static int SCAN_TIP_BG    = 0x99000000;
+    public static int SCAN_PANEL_BG  = 0xE6101010;
+
+    /** 当前生效的是不是深色色板。 */
+    private static boolean dark = false;
+
+    public static boolean isDark() { return dark; }
+
+    /**
+     * 切换整套色板（浅色 / 深色同名色）。
+     *
+     * 调用时机：
+     *   ① MainActivity.onCreate 最开头（必须在创建任何 View 之前）；
+     *   ② 用户在设置页切「主题」；
+     *   ③ 跟随系统模式下系统深浅色变化（onConfigurationChanged）。
+     * ②③ 之后调用方还要把**已经建好**的界面重绘一遍（各 View 的 applyTheme()）。
+     */
+    public static void applyTheme(boolean useDark) {
+        dark = useDark;
+        if (useDark) {
+            BG             = 0xFF121212;   // 背景：接近纯黑的一档
+            SURFACE        = 0xFF1E1E1E;   // 卡片：比背景略亮
+            BRAND          = 0xFF8FA6FF;   // 品牌色（文字/描边）提亮，才压得住深底
+            BRAND_FILL     = 0xFF3D5AF0;   // 品牌实心块保持深一档，白字才够对比
+            BRAND_DEEP     = 0xFFA9BCFF;
+            BRAND_SOFT     = 0xFF1E2A4D;
+            INK            = 0xFFE6E6E6;
+            INK_SUB        = 0xFFA8ADB8;
+            INK_FAINT      = 0xFF868C99;
+            LINE           = 0xFF2A2C31;
+            OK             = 0xFF4ADE80;
+            ERR            = 0xFFF87171;
+            WARN           = 0xFFFBBF24;
+            ON_BRAND       = 0xFFFFFFFF;
+            ON_WARN        = 0xFF201A00;
+            FIELD_BG       = 0xFF232529;
+            FIELD_ALT_BG   = 0xFF232529;
+            CHIP_BG        = 0xFF26282D;
+            STOP_BG        = 0xFF2E3340;
+            PLAN_BG        = 0xFF1B2233;
+            BANNER_WARN_BG = 0xFF3A2E12;
+            BANNER_WARN_FG = 0xFFFCD34D;
+            BANNER_ERR_BG  = 0xFF3A1D1D;
+            BANNER_ERR_FG  = 0xFFFCA5A5;
+            LINE_AGENT     = 0xFF3F5090;
+            LINE_APPROVAL  = 0xFF7A6420;
+            LINE_DANGER    = 0xFF7F3A3A;
+            LINE_QUESTION  = 0xFF3F5A99;
+            LINE_OK        = 0xFF2F5A44;
+            LINE_SELECTED  = 0xFF3D4E85;
+            BADGE_OK_BG    = 0xFF16351F;
+            BADGE_OFF_BG   = 0xFF26282C;
+            LINK_OK        = 0xFF4ADE80;
+            CODE_BG        = 0xFF26282E;
+            SCAN_BG        = 0xFF000000;
+            SCAN_TIP_BG    = 0x99000000;
+            SCAN_PANEL_BG  = 0xE6101010;
+        } else {
+            BG             = 0xFFF4F6FB;
+            SURFACE        = 0xFFFFFFFF;
+            BRAND          = 0xFF4D6BFE;
+            BRAND_FILL     = 0xFF4D6BFE;
+            BRAND_DEEP     = 0xFF3A57E8;
+            BRAND_SOFT     = 0xFFEEF2FF;
+            INK            = 0xFF17181C;
+            INK_SUB        = 0xFF6B7280;
+            INK_FAINT      = 0xFF9CA3AF;
+            LINE           = 0xFFE8EBF2;
+            OK             = 0xFF16A34A;
+            ERR            = 0xFFDC2626;
+            WARN           = 0xFFD97706;
+            ON_BRAND       = 0xFFFFFFFF;
+            ON_WARN        = 0xFFFFFFFF;
+            FIELD_BG       = 0xFFF7F8FC;
+            FIELD_ALT_BG   = 0xFFF5F6FA;
+            CHIP_BG        = 0xFFF1F3F9;
+            STOP_BG        = 0xFFE5E9F5;
+            PLAN_BG        = 0xFFF5F8FF;
+            BANNER_WARN_BG = 0xFFFFF7E6;
+            BANNER_WARN_FG = 0xFF92400E;
+            BANNER_ERR_BG  = 0xFFFEF2F2;
+            BANNER_ERR_FG  = 0xFF991B1B;
+            LINE_AGENT     = 0xFFC7D2FE;
+            LINE_APPROVAL  = 0xFFFDE68A;
+            LINE_DANGER    = 0xFFFCA5A5;
+            LINE_QUESTION  = 0xFFBFD2FF;
+            LINE_OK        = 0xFFBFE7CC;
+            LINE_SELECTED  = 0xFFC7D3FF;
+            BADGE_OK_BG    = 0xFFE7F7EC;
+            BADGE_OFF_BG   = 0xFFF1F3F7;
+            LINK_OK        = 0xFF2FB344;
+            CODE_BG        = 0xFFF1F3F9;
+            SCAN_BG        = 0xFF000000;
+            SCAN_TIP_BG    = 0x99000000;
+            SCAN_PANEL_BG  = 0xE6101010;
+        }
+    }
+
+    /**
+     * 系统 AlertDialog 的统一入口。
+     *
+     * 为什么不能直接 {@code new AlertDialog.Builder(activity)}：AlertDialog 的外观来自
+     * **Theme**（这里是 AppTheme，Light 系），深色模式下会弹出一张刺眼的白底对话框，
+     * 和手搓的深色界面完全脱节。这里按当前主题套一层深/浅对话框主题再建 Builder，
+     * 不引入任何新依赖（只用框架自带的 Theme.Material.*.Dialog.Alert）。
+     */
+    public static android.app.AlertDialog.Builder dialog(Context c) {
+        return new android.app.AlertDialog.Builder(dialogContext(c));
+    }
+
+    /**
+     * 与 {@link #dialog(Context)} 同一套主题的 Context。
+     *
+     * 对话框里自建的控件（EditText / CheckBox 这种用系统默认配色的）**必须**用这个
+     * Context 创建：用 Activity 建出来的控件会拿到 AppTheme（Light 系）的默认文字色，
+     * 摆进深色对话框里就是"深色字压深色底"，等于看不见。
+     */
+    public static android.content.Context dialogContext(Context c) {
+        int style = dark ? com.dsh.mobile.R.style.DshDialog_Dark : com.dsh.mobile.R.style.DshDialog;
+        return new android.view.ContextThemeWrapper(c, style);
+    }
 
     private Ui() { }
 
@@ -161,8 +349,8 @@ public final class Ui {
 
     // ------------------------------------------------------------ 表单控件（全 App 一套样式）
 
-    /** 输入框底色：比卡片白略深一点，让 12dp 圆角描边看得出来。 */
-    public static final int FIELD_BG = 0xFFF7F8FC;
+    // 输入框底色 FIELD_BG 已并入上面的主题色板（浅色 #F7F8FC / 深色 #232529）：
+    // 比卡片底色深一点，12dp 圆角 + 0.8dp 描边才看得出来。
 
     /** 字段上方的小号灰标签。 */
     public static TextView fieldLabel(Context c, String s) {
@@ -197,10 +385,10 @@ public final class Ui {
 
     /** 主按钮：品牌色实心圆角（保存 / 连接这类正向操作）。 */
     public static TextView primaryButton(Context c, String s) {
-        TextView t = text(c, s, 14.5f, 0xFFFFFFFF, true);
+        TextView t = text(c, s, 14.5f, ON_BRAND, true);
         t.setGravity(Gravity.CENTER);
         t.setPadding(0, dp(c, 12), 0, dp(c, 12));
-        t.setBackground(round(dp(c, 999), BRAND));
+        t.setBackground(round(dp(c, 999), BRAND_FILL));
         t.setClickable(true);
         return t;
     }
@@ -239,7 +427,7 @@ public final class Ui {
 
     // ------------------------------------------------------------ 轻量 Markdown
 
-    private static final int CODE_BG = 0xFFF1F3F9;
+    // 代码块底色 CODE_BG 同样并入上面的主题色板（浅色 #F1F3F9 / 深色 #26282E）。
 
     /**
      * 把模型输出的 Markdown 渲染成带样式的文本：

@@ -67,7 +67,7 @@ public final class DrawerHost extends FrameLayout {
         addView(content, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         scrim = new View(ctx);
-        scrim.setBackgroundColor(0xFF000000);
+        scrim.setBackgroundColor(android.graphics.Color.BLACK);   // 遮罩固定纯黑，浓度靠 setAlpha 控
         scrim.setAlpha(0f);
         scrim.setVisibility(GONE);
         addView(scrim, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
@@ -89,6 +89,15 @@ public final class DrawerHost extends FrameLayout {
 
     /** 抽屉层：会话列表放这里。 */
     public FrameLayout drawer() { return drawer; }
+
+    /**
+     * 主题切换：内容层与抽屉层都换成新底色。
+     * 抽屉里那张会话列表自己也会 applyTheme()（由宿主一并调用），这里只管容器底板。
+     */
+    public void applyTheme() {
+        content.setBackgroundColor(Ui.BG);
+        drawer.setBackgroundColor(Ui.BG);
+    }
 
     public boolean isOpen() { return open; }
 

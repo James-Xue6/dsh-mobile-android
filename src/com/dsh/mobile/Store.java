@@ -31,6 +31,11 @@ public final class Store {
     private static final String K_ACTIVE_DEVICE = "active_device_id";
     /** 是否允许截屏（默认 true）。 */
     private static final String K_ALLOW_SCREENSHOT = "allow_screenshot";
+    /**
+     * 主题：system（跟随系统，默认） / light（浅色） / dark（深色）。
+     * 存字符串而不是布尔，是为了以后再加"护眼/纯黑"这类档位时不用做数据迁移。
+     */
+    private static final String K_THEME_MODE = "theme_mode";
 
     private final SharedPreferences sp;
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
@@ -263,6 +268,19 @@ public final class Store {
 
     public void setDisplayMode(String mode) {
         sp.edit().putString("display_mode", "compact".equals(mode) ? "compact" : "full").apply();
+    }
+
+    /**
+     * 主题模式：{@code system}（跟随系统，默认） / {@code light}（浅色） / {@code dark}（深色）。
+     * 只负责存取；「这一刻该用哪套色」由 {@code com.dsh.mobile.ui.Theme.resolveDark} 算。
+     */
+    public String themeMode() {
+        return com.dsh.mobile.ui.Theme.normalize(sp.getString(K_THEME_MODE,
+                com.dsh.mobile.ui.Theme.MODE_SYSTEM));
+    }
+
+    public void setThemeMode(String mode) {
+        sp.edit().putString(K_THEME_MODE, com.dsh.mobile.ui.Theme.normalize(mode)).apply();
     }
 
     /**

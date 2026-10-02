@@ -45,12 +45,16 @@ public final class DeviceHubView extends LinearLayout {
 
     private final Context ctx;
     private final Host host;
+    /** 顶部区（标题 + 齿轮 + 副标题 + 状态行）。 */
+    private LinearLayout head;
+    /** 卡片区的滚动内容容器（主题切换时整块重建）。 */
+    private LinearLayout body;
     /** 设备卡片容器（每次刷新整体重建，卡片数量很少）。 */
-    private final LinearLayout cards;
+    private LinearLayout cards;
     /** 顶部状态行：当前这台到底连上没有。 */
-    private final TextView status;
+    private TextView status;
     /** 一张设备都没有时的提示。 */
-    private final TextView emptyView;
+    private TextView emptyView;
 
     public DeviceHubView(Context ctx, Host host) {
         super(ctx);
@@ -61,6 +65,7 @@ public final class DeviceHubView extends LinearLayout {
 
         // ---- 顶部：标题 + 副标题 + 高级入口（齿轮）
         LinearLayout head = Ui.col(ctx);
+        this.head = head;
         head.setBackgroundColor(Ui.BG);
         head.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 18), Ui.dp(ctx, 18), Ui.dp(ctx, 6));
 
@@ -71,7 +76,7 @@ public final class DeviceHubView extends LinearLayout {
         title.setLayoutParams(tlp);
         top.addView(title);
 
-        TextView gear = Ui.circleButton(ctx, "⚙", 0x00000000, Ui.INK_SUB);
+        TextView gear = Ui.circleButton(ctx, "⚙", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
         gear.setTextSize(19f);
         gear.setContentDescription("连接设置");
         gear.setOnClickListener(v -> host.onOpenSettings());
@@ -93,10 +98,19 @@ public final class DeviceHubView extends LinearLayout {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         scroll.setFillViewport(true);
         LinearLayout body = Ui.col(ctx);
+        this.body = body;
         body.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 4), Ui.dp(ctx, 14), Ui.dp(ctx, 28));
         scroll.addView(body);
         addView(scroll);
+        buildBody();
+    }
 
+    /**
+     * 卡片区内容：卡片容器 + 空态 + 虚线「＋ 添加设备」卡。
+     * 单独一个方法是为了让主题切换能整块重建（手搓 View 的配色创建时烘死，重建最不容易漏）。
+     */
+    private void buildBody() {
+        body.removeAllViews();
         cards = Ui.col(ctx);
         cards.setLayoutParams(Ui.fill());
         body.addView(cards);
@@ -111,6 +125,17 @@ public final class DeviceHubView extends LinearLayout {
         body.addView(emptyView);
 
         body.addView(addCard());
+    }
+
+    /**
+     * 主题切换：整页按新色板重画。
+     * 卡片容器与虚线卡都重建（配色烘在创建时）；调用方随后会 refreshDevices() 重填卡片。
+     */
+    public void applyTheme() {
+        setBackgroundColor(Ui.BG);
+        if (head != null) head.setBackgroundColor(Ui.BG);
+        buildBody();
+        requestLayout();
     }
 
     // ------------------------------------------------------------ 刷新
@@ -174,7 +199,7 @@ public final class DeviceHubView extends LinearLayout {
         TextView badge = Ui.text(ctx, online ? "在线" : "离线", 11.5f,
                 online ? Ui.OK : Ui.INK_FAINT, true);
         badge.setPadding(Ui.dp(ctx, 10), Ui.dp(ctx, 4), Ui.dp(ctx, 10), Ui.dp(ctx, 4));
-        badge.setBackground(Ui.pill(online ? 0xFFE7F7EC : 0xFFF1F3F7));
+        badge.setBackground(Ui.pill(online ? Ui.BADGE_OK_BG : Ui.BADGE_OFF_BG));
         row1.addView(badge);
         card.addView(row1);
 
@@ -262,7 +287,7 @@ public final class DeviceHubView extends LinearLayout {
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
         bg.setCornerRadius(Ui.dp(ctx, 16));
-        bg.setColor(0x00000000);
+        bg.setColor(android.graphics.Color.TRANSPARENT);
         bg.setStroke(Math.max(1, Ui.dp(ctx, 1f)), Ui.BRAND, Ui.dp(ctx, 6), Ui.dp(ctx, 5));
         card.setBackground(bg);
 
@@ -353,7 +378,7 @@ public final class DeviceHubView extends LinearLayout {
         LinearLayout row = Ui.row(ctx);
         row.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 13), Ui.dp(ctx, 14), Ui.dp(ctx, 13));
         row.setBackground(Ui.roundStroke(Ui.dp(ctx, 14),
-                scan ? Ui.BRAND_SOFT : 0xFFF7F8FC, Ui.dp(ctx, 0.8f), scan ? Ui.BRAND : Ui.LINE));
+                scan ? Ui.BRAND_SOFT : Ui.FIELD_BG, Ui.dp(ctx, 0.8f), scan ? Ui.BRAND : Ui.LINE));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = Ui.dp(ctx, 8);

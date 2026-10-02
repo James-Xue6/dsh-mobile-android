@@ -23,6 +23,7 @@ import com.dsh.mobile.ui.DrawerHost;
 import com.dsh.mobile.ui.QrScanActivity;
 import com.dsh.mobile.ui.SessionListView;
 import com.dsh.mobile.ui.SettingsView;
+import com.dsh.mobile.ui.SubagentSheet;
 import com.dsh.mobile.ui.Ui;
 
 import org.json.JSONArray;
@@ -89,6 +90,13 @@ public final class MainActivity extends Activity implements
     private SettingsView settingsView;
     /** 「我的设备」启动页。 */
     private DeviceHubView deviceHub;
+    /**
+     * 主题档位：system（跟随系统，默认）/ light / dark。
+     * 与 Store 同步；这里存一份是为了在 onConfigurationChanged 里**不解磁盘**就能判断。
+     */
+    private String themeMode = com.dsh.mobile.ui.Theme.MODE_SYSTEM;
+    /** 上一次真正套用的色板是不是深色：用来判断系统深浅色变化后要不要重绘。 */
+    private boolean themedDark = false;
     /** 冷启动只自动决定一次：进最近一条会话，或拉开抽屉提示"还没有对话"。 */
     private boolean autoEntered = false;
 
@@ -102,9 +110,34 @@ public final class MainActivity extends Activity implements
     private String currentSessionId = "";
     private String currentTitle = "";
     private String currentCwd = "";
+    /**
+     * 当前会话的父会话 id：**非空 = 人此刻就在某个子智能体 / 专家团子会话里**。
+     *
+     * 判定与抽屉折叠同源（buildRows / emitSession 用的就是 sessions 条目上的
+     * parentSessionId）：父会话在列表里能查到才置位，查不到就当作顶层，
+     * 免得返回键走进一条不存在的父会话。
+     */
+    private String currentParentId = "";
     private int historyFormatVersion = 4;
     private Long nextBeforeSeq = null;
     private boolean hasMore = false;
+    /**
+     * 「加载更早历史」是否还在途。**在途时必须忽略新的上滑触发**，否则一次上滑会连发
+     * 好几个 history 请求；响应到达 / 失败 / 超时三者任一，都要复位它。
+     */
+    private boolean loadingMore = false;
+    /**
+     * 上一次「加载更早」失败了（含超时、未连接）。失败**不清 hasMore**，
+     * 列表顶部换成可点的「加载更早失败，点这里重试」，不再静默。
+     */
+    private boolean loadMoreFailed = false;
+    /** 在途「加载更早」的超时兜底任务（响应丢了也要复位，不能卡死）。 */
+    private Runnable loadMoreTimeout;
+    /**
+     * 单次「加载更早」的等待上限。一次 history 分页最多 4 MiB（网关 HISTORY_DEFAULT_MAX_BYTES），
+     * 慢网 + 大分页要留出余量，但不能久到用户以为卡住：15s 就复位并给可重试的失败态。
+     */
+    private static final long LOAD_MORE_TIMEOUT_MS = 15_000L;
     private boolean running = false;
     private long turnStartedAt = 0L;
     /** 上一次 onState 的状态：重连时要区分"此前确实断线"与重复 READY（评审 N1）。 */
@@ -232,6 +265,10 @@ public final class MainActivity extends Activity implements
         //   - 只有用户在设置页关掉「允许截屏」时才设上（此时本 App 内容截图变黑）。
         // 令牌的掩码显示与这个开关无关：令牌仍只显示末 4 位，取消 FLAG_SECURE 不等于明文暴露它。
         store = new Store(this);
+        // 主题必须**在创建任何 View 之前**定下来：手搓 View 的配色是创建时从 Ui 取当前值
+        // 烘进每个控件的，晚一步就会得到一棵浅色骨架。这里顺带把系统栏也刷成同色。
+        themeMode = store.themeMode();
+        applyThemeEverywhere();
         applyScreenshotPolicy();
         if (SHARED_GW == null) SHARED_GW = new GatewayClient(this);
         else SHARED_GW.setListener(this);
@@ -396,11 +433,38 @@ public final class MainActivity extends Activity implements
         super.onDestroy();
     }
 
+    /**
+     * Activity 生命周期：切后台 / 锁屏 / 切任务时走到这里。
+     *
+     * 历史 bug：ConversationView.Host 里原有一个同名的 {@code onStop()} 回调
+     * （「停止当前回合」），和 Activity 生命周期方法签名撞车，于是那个回调被当成
+     * Activity.onStop() 的覆写、又没调 super.onStop()，一切后台就抛
+     * SuperNotCalledException 崩溃（真机 logcat 实测，进程 PID 698）。
+     * 现在那个回调已改名为 {@code onStopTurn()}，本方法只保留真正的生命周期语义。
+     *
+     * ⚠️ 这里**只能做收尾**，绝不能发「停止当前回合」：用户切后台不等于停回合，
+     * 真正的回合状态由网关的 session/agent 事件驱动。所以这里不碰 running、
+     * 不发 gw.stopSession()，也不动发送看门狗（那是"发出去没回音"的兜底，切后台后仍要生效）。
+     */
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // 标题重试扫描是 1s 一次的循环定时器，后台没人看结果，先撤掉。
+        // 必须把 titleSweep 置回 null：不然回前台时 armTitleSweep() 会被
+        // "titleSweep != null 就 return" 的防重入判断挡住，标题重试再也起不来。
+        if (titleSweep != null) {
+            uiHandler.removeCallbacks(titleSweep);
+            titleSweep = null;
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         // 从设置页 / 别处切回来时对齐一次截屏策略：用户在设置里一改就立即生效，不需要重启 App
         applyScreenshotPolicy();
+        // 回前台重新武装标题重试扫描（onStop 里把它撤了）；没有待办时 armTitleSweep 自己会空转返回。
+        armTitleSweep();
     }
 
     /**
@@ -430,7 +494,81 @@ public final class MainActivity extends Activity implements
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        // 这里也要处理**系统深浅色变化**：清单声明了 uiMode，系统切深色时 Activity
+        // 不会重建、AppTheme 也不会重新解析，主题必须自己跟上（跟随系统模式下）。
+        syncThemeIfSystemChanged();
         relayoutForConfig();
+    }
+
+    /** 跟随系统模式下系统深浅色变了就换色板重绘；锁死浅色/深色时不跟随。 */
+    private void syncThemeIfSystemChanged() {
+        boolean want = com.dsh.mobile.ui.Theme.resolveDark(this, themeMode);
+        if (want != themedDark) applyThemeEverywhere();
+    }
+
+    /**
+     * 把当前主题档位套用到整棵界面 + 系统栏。
+     *
+     * 调用时机：① onCreate（建任何 View 之前）；② 用户点设置里的主题分段；
+     * ③ 跟随系统模式下系统深浅色变化（onConfigurationChanged）。
+     *
+     * 重绘策略：各屏自己实现 applyTheme()。对话页/抽屉/设备页都是"逐项刷色 + 整表重画"，
+     * 设置页则是整棵树重建（它的内容纯由内存字段推导，重建最不容易漏色）。
+     */
+    private void applyThemeEverywhere() {
+        boolean dark = com.dsh.mobile.ui.Theme.resolveDark(this, themeMode);
+        com.dsh.mobile.ui.Ui.applyTheme(dark);
+        themedDark = dark;
+        applySystemBars();
+        if (root != null) root.setBackgroundColor(com.dsh.mobile.ui.Ui.BG);
+        if (drawerHost != null) drawerHost.applyTheme();
+        if (listScreen != null) listScreen.applyTheme();
+        if (convo != null) convo.applyTheme();
+        if (settingsView != null) {
+            settingsView.applyTheme();                                  // 整树重建
+            settingsView.setDisplayMode(store.displayMode());
+            settingsView.setThemeMode(themeMode);
+        }
+        if (deviceHub != null) {
+            deviceHub.applyTheme();
+            refreshDevices();                                           // 卡片内容按新色板重填
+        }
+        if (convo != null && screen == Screen.CHAT) paintBanner();       // 横幅按当前语义重画
+    }
+
+    /**
+     * 状态栏 / 导航栏底色跟着主题走，并校正**图标明暗**：
+     * 深底必须配浅色图标（清掉 LIGHT_* 标志），否则深底上的深色图标等于看不见。
+     * AppTheme 里写死的 windowLightStatusBar=true 是浅色时代的，这里运行时覆盖它。
+     */
+    private void applySystemBars() {
+        android.view.Window w = getWindow();
+        if (w == null) return;
+        int bg = com.dsh.mobile.ui.Ui.BG;
+        w.setStatusBarColor(bg);
+        w.setNavigationBarColor(bg);
+        w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bg));
+        android.view.View dv = w.getDecorView();
+        int flags = dv.getSystemUiVisibility();
+        boolean dark = com.dsh.mobile.ui.Ui.isDark();
+        if (dark) flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        else flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (android.os.Build.VERSION.SDK_INT >= 27) {
+            // LIGHT_NAVIGATION_BAR 是 API 27 才有的常量
+            if (dark) flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            else flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        dv.setSystemUiVisibility(flags);
+    }
+
+    /** 设置页「主题」三项分段：立即生效（重绘所有已建界面，不重启 App）。 */
+    @Override
+    public void onSetThemeMode(String mode) {
+        themeMode = com.dsh.mobile.ui.Theme.normalize(mode);
+        store.setThemeMode(themeMode);
+        // 先让设置页自己记住新档位，随后它会被整树重建，重建时才会画出正确的选中态
+        if (settingsView != null) settingsView.setThemeMode(themeMode);
+        applyThemeEverywhere();
     }
 
     /**
@@ -494,6 +632,7 @@ public final class MainActivity extends Activity implements
      * 两条路对同一次按键可能都触发，用时间窗去重。
      *
      * 返回栈（用户口径，逐级）：
+     *   ⓪ 人在子会话（子智能体 / 专家团子会话）→ 回它的主智能体（父会话）；
      *   ① 抽屉开着 → 关抽屉；
      *   ② 设置页 / 从抽屉进的设备页 → 回对话页；
      *   ③ 对话页 → 拉开任务列表抽屉（**不是**退回「我的设备」）；
@@ -518,6 +657,15 @@ public final class MainActivity extends Activity implements
             return;
         }
         if (screen == Screen.CHAT) {
+            // ⓪：在子会话里 → 上一级是它的主智能体（父会话），不是抽屉、更不是设备页
+            if (!currentParentId.isEmpty()) {
+                SessionInfo p = findSession(currentParentId);
+                if (p != null) {
+                    onOpenSession(p);
+                    return;
+                }
+                currentParentId = "";               // 父会话已不在列表里：退化成顶层行为
+            }
             if (now - backExitArmedAt < BACK_EXIT_WINDOW_MS) {
                 moveTaskToBack(true);               // ④：抽屉已是最外层 → 退到后台
                 return;
@@ -618,10 +766,12 @@ public final class MainActivity extends Activity implements
         setContent(convo);
         convo.setCompact("compact".equals(store.displayMode()));
         convo.setItems(items);
-        convo.setTitleText(currentTitle.isEmpty() ? "对话" : currentTitle);
+        convo.setTitleText(titleForDisplay());
         convo.setSubtitleText(currentCwd);
         convo.setRunning(running, runningHint());
         refreshPlan();
+        refreshSubagentEntry();   // 子会话进来要禁用输入并给出原因；主会话要还原
+        refreshMoreStatus();   // 回到对话页时把分页状态行按当前状态重画
         paintBanner();   // 从设置页切回来时把横幅按当前状态重画（连接告警 / 流中断）
         convo.refreshNow();
         convo.scrollToBottom();
@@ -635,6 +785,9 @@ public final class MainActivity extends Activity implements
         settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
                 store.deviceName(), store.useWan());
         settingsView.setDisplayMode(store.displayMode());
+        // 主题档位可能与内存里那份不同（例如从别处改了 Store），以 Store 为准并同步回来
+        themeMode = store.themeMode();
+        settingsView.setThemeMode(themeMode);
         settingsView.setInsecureTls(store.insecureTls());
         settingsView.setAllowScreenshot(store.allowScreenshot());
         refreshAbout();
@@ -1092,6 +1245,10 @@ public final class MainActivity extends Activity implements
         if (st != GatewayClient.State.READY) {
             failInFlightDownloads("连接已断开");
             cancelFailoverReset();   // 掉线就撤掉"稳定计时"，别让它替新连接解禁（评审 P1-16）
+            // 掉线时在途的分页请求的响应永远不会来了：必须复位在途标记，
+            // 否则重连后上滑加载更早历史会被 loadingMore 永久挡住。
+            clearLoadMoreInFlight();
+            refreshMoreStatus();
         }
         if (st == GatewayClient.State.READY) {
             // 连上了就允许下一次网络抖动再自动切一次端点，否则一次抖动会把用户永久钉在
@@ -1231,6 +1388,10 @@ public final class MainActivity extends Activity implements
         }
         if (listScreen != null) listScreen.setRows(buildRows());
         refreshListStatus();
+        // 会话列表一变，子智能体数量与"父会话还在不在"都可能变：
+        // 父会话被归档/删掉时，「人在子会话里」这一层就没有上一级可回了，就地退回顶层。
+        if (!currentParentId.isEmpty() && findSession(currentParentId) == null) currentParentId = "";
+        refreshSubagentEntry();
         maybeAutoEnter();
         // 重连时保守保留的"运行中"，用会话说里的权威 running 补判一次（评审 N1）：
         // 快照的历史窗口可能不含 turn/end，只靠快照回放会漏掉"回合已在断线期间结束"，
@@ -1258,7 +1419,7 @@ public final class MainActivity extends Activity implements
             for (SessionInfo si : sessions) if (si.id.equals(sessionId)) si.title = found;
             if (sessionId.equals(currentSessionId)) {
                 currentTitle = found;
-                if (convo != null) convo.setTitleText(found);
+                if (convo != null) convo.setTitleText(titleForDisplay());
             }
             if (listScreen != null) listScreen.setRows(buildRows());
         } else if (wasAwaiting) {
@@ -1294,16 +1455,32 @@ public final class MainActivity extends Activity implements
             return; // 不触碰 hasMore / nextBeforeSeq
         }
 
+        // 这一页回来了 = 在途结束：先收掉在途标记与超时任务，再看响应怎么描述"还有没有更早"。
+        clearLoadMoreInFlight();
         historyFormatVersion = meta.optInt("historyFormatVersion", historyFormatVersion);
-        hasMore = meta.optBoolean("hasMore", false);
-        nextBeforeSeq = meta.has("nextBeforeSeq") ? meta.optLong("nextBeforeSeq") : null;
+        // 只有响应**明确**给出 hasMore 时才改它：字段缺失必须保持原值。
+        // 旧写法 optBoolean("hasMore", false) 把"字段缺失"也当成"没有更多"，
+        // 于是漏一次字段就能把整个会话钉死在"看不到更早内容"。
+        if (meta.has("hasMore")) hasMore = meta.optBoolean("hasMore", false);
+        if (meta.has("nextBeforeSeq")) {
+            long nb = meta.optLong("nextBeforeSeq", -1L);
+            nextBeforeSeq = nb > 0 ? Long.valueOf(nb) : null;
+        }
+        // 明确"没有更多"（hasMore=false 或 nextBeforeSeq 缺失/非法）时才清游标、关分页。
+        if (!hasMore) nextBeforeSeq = null;
+        refreshMoreStatus();
         if (events != null) {
+            // 走到这里的一定是「加载更早」那一页（requestHistory 只在 onLoadMore 里带
+            // beforeSeq 发出；尾部补拉在上面已经 return，标题探针也在更上面 return）。
+            // items 的顺序是"加入顺序"：旧页后到，不搬到最前面就会挂到对话末尾 —— 历史顺序颠倒。
+            Set<ChatItem> had = new HashSet<>(items);
             for (int i = 0; i < events.length(); i++) {
                 JSONObject e = events.optJSONObject(i);
                 if (e == null) continue;
                 applyEvent(e.optString("type", ""), e.optJSONObject("data"),
                         e.opt("seq"), e.opt("time"), true);
             }
+            prependNewItems(had);
         }
         rebuildOrder();
         if (convo != null) { convo.setItems(items); convo.refresh(); }
@@ -1317,6 +1494,9 @@ public final class MainActivity extends Activity implements
         historyFormatVersion = snap.optInt("historyFormatVersion", historyFormatVersion);
         hasMore = snap.optBoolean("hasMore", false);
         nextBeforeSeq = snap.has("nextBeforeSeq") ? snap.optLong("nextBeforeSeq") : null;
+        // 快照 = 会话重置成新基线：在途的那一页已经没有意义，一起复位，
+        // 否则 loadingMore 会残留成"永久挡住上滑加载更早历史"。
+        resetLoadMore();
 
         items.clear();
         byKey.clear();
@@ -1736,6 +1916,7 @@ public final class MainActivity extends Activity implements
             historyFormatVersion = 4;
             nextBeforeSeq = null;
             hasMore = false;
+            resetLoadMore();   // 请求被网关拒了：在途标记必须一起收掉
             return;
         }
         // 「这个会话读不了」这类网关侧拒绝（典型：子会话在宿主侧必须带 durable parent
@@ -2101,7 +2282,7 @@ public final class MainActivity extends Activity implements
             for (SessionInfo s : sessions) if (s.id.equals(sid)) s.title = title;
             if (sid.equals(currentSessionId)) {
                 currentTitle = title;
-                if (convo != null) convo.setTitleText(title);
+                if (convo != null) convo.setTitleText(titleForDisplay());
             }
             if (listScreen != null) listScreen.setRows(buildRows());
         }
@@ -2383,7 +2564,7 @@ public final class MainActivity extends Activity implements
                     currentTitle = title;
                     store.cacheTitle(currentSessionId, title);
                     for (SessionInfo si : sessions) if (si.id.equals(currentSessionId)) si.title = title;
-                    if (convo != null) convo.setTitleText(title);
+                    if (convo != null) convo.setTitleText(titleForDisplay());
                 }
                 break;
             }
@@ -2817,6 +2998,7 @@ public final class MainActivity extends Activity implements
         streamAttemptKey = null;
         hasMore = false;
         nextBeforeSeq = null;
+        resetLoadMore();   // 换会话：在途分页作废，别让上一页的失败/在途状态残留到新会话
         planGoal = ""; planPhase = ""; planTodos = "";
         // 重订阅是把列表清空、等回 snapshot 再重建（重建在 onSnapshot 里完成）。
         // 此刻 byKey 为空，migratePendingInteractions() 只做"保留待确认条目"这件事：
@@ -2830,10 +3012,14 @@ public final class MainActivity extends Activity implements
         } else if (convo != null) {
             // 在抽屉里点另一条任务时不会走 showChat()（人已经在对话页），
             // 但标题/副标题必须跟着换，否则会出现"内容换了、标题还是上一条"。
-            convo.setTitleText(currentTitle.isEmpty() ? "对话" : currentTitle);
+            convo.setTitleText(titleForDisplay());
             convo.setSubtitleText(currentCwd);
         }
-        if (convo != null) { convo.setItems(items); convo.refreshNow(); }
+        if (convo != null) {
+            convo.setItems(items);
+            convo.refreshNow();
+            refreshSubagentEntry();   // 换了会话：「👥 N 子智能体」入口与只读态随之重算
+        }
     }
 
     // ============================================================ SessionListView.Host
@@ -2845,6 +3031,9 @@ public final class MainActivity extends Activity implements
         currentSessionId = s.id;
         currentTitle = s.display();
         currentCwd = s.cwd;
+        String p = s.parentSessionId == null ? "" : s.parentSessionId;
+        // 只有父会话确实在列表里（且不是自己）才算「人在子会话里」，返回键才有确定的上一级
+        currentParentId = (!p.isEmpty() && !p.equals(s.id) && findSession(p) != null) ? p : "";
         closeDrawer();          // 选中任务 -> 抽屉收起 -> 右侧对话扩大并进入该任务
         if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
         subscribeCurrent();
@@ -2858,11 +3047,82 @@ public final class MainActivity extends Activity implements
         if (listScreen != null) listScreen.setRows(buildRows());
     }
 
+    // ============================================================ 子智能体（子会话）导航
+
+    /** 按 id 找一个「列表里真的看得见」的会话（含子会话）：与 visibleSessions 同口径。 */
+    private SessionInfo findSession(String id) {
+        if (id == null || id.isEmpty()) return null;
+        for (SessionInfo s : sessions) {
+            if (id.equals(s.id) && !archivedIds.contains(s.id) && !s.blank) return s;
+        }
+        return null;
+    }
+
+    /**
+     * 某条会话名下的**直接**子会话，按更新时间倒序。
+     *
+     * 判据与抽屉折叠完全同源（见 buildRows / emitSession 用的 sessions 条目
+     * parentSessionId）：抽屉那行「▸ N 子会话」数出来的就是这一批，
+     * 两边显示的 N 永远一致。空会话（blank）与已归档的和抽屉一样不算。
+     */
+    private List<SessionInfo> childrenOf(String parentId) {
+        List<SessionInfo> out = new ArrayList<>();
+        if (parentId == null || parentId.isEmpty()) return out;
+        for (SessionInfo s : sessions) {
+            if (archivedIds.contains(s.id) || s.blank) continue;
+            if (s.id.equals(parentId)) continue;
+            String p = s.parentSessionId == null ? "" : s.parentSessionId;
+            if (p.isEmpty() || p.equals(s.id)) continue;
+            if (!parentId.equals(p)) continue;
+            out.add(s);
+        }
+        Collections.sort(out, BY_UPDATED_DESC);
+        return out;
+    }
+
+    /** 子智能体入口/弹窗围绕哪条会话展开：在子会话里时用它的父会话（于是能切兄弟会话），否则就是当前会话。 */
+    private String subagentRootId() {
+        return currentParentId.isEmpty() ? currentSessionId : currentParentId;
+    }
+
+    /**
+     * 标题栏文案：子会话里带上上级 —— `主标题 › 子代号`。
+     * 一眼看出"人在某个子会话里"，而不是以为内容串了。
+     */
+    private String titleForDisplay() {
+        if (currentParentId.isEmpty()) return currentTitle.isEmpty() ? "对话" : currentTitle;
+        SessionInfo p = findSession(currentParentId);
+        String base = p == null ? "" : p.display();
+        String child = currentTitle.isEmpty() ? "子会话" : currentTitle;
+        return (base.isEmpty() ? "子智能体" : base) + " › " + child;
+    }
+
+    /**
+     * 按当前会话重画「👥 N 子智能体」入口与只读态。
+     *
+     * 状态判据就用 sessions 条目上的权威字段：running（宿主 session.list 原样透传，
+     * onSessions 里 optBoolean("running")）+ pending（本机内存里记的待回答/待批准）。
+     * 不猜、不靠历史里的 turn/end 反推。
+     */
+    private void refreshSubagentEntry() {
+        if (convo == null) return;
+        boolean inChild = !currentParentId.isEmpty();
+        convo.setSubagentEntry(childrenOf(subagentRootId()).size(), inChild);
+        if (inChild) {
+            convo.setReadOnly(true,
+                    "子会话只读：内容由父智能体驱动，往这里发消息会被宿主拒绝（session/agent-busy）。"
+                            + "点上方「子智能体」可切换，返回可回主智能体继续对话。");
+        } else {
+            convo.setReadOnly(false, "");
+        }
+    }
+
     @Override
     public void onNewChat() {
         currentSessionId = "";
         currentTitle = "新对话";
         currentCwd = "";
+        currentParentId = "";
         items.clear();
         byKey.clear();
         seenSeq.clear();
@@ -2870,6 +3130,7 @@ public final class MainActivity extends Activity implements
         streamAttemptKey = null;
         hasMore = false;
         nextBeforeSeq = null;
+        resetLoadMore();   // 新建会话：分页状态归零
         setRunning(false);
         closeDrawer();          // 新建/派任务 -> 抽屉收起，进入空白对话
         if (listScreen != null) listScreen.setCurrentSession("");
@@ -2930,10 +3191,12 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onRename(SessionInfo s) {
-        final EditText input = new EditText(this);
+        // 用对话框自己的主题 Context 建输入框：用 Activity 建的话拿到的是 Light 主题的
+        // 默认文字色，深色对话框里就成了深字压深底（看不见）。
+        final EditText input = new EditText(Ui.dialogContext(this));
         input.setText(s.display());
         input.setSelectAllOnFocus(true);
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("重命名对话")
                 .setView(input)
                 .setPositiveButton("保存", (d, w) -> {
@@ -2979,9 +3242,50 @@ public final class MainActivity extends Activity implements
         openDrawer();
     }
 
+    /** 点输入框上方的「👥 N 子智能体」：底部弹窗列出当前会话的全部子智能体。 */
+    @Override
+    public void onOpenSubagents() {
+        openSubagentSheet();
+    }
+
+    /**
+     * 子智能体底部弹窗。
+     *
+     * 第一行永远是**主智能体**（可点回主），下面按更新时间倒序列出全部子会话，
+     * 当前正在看的那一项高亮。点任意一项都走 onOpenSession —— 与抽屉里点会话卡片
+     * 是同一条路（订阅 / 拉历史 / 标题都会跟着换），不另造一套切换逻辑。
+     */
+    private void openSubagentSheet() {
+        String rootId = subagentRootId();
+        if (rootId.isEmpty()) {
+            Toast.makeText(this, "还没有选中会话", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SessionInfo root = findSession(rootId);
+        if (root == null) {
+            // 会话列表还没到位（或它已不在列表里）：用内存里现有的信息拼一个，弹窗照样能用
+            root = new SessionInfo();
+            root.id = rootId;
+            if (rootId.equals(currentSessionId)) {
+                root.title = currentTitle;
+                root.cwd = currentCwd;
+            } else {
+                root.title = "主智能体";
+            }
+        }
+        SubagentSheet.show(this, root, childrenOf(rootId), currentSessionId, s -> onOpenSession(s));
+    }
+
     @Override
     public void onSend(String text) {
         if (convo != null) convo.setBanner(null, false);
+        // 子会话（origin=subagent）在宿主侧是只读寻址：SessionController.prompt →
+        // resolveAgent → session/agent-busy「owned by subagent routing」。输入框已经禁用，
+        // 这里再兜一层，确保不会静默发进黑洞。
+        if (!currentParentId.isEmpty()) {
+            Toast.makeText(this, "子会话只读：回主智能体才能发消息", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (gw.state() != GatewayClient.State.READY) {
             Toast.makeText(this, "还没连上电脑端，回「我的设备」点连接", Toast.LENGTH_LONG).show();
             return;
@@ -3003,9 +3307,22 @@ public final class MainActivity extends Activity implements
         armSendWatchdog();
     }
 
+    /**
+     * ConversationView.Host 的「停止当前回合」回调。
+     *
+     * 名字从 {@code onStop()} 改过来的：那是 Activity 生命周期方法名，两者签名撞车，
+     * 会诱导这个回调变成 Activity.onStop 的实现并漏掉 super.onStop()，
+     * 切后台/锁屏即抛 SuperNotCalledException（真机 logcat 实测崩溃）。
+     * 生命周期 onStop 见本文件下面的 {@code protected void onStop()}。
+     */
     @Override
-    public void onStop() {
+    public void onStopTurn() {
         if (currentSessionId.isEmpty()) return;
+        // 子会话同理由宿主拒绝（停它要走 subagents.interruptByParent，本网关没有这条通道）
+        if (!currentParentId.isEmpty()) {
+            Toast.makeText(this, "子会话只读：要停请回主智能体", Toast.LENGTH_LONG).show();
+            return;
+        }
         // 断网时"已请求停止"是谎报：停止帧进黑洞，用户以为停了，实际回合还在跑（评审 P1-12）
         if (!gw.canSend()) {
             Toast.makeText(this, "还没连上电脑端，停止请求没有发出去；连上后请重试",
@@ -3016,11 +3333,81 @@ public final class MainActivity extends Activity implements
         Toast.makeText(this, "已请求停止", Toast.LENGTH_SHORT).show();
     }
 
+    /** 分页状态 -> 消息列表正上方那一行（在途 / 失败可重试 / 收起）。 */
+    private void refreshMoreStatus() {
+        if (convo == null) return;
+        if (loadingMore) {
+            convo.setMoreStatus("正在加载更早…", false);
+        } else if (loadMoreFailed) {
+            convo.setMoreStatus("加载更早失败，点这里重试", true);
+        } else {
+            convo.setMoreStatus("", false);
+        }
+    }
+
+    /** 收掉在途标记与超时任务（响应到达 / 失败 / 换会话 / 重连 / 新建都走这里）。 */
+    private void clearLoadMoreInFlight() {
+        loadingMore = false;
+        if (loadMoreTimeout != null) {
+            uiHandler.removeCallbacks(loadMoreTimeout);
+            loadMoreTimeout = null;
+        }
+    }
+
+    /** 复位整个分页状态：在途标记、超时任务、失败提示（避免残留卡住上滑）。 */
+    private void resetLoadMore() {
+        clearLoadMoreInFlight();
+        loadMoreFailed = false;
+        refreshMoreStatus();
+    }
+
+    /**
+     * 把 `had` 之后新加入 items 的条目整体挪到列表最前面，保持页内原有先后。
+     *
+     * 为什么需要它：「加载更早」返回的是**更旧**的事件，而 items 的物理顺序是"加入顺序"，
+     * 旧页总是后到 —— 不搬就会整段挂到对话末尾，历史顺序彻底颠倒（看到的像乱序）。
+     */
+    private void prependNewItems(Set<ChatItem> had) {
+        List<ChatItem> fresh = new ArrayList<>();
+        for (ChatItem it : items) if (!had.contains(it)) fresh.add(it);
+        if (fresh.isEmpty()) return;
+        Set<ChatItem> freshSet = new HashSet<>(fresh);
+        List<ChatItem> reordered = new ArrayList<>(items.size());
+        reordered.addAll(fresh);
+        for (ChatItem it : items) if (!freshSet.contains(it)) reordered.add(it);
+        items.clear();
+        items.addAll(reordered);
+    }
+
     @Override
     public void onLoadMore() {
+        // 在途时忽略新的上滑触发：ListView 在 first==0 时每个滚动帧都会回调，
+        // 不挡住就会对同一页连发好几次 history 请求。
+        if (loadingMore) return;
         if (!hasMore || nextBeforeSeq == null || currentSessionId.isEmpty()) return;
+        // 没连上就发出去等于进黑洞：直接给可重试的失败态，别让用户以为"正在加载"。
+        if (!gw.canSend()) {
+            loadMoreFailed = true;
+            refreshMoreStatus();
+            return;
+        }
+        loadMoreFailed = false;
+        loadingMore = true;
+        refreshMoreStatus();
+        // **不再预置 hasMore = false**：只有响应明确说"没有更多"时才置 false（见 onHistory）。
+        // 旧写法一发出请求就把 hasMore 关掉，响应一旦丢帧/遇重连/超时，这个会话就永久
+        // 不能再上滑加载更早历史 —— 用户看到的就是"只能看到最近一部分内容"。
         gw.requestHistory(currentSessionId, nextBeforeSeq, historyFormatVersion);
-        hasMore = false;
+        // 超时兜底：响应丢了也必须复位在途标记，否则上滑永久失效（不是卡死，只是不给超时）。
+        if (loadMoreTimeout != null) uiHandler.removeCallbacks(loadMoreTimeout);
+        loadMoreTimeout = () -> {
+            loadMoreTimeout = null;
+            if (!loadingMore) return;
+            loadingMore = false;
+            loadMoreFailed = true;
+            refreshMoreStatus();
+        };
+        uiHandler.postDelayed(loadMoreTimeout, LOAD_MORE_TIMEOUT_MS);
     }
 
     @Override
@@ -3037,13 +3424,13 @@ public final class MainActivity extends Activity implements
         final String[] opts = currentSessionId.isEmpty()
                 ? new String[] { "连接设置" }
                 : new String[] { "重命名", "停止当前回合", "连接设置" };
-        new AlertDialog.Builder(this).setItems(opts, (d, which) -> {
+        Ui.dialog(this).setItems(opts, (d, which) -> {
             if ("重命名".equals(opts[which])) {
                 for (SessionInfo s : sessions) {
                     if (s.id.equals(currentSessionId)) { onRename(s); return; }
                 }
             } else if ("停止当前回合".equals(opts[which])) {
-                onStop();
+                onStopTurn();
             } else {
                 showSettings();
             }
@@ -3131,14 +3518,14 @@ public final class MainActivity extends Activity implements
     @Override
     public void onRenameDevice(final Store.Device d) {
         if (d == null) return;
-        final EditText input = new EditText(this);
+        final EditText input = new EditText(Ui.dialogContext(this));   // 同上：必须用对话框主题 Context
         input.setSingleLine(true);
         input.setText(d.displayName());
         input.setSelection(input.getText().length());
         input.setHint("给这台电脑起个名字");
         int pad = Ui.dp(this, 18);
         input.setPadding(pad, Ui.dp(this, 10), pad, Ui.dp(this, 10));
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("修改名称")
                 .setView(input)
                 .setPositiveButton("保存", (dlg, w) -> {
@@ -3159,7 +3546,7 @@ public final class MainActivity extends Activity implements
     @Override
     public void onDeleteDevice(final Store.Device d) {
         if (d == null) return;
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("删除「" + d.displayName() + "」")
                 .setMessage("会清除这台设备在本机保存的地址与设备令牌。\n"
                         + "电脑端不受影响，之后重新扫码就能再添加。")
@@ -3497,7 +3884,7 @@ public final class MainActivity extends Activity implements
             box.addView(hint);
         }
 
-        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder b = Ui.dialog(this)
                 .setTitle("意见反馈")
                 .setView(box);
         if (toAuthor) {
@@ -3783,13 +4170,13 @@ public final class MainActivity extends Activity implements
                         + "③ 隧道域名每次重启电脑都会变，变了重新扫一次码即可；\n"
                         + "④ 公司/涉密网络请先确认合规。",
                 13f, Ui.INK, false));
-        final android.widget.CheckBox cb = new android.widget.CheckBox(this);
+        final android.widget.CheckBox cb = new android.widget.CheckBox(Ui.dialogContext(this));
         cb.setText("我已知情，同意开启");
         cb.setTextSize(14f);
         cb.setPadding(0, Ui.dp(this, 14), 0, 0);
         box.addView(cb);
 
-        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+        final android.app.AlertDialog dlg = Ui.dialog(this)
                 .setView(box)
                 .setPositiveButton("我已知情，同意开启", null)
                 .setNegativeButton("取消", null)
@@ -4043,7 +4430,7 @@ public final class MainActivity extends Activity implements
         // 用户对同一版本点过「以后再说」就不再自动弹（手动点仍会弹）
         if (!manual && name.equals(store.skipVersion())) return;
 
-        new android.app.AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("发现新版本 v" + name)
                 .setMessage((notes.isEmpty() ? "有新版本可用。" : notes)
                         + "\n\n当前版本 v" + myVersionName()
@@ -4206,7 +4593,7 @@ public final class MainActivity extends Activity implements
 
     /** 确认框：没有输入框 -> 不弹输入法 -> 「配对」按钮永远在键盘上方点得到。 */
     private void showPairConfirmDialog(final String text) {
-        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+        final android.app.AlertDialog dlg = Ui.dialog(this)
                 .setTitle("用剪贴板里的配对串配对")
                 .setMessage("读到 " + text.length() + " 个字符的配对串。\n"
                         + PairingText.describe(text) + "\n\n"
@@ -4264,7 +4651,7 @@ public final class MainActivity extends Activity implements
         msg.setText("配对串有 550 个字符左右，推荐在电脑面板点「复制配对串」后回来点「读剪贴板」。\n"
                 + clipHint);
 
-        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+        final android.app.AlertDialog dlg = Ui.dialog(this)
                 .setTitle("粘贴配对串")
                 .setView(box)
                 .setPositiveButton("配对", null)

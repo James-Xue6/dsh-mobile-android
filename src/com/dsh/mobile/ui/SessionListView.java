@@ -37,6 +37,14 @@ public final class SessionListView extends FrameLayout {
     private final SessionAdapter adapter;
     /** 空态提示（抽屉里一个会话都没有时显示，比如"还没有对话"）。 */
     private final TextView emptyView;
+    /** 头部区与其上的圆形入口（主题切换要逐个重刷底色/字色）。 */
+    private final LinearLayout header;
+    private final TextView headerTitle;
+    private final TextView refreshBtn;
+    private final TextView devicesBtn;
+    private final TextView gearBtn;
+    /** 悬浮「＋ 新建」。 */
+    private final TextView fab;
     /** 当前正在看的会话 id：抽屉里对应卡片高亮，一眼看出"我现在在这个任务里"。 */
     private String currentId = "";
 
@@ -52,30 +60,34 @@ public final class SessionListView extends FrameLayout {
         addView(root);
 
         // ---- 头部
-        LinearLayout header = Ui.col(ctx);
+        header = Ui.col(ctx);
         header.setBackgroundColor(Ui.BG);
         header.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 6));
 
         LinearLayout top = Ui.row(ctx);
         TextView t = Ui.text(ctx, "对话", 27f, Ui.INK, true);
+        headerTitle = t;
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         t.setLayoutParams(tlp);
         top.addView(t);
 
-        TextView refresh = Ui.circleButton(ctx, "↻", 0x00000000, Ui.INK_SUB);
+        TextView refresh = Ui.circleButton(ctx, "↻", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        refreshBtn = refresh;
         refresh.setTextSize(19f);
         refresh.setOnClickListener(v -> host.onRefresh());
         top.addView(refresh);
 
         // 「我的设备」入口：启动页是设备页，这里给对话页一个随时回去看在线状态的入口
-        TextView devices = Ui.circleButton(ctx, "🖥", 0x00000000, Ui.INK_SUB);
+        TextView devices = Ui.circleButton(ctx, "🖥", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        devicesBtn = devices;
         devices.setTextSize(17f);
         devices.setContentDescription("我的设备");
         devices.setOnClickListener(v -> host.onDevices());
         top.addView(devices);
 
-        TextView gear = Ui.circleButton(ctx, "⚙", 0x00000000, Ui.INK_SUB);
+        TextView gear = Ui.circleButton(ctx, "⚙", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        gearBtn = gear;
         gear.setTextSize(19f);
         gear.setOnClickListener(v -> host.onSettings());
         top.addView(gear);
@@ -92,7 +104,7 @@ public final class SessionListView extends FrameLayout {
         list.setAdapter(adapter);
         list.setDivider(null);
         list.setDividerHeight(0);
-        list.setSelector(new android.graphics.drawable.ColorDrawable(0x00000000));
+        list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         list.setVerticalScrollBarEnabled(false);
         list.setPadding(Ui.dp(ctx, 12), 0, Ui.dp(ctx, 12), Ui.dp(ctx, 90));
         list.setClipToPadding(false);
@@ -114,11 +126,12 @@ public final class SessionListView extends FrameLayout {
 
         // ---- 悬浮新建
         TextView fab = new TextView(ctx);
+        this.fab = fab;
         fab.setText("＋");
         fab.setTextSize(24f);
-        fab.setTextColor(0xFFFFFFFF);
+        fab.setTextColor(Ui.ON_BRAND);
         fab.setGravity(Gravity.CENTER);
-        fab.setBackground(Ui.pill(Ui.BRAND));
+        fab.setBackground(Ui.pill(Ui.BRAND_FILL));
         fab.setElevation(Ui.dp(ctx, 6));
         FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(Ui.dp(ctx, 56), Ui.dp(ctx, 56));
         flp.gravity = Gravity.BOTTOM | Gravity.END;
@@ -131,6 +144,28 @@ public final class SessionListView extends FrameLayout {
 
     public void setStatus(String s) {
         statusLine.setText(s == null ? "" : s);
+    }
+
+    /**
+     * 主题切换：按新色板重刷抽屉整页 + 强制会话卡片整表重画。
+     * 卡片行由 SessionAdapter.getView **每次新建**（不复用 convertView），
+     * 所以一次 notifyDataSetChanged() 就能让所有可见卡片换色。
+     */
+    public void applyTheme() {
+        setBackgroundColor(Ui.BG);
+        if (header != null) header.setBackgroundColor(Ui.BG);
+        if (headerTitle != null) headerTitle.setTextColor(Ui.INK);
+        if (refreshBtn != null) refreshBtn.setTextColor(Ui.INK_SUB);
+        if (devicesBtn != null) devicesBtn.setTextColor(Ui.INK_SUB);
+        if (gearBtn != null) gearBtn.setTextColor(Ui.INK_SUB);
+        if (statusLine != null) statusLine.setTextColor(Ui.INK_FAINT);
+        if (emptyView != null) emptyView.setTextColor(Ui.INK_FAINT);
+        if (fab != null) {
+            fab.setTextColor(Ui.ON_BRAND);
+            fab.setBackground(Ui.pill(Ui.BRAND_FILL));
+        }
+        adapter.notifyDataSetChanged();
+        requestLayout();
     }
 
     /** rows 元素为 String（工作区标题）或 SessionInfo（会话卡片）。 */
@@ -244,9 +279,9 @@ public final class SessionListView extends FrameLayout {
 
             if (s.pending > 0) {
                 TextView badge = Ui.text(ctx, s.pending == 1 ? "❓ 待回答" : "⚠ 待批准",
-                        11.5f, 0xFFFFFFFF, true);
+                        11.5f, s.pending == 1 ? Ui.ON_BRAND : Ui.ON_WARN, true);
                 badge.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
-                badge.setBackground(Ui.pill(s.pending == 1 ? Ui.BRAND : Ui.WARN));
+                badge.setBackground(Ui.pill(s.pending == 1 ? Ui.BRAND_FILL : Ui.WARN));
                 LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
                 blp.rightMargin = Ui.dp(ctx, 6);
@@ -265,7 +300,7 @@ public final class SessionListView extends FrameLayout {
             card.setOnClickListener(v -> host.onOpenSession(s));
             card.setOnLongClickListener(v -> {
                 final String[] options = { "重命名", "归档（隐藏，不删除）" };
-                new android.app.AlertDialog.Builder(ctx)
+                Ui.dialog(ctx)
                         .setItems(options, (d, which) -> {
                             if (which == 0) host.onRename(s);
                             else host.onArchive(s);
