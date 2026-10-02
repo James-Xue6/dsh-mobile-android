@@ -33,3 +33,7 @@ harness/out*/
 !harness/src/Probe.java
 !harness/src/ProbePrefix.java
 .verify-e2e/
+
+# --- 安全文档与审计记录：绝不入库（公开仓库）---
+docs/*.md
+!docs/README.md
