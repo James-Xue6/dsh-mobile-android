@@ -43,7 +43,8 @@ public final class SettingsView extends LinearLayout {
     private String netModeState = RoutePolicy.AUTO;
     private TextView aboutText;
     private TextView updateHint;
-    private TextView insecureBtn;
+    /** 「允许自签名证书」的 iOS 开关（自绘，见 Ui.Switch）。 */
+    private Ui.Switch insecureSwitch;
     private boolean insecureState;
     private TextView feedbackCount;
     private EditText tokenField;
@@ -52,8 +53,8 @@ public final class SettingsView extends LinearLayout {
     private TextView diag;
     private TextView modeFull;
     private TextView modeCompact;
-    /** 「允许截屏」开关（复用设置页现有的 segment 开关样式，与「允许自签名证书」一致）。 */
-    private TextView shotBtn;
+    /** 「允许截屏」的 iOS 开关（与「允许自签名证书」同一套开关样式）。 */
+    private Ui.Switch shotSwitch;
     private boolean shotState = true;
     /** 主题三分段：跟随系统 / 浅色 / 深色。 */
     private TextView themeSystem;
@@ -86,23 +87,34 @@ public final class SettingsView extends LinearLayout {
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
 
-        // 顶部栏
+        // 顶部栏：iOS 导航栏（44dp 高、细箭头返回、标题 17sp 粗体、底部一条发丝线）
         LinearLayout bar = Ui.row(ctx);
         bar.setBackgroundColor(Ui.SURFACE);
-        bar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
-        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.INK);
-        back.setTextSize(26f);
+        bar.setMinimumHeight(Ui.dp(ctx, 44));
+        bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 6), Ui.dp(ctx, 12), Ui.dp(ctx, 6));
+        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.BRAND);
+        back.setTextSize(28f);
+        back.setContentDescription("返回");
         back.setOnClickListener(v -> host.onBack());
         bar.addView(back);
-        bar.addView(Ui.text(ctx, "连接设置", 16.5f, Ui.INK, true));
+        TextView barTitle = Ui.text(ctx, "连接设置", Ui.S_HEAD, Ui.INK, true);
+        barTitle.setPadding(Ui.dp(ctx, 4), 0, 0, 0);
+        bar.addView(barTitle);
         addView(bar, Ui.fill());
+        View barLine = new View(ctx);
+        barLine.setBackgroundColor(Ui.SEP);
+        barLine.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
+        addView(barLine, Ui.fill());
 
         ScrollView scroll = new ScrollView(ctx);
         scrollHost = scroll;
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        scroll.setVerticalScrollBarEnabled(false);
         LinearLayout body = Ui.col(ctx);
-        body.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 30));
+        // iOS 分组列表：左右外边距 16dp，卡片之间 24dp 留白
+        body.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 32));
         scroll.addView(body);
         addView(scroll);
 
@@ -119,9 +131,11 @@ public final class SettingsView extends LinearLayout {
         card.addView(wanField);
 
         card.addView(label("连接方式"));
-        LinearLayout epRow = Ui.row(ctx);
-        epRow.setLayoutParams(Ui.fill());
-        epRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        LinearLayout epRow = Ui.segmentTrack(ctx);
+        LinearLayout.LayoutParams epLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        epLp.topMargin = Ui.dp(ctx, 10);
+        epRow.setLayoutParams(epLp);
         modeAutoBtn = segment("自动（推荐）");
         modeLanBtn = segment("只用内网");
         modeWanBtn = segment("只用公网");
@@ -139,12 +153,19 @@ public final class SettingsView extends LinearLayout {
                 + "或没连 WiFi 就走公网地址；连的 WiFi 不是家里那个、内网几秒没连上，"
                 + "会自动改用公网。\n只用内网 / 只用公网：完全按你的选择走，不再自动判断（手动永远优先）。"));
 
+        // iOS 开关行：左标题 + 右自绘开关（绿/灰），整行可点
         LinearLayout tlsRow = Ui.row(ctx);
-        tlsRow.setLayoutParams(Ui.fill());
-        tlsRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-        insecureBtn = segment("允许自签名证书：已关闭");
-        insecureBtn.setOnClickListener(v -> host.onToggleInsecureTls(!insecureState));
-        tlsRow.addView(insecureBtn, weight(1f, 0));
+        tlsRow.setMinimumHeight(Ui.dp(ctx, 44));
+        tlsRow.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+        TextView tlsLabel = Ui.text(ctx, "允许自签名证书", Ui.S_BODY, Ui.INK, false);
+        tlsLabel.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        tlsRow.addView(tlsLabel);
+        insecureSwitch = new Ui.Switch(ctx);
+        tlsRow.addView(insecureSwitch);
+        tlsRow.setClickable(true);
+        tlsRow.setOnClickListener(v -> host.onToggleInsecureTls(!insecureState));
+        insecureSwitch.setOnChange(on -> host.onToggleInsecureTls(on));
         card.addView(tlsRow);
         card.addView(hint("自己搭的反向代理（Lucky / 宝塔 / nginx 自签）常带自签名证书，"
                 + "Android 默认不信任、会直接报证书错误；打开此项后改用 wss:// 但不校验证书。"));
@@ -193,9 +214,11 @@ public final class SettingsView extends LinearLayout {
         disp.addView(hint("「简洁」= 和桌面端一致的回合摘要：每个回合只留一条人能读懂的过程行"
                 + "（例如「执行了命令 · pwsh」「已读取文件，执行了命令」），不铺开工具参数/输出，"
                 + "也不显示思考过程；「完整」保留全部细节。"));
-        LinearLayout seg = Ui.row(ctx);
-        seg.setLayoutParams(Ui.fill());
-        seg.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        LinearLayout seg = Ui.segmentTrack(ctx);
+        LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        segLp.topMargin = Ui.dp(ctx, 10);
+        seg.setLayoutParams(segLp);
         modeFull = segment("完整");
         modeCompact = segment("简洁");
         modeFull.setOnClickListener(v -> { host.onSetDisplayMode("full"); paintModes("full"); });
@@ -210,9 +233,11 @@ public final class SettingsView extends LinearLayout {
         themeSec.addView(hint("「跟随系统」= 跟着手机的深色模式走：手机开深色，App 自己也变深色"
                 + "（系统切换时不用重启 App，这里会立刻跟着变）。"
                 + "「浅色」「深色」则锁死这一档，不受手机设置影响。"));
-        LinearLayout themeSeg = Ui.row(ctx);
-        themeSeg.setLayoutParams(Ui.fill());
-        themeSeg.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        LinearLayout themeSeg = Ui.segmentTrack(ctx);
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        themeLp.topMargin = Ui.dp(ctx, 10);
+        themeSeg.setLayoutParams(themeLp);
         themeSystem = segment("跟随系统");
         themeLight = segment("浅色");
         themeDark = segment("深色");
@@ -240,18 +265,35 @@ public final class SettingsView extends LinearLayout {
         privacy.addView(hint("关掉「允许截屏」后，本 App 内的截图/录屏会变成黑屏，"
                 + "系统「最近任务」里的缩略图同样会变黑；打开（默认）则一切正常。"
                 + "无论开关如何，设备令牌都只显示末 4 位。"));
+        // iOS 开关行：与「允许自签名证书」完全同款
         LinearLayout shotRow = Ui.row(ctx);
-        shotRow.setLayoutParams(Ui.fill());
-        shotRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-        shotBtn = segment("允许截屏：已开启");
-        shotBtn.setOnClickListener(v -> host.onToggleAllowScreenshot(!shotState));
-        shotRow.addView(shotBtn, weight(1f, 0));
+        shotRow.setMinimumHeight(Ui.dp(ctx, 44));
+        shotRow.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+        TextView shotLabel = Ui.text(ctx, "允许截屏", Ui.S_BODY, Ui.INK, false);
+        shotLabel.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        shotRow.addView(shotLabel);
+        shotSwitch = new Ui.Switch(ctx);
+        shotRow.addView(shotSwitch);
+        shotRow.setClickable(true);
+        shotRow.setOnClickListener(v -> host.onToggleAllowScreenshot(!shotState));
+        shotSwitch.setOnChange(on -> host.onToggleAllowScreenshot(on));
         privacy.addView(shotRow);
+
+
+        // ---- 通知（任务完成 / 需要处理 / 进行中 的提醒开关与分级）
+        //
+        // 这一组的控件与逻辑全部在 com.dsh.mobile.notify.NotifySettingsCard 里，这里只挂进来：
+        // 设置页正在被 iOS 风格 UI 重做覆盖，把通知那部分收进独立文件可以把冲突面压到这一行。
+        // 它自己 new 一个 Store 读写四个开关（默认值即默认档位），不经过 Host 回调 ——
+        // 于是设置页的 Host 接口完全不用动。
+        LinearLayout notifySec = section(body, "通知", false);
+        com.dsh.mobile.notify.NotifySettingsCard.attach(notifySec, ctx, new com.dsh.mobile.Store(ctx));
 
 
         // ---- 关于（放在诊断之前，免得被又长又吵的日志埋掉）
         LinearLayout about = section(body, "关于", false);
-        aboutText = Ui.text(ctx, "", 12.5f, Ui.INK_SUB, false);
+        aboutText = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
         aboutText.setPadding(0, Ui.dp(ctx, 6), 0, 0);
         aboutText.setTextIsSelectable(true);
         about.addView(aboutText);
@@ -264,18 +306,18 @@ public final class SettingsView extends LinearLayout {
         upBtn.setOnClickListener(v -> host.onCheckUpdate());
         upRow.addView(upBtn, weight(1f, 0));
         about.addView(upRow);
-        updateHint = Ui.text(ctx, "", 12f, Ui.INK_FAINT, false);
+        updateHint = Ui.text(ctx, "", Ui.S_CAP1, Ui.INK_FAINT, false);
         updateHint.setPadding(0, Ui.dp(ctx, 8), 0, 0);
         about.addView(updateHint);
 
 
         // ---- 状态卡片
         LinearLayout st = section(body, "当前状态", false);
-        status = Ui.text(ctx, "未连接", 13.5f, Ui.INK_SUB, false);
+        status = Ui.text(ctx, "未连接", Ui.S_SUB, Ui.INK_SUB, false);
         status.setPadding(0, Ui.dp(ctx, 6), 0, 0);
         st.addView(status);
 
-        diag = Ui.text(ctx, "", 11.5f, Ui.INK_FAINT, false);
+        diag = Ui.text(ctx, "", Ui.S_CAP2, Ui.INK_FAINT, false);
         diag.setTypeface(android.graphics.Typeface.MONOSPACE);
         diag.setPadding(0, Ui.dp(ctx, 10), 0, 0);
         diag.setTextIsSelectable(true);
@@ -299,16 +341,14 @@ public final class SettingsView extends LinearLayout {
         fbBtn.setOnClickListener(v -> host.onOpenFeedback());
         fbRow.addView(fbBtn, weight(1f, 0));
         fb.addView(fbRow);
-        feedbackCount = Ui.text(ctx, "", 12f, Ui.INK_FAINT, false);
+        feedbackCount = Ui.text(ctx, "", Ui.S_CAP1, Ui.INK_FAINT, false);
         feedbackCount.setPadding(0, Ui.dp(ctx, 8), 0, 0);
         fb.addView(feedbackCount);
     }
 
+    /** 分段控件的一项（iOS 白滑块/灰槽的制式由 Ui.segmentItem 统一）。 */
     private TextView segment(String label) {
-        TextView t = Ui.text(ctx, label, 14.5f, Ui.INK, false);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(0, Ui.dp(ctx, 11), 0, Ui.dp(ctx, 11));
-        return t;
+        return Ui.segmentItem(ctx, label);
     }
 
     private void paintModes(String mode) {
@@ -317,12 +357,9 @@ public final class SettingsView extends LinearLayout {
         styleSeg(modeCompact, !full);
     }
 
+    /** 选中态 = 白滑块 + 深字（iOS 分段控件），未选中 = 透明 + 灰字。 */
     private void styleSeg(TextView t, boolean on) {
-        if (t == null) return;
-        t.setTextColor(on ? Ui.ON_BRAND : Ui.INK);
-        t.setTypeface(on ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
-        t.setBackground(on ? Ui.round(Ui.dp(ctx, 999), Ui.BRAND_FILL)
-                : Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE));
+        Ui.paintSegment(t, on);
     }
 
     public void setDisplayMode(String mode) { paintModes(mode); }
@@ -393,19 +430,13 @@ public final class SettingsView extends LinearLayout {
 
     public void setInsecureTls(boolean on) {
         insecureState = on;
-        if (insecureBtn != null) {
-            insecureBtn.setText(on ? "允许自签名证书：已开启" : "允许自签名证书：已关闭");
-            styleSeg(insecureBtn, on);
-        }
+        if (insecureSwitch != null) insecureSwitch.setChecked(on);
     }
 
-    /** 「允许截屏」开关状态（样式复用 styleSeg，与「允许自签名证书」完全一致）。 */
+    /** 「允许截屏」开关状态（样式与「允许自签名证书」完全一致，都是 Ui.Switch）。 */
     public void setAllowScreenshot(boolean on) {
         shotState = on;
-        if (shotBtn != null) {
-            shotBtn.setText(on ? "允许截屏：已开启" : "允许截屏：已关闭");
-            styleSeg(shotBtn, on);
-        }
+        if (shotSwitch != null) shotSwitch.setChecked(on);
     }
 
     public void setAbout(String text) {
@@ -439,18 +470,18 @@ public final class SettingsView extends LinearLayout {
 
     // ------------------------------------------------------------ 小工具
 
+    /** iOS 分组卡片：纯卡片色 + 14dp 圆角 + 极细发丝描边（卡片之间 24dp）。 */
     private LinearLayout card() {
-        LinearLayout c = Ui.col(ctx);
-        c.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 15), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
-        c.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
+        LinearLayout c = Ui.card(ctx);
+        c.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Ui.dp(ctx, 12);
+        lp.bottomMargin = Ui.dp(ctx, 24);
         c.setLayoutParams(lp);
         return c;
     }
 
-    private TextView sectionTitle(String s) { return Ui.text(ctx, s, 15.5f, Ui.INK, true); }
+    private TextView sectionTitle(String s) { return Ui.text(ctx, s, Ui.S_HEAD, Ui.INK, true); }
 
     /**
      * 可折叠分区：返回内容容器，往里加控件；标题行点击展开/收起。
@@ -460,31 +491,29 @@ public final class SettingsView extends LinearLayout {
         // 主题切换会整棵树重建；展开状态记在 sectionOpen 里，重建后原样还原
         Boolean remembered = sectionOpen.get(title);
         final boolean open0 = remembered != null ? remembered : expanded;
-        LinearLayout wrap = Ui.col(ctx);
-        wrap.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
+        LinearLayout wrap = Ui.card(ctx);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Ui.dp(ctx, 12);
+        lp.bottomMargin = Ui.dp(ctx, 24);
         wrap.setLayoutParams(lp);
 
         LinearLayout head = Ui.row(ctx);
         head.setLayoutParams(Ui.fill());
-        head.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 15), Ui.dp(ctx, 16), Ui.dp(ctx, 15));
+        head.setMinimumHeight(Ui.dp(ctx, 46));
+        head.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 12));
         head.setClickable(true);
-        TextView t = Ui.text(ctx, title, 15.5f, Ui.INK, true);
+        TextView t = Ui.text(ctx, title, Ui.S_FOOT, Ui.INK_SUB, false);
+        t.setLetterSpacing(0.06f);   // 汉字也吃一点字间距 = iOS 组标题的"大写感"
         head.addView(t, weight(1f, 0));
-        final TextView arrow = Ui.text(ctx, open0 ? "\u25BE" : "\u25B8", 14f, Ui.INK_SUB, false);
+        final TextView arrow = Ui.text(ctx, open0 ? "\u25BE" : "\u25B8", Ui.S_FOOT, Ui.INK_FAINT, false);
         head.addView(arrow);
 
-        final android.view.View line = new android.view.View(ctx);
-        line.setBackgroundColor(Ui.LINE);
-        line.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 0.8f)));
+        final android.view.View line = Ui.divider(ctx);
         line.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         final LinearLayout box = Ui.col(ctx);
         box.setLayoutParams(Ui.fill());
-        box.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 12), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
+        box.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 2), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
         box.setVisibility(open0 ? android.view.View.VISIBLE : android.view.View.GONE);
 
         head.setOnClickListener(v -> {
@@ -507,8 +536,8 @@ public final class SettingsView extends LinearLayout {
     }
 
     private TextView hint(String s) {
-        TextView t = Ui.text(ctx, s, 12.5f, Ui.INK_SUB, false);
-        t.setPadding(0, Ui.dp(ctx, 5), 0, 0);
+        TextView t = Ui.text(ctx, s, Ui.S_FOOT, Ui.INK_SUB, false);
+        t.setPadding(0, Ui.dp(ctx, 6), 0, 0);
         return t;
     }
 

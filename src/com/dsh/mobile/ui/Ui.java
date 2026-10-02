@@ -24,83 +24,96 @@ import java.util.List;
 /** 视觉常量、圆角工具、以及轻量 Markdown 渲染。整体对齐 DSH 桌面版配色。 */
 public final class Ui {
 
-    // ============================================================ 主题色板
+    // ============================================================ 主题色板（iOS 语义色）
     //
     // 全 App **只从这里取色**。下面每个字段都是「当前生效的那一档颜色」：启动时和每次
     // 切换主题 / 系统深浅色变化时，由 applyTheme(dark) 用浅色/深色两套同名色整体重写。
     //
     // 视图里绝不要再写 0xAARRGGBB 字面量 —— 写死的那一处切主题时不会跟着变。
     //
-    // 语义表（浅色 / 深色）：
-    //   正文    INK            #17181C / #E6E6E6      页面主要文字
-    //   次要    INK_SUB        #6B7280 / #A8ADB8      说明、副标题
-    //   弱化    INK_FAINT      #9CA3AF / #868C99      占位符、时间、空态
-    //   品牌    BRAND          #4D6BFE / #8FA6FF      品牌色**文字与描边**（要压在深底上）
-    //   品牌实心 BRAND_FILL    #4D6BFE / #3D5AF0      品牌色**填充块**（配 ON_BRAND 文字）
-    //   品牌深  BRAND_DEEP     #3A57E8 / #A9BCFF      选中态标题（压在 BRAND_SOFT 上）
-    //   品牌淡底 BRAND_SOFT    #EEF2FF / #1E2A4D      品牌色浅底（工具卡、当前会话卡）
-    //   背景    BG             #F4F6FB / #121212      页面底色
-    //   卡片    SURFACE        #FFFFFF / #1E1E1E      卡片、气泡、顶部栏底色
-    //   描边    LINE           #E8EBF2 / #2A2C31      分隔线、卡片描边
-    //   成功    OK             #16A34A / #4ADE80
-    //   错误    ERR            #DC2626 / #F87171
-    //   警告    WARN           #D97706 / #FBBF24
-    //   品牌上的字 ON_BRAND   #FFFFFF / #FFFFFF
-    //   警告上的字 ON_WARN    #FFFFFF / #201A00      深色下琥珀底必须配深字，白字看不清
-    //   输入框底 FIELD_BG     #F7F8FC / #232529
-    //   输入条底 FIELD_ALT_BG #F5F6FA / #232529
-    //   圆形小按钮底 CHIP_BG  #F1F3F9 / #26282D
-    //   停止按钮底 STOP_BG    #E5E9F5 / #2E3340
-    //   任务提要底 PLAN_BG    #F5F8FF / #1B2233
-    //   横幅-警告 BANNER_WARN_BG/FG  #FFF7E6/#92400E / #3A2E12/#FCD34D
-    //   横幅-错误 BANNER_ERR_BG/FG   #FEF2F2/#991B1B / #3A1D1D/#FCA5A5
-    //   卡片描边-专家团 LINE_AGENT     #C7D2FE / #3F5090
-    //   卡片描边-审批   LINE_APPROVAL  #FDE68A / #7A6420
-    //   卡片描边-拒绝   LINE_DANGER    #FCA5A5 / #7F3A3A
-    //   卡片描边-提问   LINE_QUESTION  #BFD2FF / #3F5A99
-    //   卡片描边-交付物 LINE_OK        #BFE7CC / #2F5A44
-    //   选项选中描边    LINE_SELECTED  #C7D3FF / #3D4E85
-    //   徽标底-在线 BADGE_OK_BG  #E7F7EC / #16351F
-    //   徽标底-离线 BADGE_OFF_BG #F1F3F7 / #26282C
-    //   下载成功    LINK_OK      #2FB344 / #4ADE80
-    //   代码块底    CODE_BG      #F1F3F9 / #26282E
+    // 命名对照 iOS Human Interface Guidelines 的语义色（不是 DSH 桌面版配色了）：
+    //   姓名    token         浅色 / 深色         iOS 语义
+    //   正文    INK           #000000 / #FFFFFF   label
+    //   次要    INK_SUB       #8E8E93 / #98989F   secondaryLabel（≈ rgba(60,60,67,.6)）
+    //   弱化    INK_FAINT     #AEAEB2 / #7C7C80   tertiaryLabel / placeholderText
+    //   主色    BRAND         #0A84FF / #0A84FF   systemBlue（文字、描边、图标）
+    //   主色实心 BRAND_FILL   #0A84FF / #0A84FF   systemBlue（填充块，配 ON_BRAND）
+    //   主色深  BRAND_DEEP    #0A84FF / #0A84FF   选中态标题
+    //   主色淡底 BRAND_SOFT   #E9F2FF / #0A2540   systemBlue 12% 淡底
+    //   背景    BG            #F2F2F7 / #000000   systemGroupedBackground
+    //   卡片    SURFACE       #FFFFFF / #1C1C1E   secondarySystemGroupedBackground
+    //   卡片2   SURFACE_2     #FFFFFF / #2C2C2E   tertiarySystemGroupedBackground（组内嵌套）
+    //   浅描边  LINE          #E5E5EA / #2C2C2E   卡片极细描边 / 次按钮边（**很浅**）
+    //   分隔线  SEP           #C6C6C8 / #38383A   opaqueSeparator（iOS 组内 inset 分隔线）
+    //   按下去  PRESS         #D1D1D6 / #3A3A3C   列表行按下高亮
+    //   成功    OK            #34C759 / #30D158   systemGreen
+    //   错误    ERR           #FF3B30 / #FF453A   systemRed
+    //   警告    WARN          #FF9500 / #FF9F0A   systemOrange
+    //   按钮字  ON_BRAND      #FFFFFF / #FFFFFF
+    //   警告字  ON_WARN       #FFFFFF / #FFFFFF
+    //   输入框底 FIELD_BG     #F2F2F7 / #2C2C2E   systemGray6（白卡里的内嵌输入框）
+    //   输入条底 FIELD_ALT_BG #F2F2F7 / #2C2C2E
+    //   圆形按钮底 CHIP_BG    #E9E9EB / #2C2C2E   systemGray5
+    //   停止按钮底 STOP_BG    #E5E5EA / #3A3A3C   systemGray4
+    //   提要底  PLAN_BG       #F2F2F7 / #1C1C1E
+    //   分段底  SEG_BG        #E9E9EB / #2C2C2E   分段控件底槽（systemGray5）
+    //   分段块  SEG_THUMB     #FFFFFF / #636366   分段控件选中的白色滑块
+    //   开关关  SWITCH_OFF    #E9E9EA / #39393D
+    //   开关开  SWITCH_ON     #34C759 / #30D158
+    //   横幅-警告 BANNER_WARN_BG/FG  #FFF8E6/#8A5300 / #3A2E12/#FFD60A
+    //   横幅-错误 BANNER_ERR_BG/FG   #FFEEED/#C1271E / #3A1D1D/#FF9F9A
+    //   语义描边（都调成"淡色发丝线"，iOS 不用粗彩边）
+    //     LINE_AGENT #B9D9FF / #2C4A6E · LINE_APPROVAL #FFD8A8 / #7A5A20
+    //     LINE_DANGER #FFC9C5 / #7F3A3A · LINE_QUESTION #B9D9FF / #2C4A6E
+    //     LINE_OK #B7E4C7 / #2F5A44 · LINE_SELECTED #B9D9FF / #3D4E85
+    //   徽标底-在线 BADGE_OK_BG  #E4F8E9 / #16351F
+    //   徽标底-离线 BADGE_OFF_BG #E9E9EB / #26282C
+    //   下载成功    LINK_OK      #34C759 / #30D158
+    //   代码块底    CODE_BG      #F2F2F7 / #2C2C2E
     //   扫码页（相机取景，两套主题下都保持深底，这是取景页的正确做法）
     //     SCAN_BG #000000 / SCAN_TIP_BG #99000000 / SCAN_PANEL_BG #E6101010
 
-    public static int BG             = 0xFFF4F6FB;
+    public static int BG             = 0xFFF2F2F7;
     public static int SURFACE        = 0xFFFFFFFF;
-    public static int BRAND          = 0xFF4D6BFE;
-    public static int BRAND_FILL     = 0xFF4D6BFE;
-    public static int BRAND_DEEP     = 0xFF3A57E8;
-    public static int BRAND_SOFT     = 0xFFEEF2FF;
-    public static int INK            = 0xFF17181C;
-    public static int INK_SUB        = 0xFF6B7280;
-    public static int INK_FAINT      = 0xFF9CA3AF;
-    public static int LINE           = 0xFFE8EBF2;
-    public static int OK             = 0xFF16A34A;
-    public static int ERR            = 0xFFDC2626;
-    public static int WARN           = 0xFFD97706;
+    public static int SURFACE_2      = 0xFFFFFFFF;
+    public static int BRAND          = 0xFF0A84FF;
+    public static int BRAND_FILL     = 0xFF0A84FF;
+    public static int BRAND_DEEP     = 0xFF0A84FF;
+    public static int BRAND_SOFT     = 0xFFE9F2FF;
+    public static int INK            = 0xFF000000;
+    public static int INK_SUB        = 0xFF8E8E93;
+    public static int INK_FAINT      = 0xFFAEAEB2;
+    public static int LINE           = 0xFFE5E5EA;
+    public static int SEP            = 0xFFC6C6C8;
+    public static int PRESS          = 0xFFD1D1D6;
+    public static int OK             = 0xFF34C759;
+    public static int ERR            = 0xFFFF3B30;
+    public static int WARN           = 0xFFFF9500;
     public static int ON_BRAND       = 0xFFFFFFFF;
     public static int ON_WARN        = 0xFFFFFFFF;
-    public static int FIELD_BG       = 0xFFF7F8FC;
-    public static int FIELD_ALT_BG   = 0xFFF5F6FA;
-    public static int CHIP_BG        = 0xFFF1F3F9;
-    public static int STOP_BG        = 0xFFE5E9F5;
-    public static int PLAN_BG        = 0xFFF5F8FF;
-    public static int BANNER_WARN_BG = 0xFFFFF7E6;
-    public static int BANNER_WARN_FG = 0xFF92400E;
-    public static int BANNER_ERR_BG  = 0xFFFEF2F2;
-    public static int BANNER_ERR_FG  = 0xFF991B1B;
-    public static int LINE_AGENT     = 0xFFC7D2FE;
-    public static int LINE_APPROVAL  = 0xFFFDE68A;
-    public static int LINE_DANGER    = 0xFFFCA5A5;
-    public static int LINE_QUESTION  = 0xFFBFD2FF;
-    public static int LINE_OK        = 0xFFBFE7CC;
-    public static int LINE_SELECTED  = 0xFFC7D3FF;
-    public static int BADGE_OK_BG    = 0xFFE7F7EC;
-    public static int BADGE_OFF_BG   = 0xFFF1F3F7;
-    public static int LINK_OK        = 0xFF2FB344;
-    public static int CODE_BG        = 0xFFF1F3F9;
+    public static int FIELD_BG       = 0xFFF2F2F7;
+    public static int FIELD_ALT_BG   = 0xFFF2F2F7;
+    public static int CHIP_BG        = 0xFFE9E9EB;
+    public static int STOP_BG        = 0xFFE5E5EA;
+    public static int PLAN_BG        = 0xFFF2F2F7;
+    public static int SEG_BG         = 0xFFE9E9EB;
+    public static int SEG_THUMB      = 0xFFFFFFFF;
+    public static int SWITCH_OFF     = 0xFFE9E9EA;
+    public static int SWITCH_ON      = 0xFF34C759;
+    public static int BANNER_WARN_BG = 0xFFFFF8E6;
+    public static int BANNER_WARN_FG = 0xFF8A5300;
+    public static int BANNER_ERR_BG  = 0xFFFFEEED;
+    public static int BANNER_ERR_FG  = 0xFFC1271E;
+    public static int LINE_AGENT     = 0xFFB9D9FF;
+    public static int LINE_APPROVAL  = 0xFFFFD8A8;
+    public static int LINE_DANGER    = 0xFFFFC9C5;
+    public static int LINE_QUESTION  = 0xFFB9D9FF;
+    public static int LINE_OK        = 0xFFB7E4C7;
+    public static int LINE_SELECTED  = 0xFFB9D9FF;
+    public static int BADGE_OK_BG    = 0xFFE4F8E9;
+    public static int BADGE_OFF_BG   = 0xFFE9E9EB;
+    public static int LINK_OK        = 0xFF34C759;
+    public static int CODE_BG        = 0xFFF2F2F7;
     /** 扫码页固定深色（相机取景页，两个主题下都不该变白）。 */
     public static int SCAN_BG        = 0xFF000000;
     public static int SCAN_TIP_BG    = 0x99000000;
@@ -123,83 +136,123 @@ public final class Ui {
     public static void applyTheme(boolean useDark) {
         dark = useDark;
         if (useDark) {
-            BG             = 0xFF121212;   // 背景：接近纯黑的一档
-            SURFACE        = 0xFF1E1E1E;   // 卡片：比背景略亮
-            BRAND          = 0xFF8FA6FF;   // 品牌色（文字/描边）提亮，才压得住深底
-            BRAND_FILL     = 0xFF3D5AF0;   // 品牌实心块保持深一档，白字才够对比
-            BRAND_DEEP     = 0xFFA9BCFF;
-            BRAND_SOFT     = 0xFF1E2A4D;
-            INK            = 0xFFE6E6E6;
-            INK_SUB        = 0xFFA8ADB8;
-            INK_FAINT      = 0xFF868C99;
-            LINE           = 0xFF2A2C31;
-            OK             = 0xFF4ADE80;
-            ERR            = 0xFFF87171;
-            WARN           = 0xFFFBBF24;
+            // ---- 深色：iOS systemGroupedBackground 纯黑 + #1C1C1E 卡片 + #0A84FF 主色
+            BG             = 0xFF000000;   // 分组背景：纯黑
+            SURFACE        = 0xFF1C1C1E;   // 卡片 / 顶部栏：比背景亮一档
+            SURFACE_2      = 0xFF2C2C2E;   // 组内嵌套卡片（更亮一层）
+            BRAND          = 0xFF0A84FF;   // systemBlue（深色下**不**提亮，iOS 就是这个值）
+            BRAND_FILL     = 0xFF0A84FF;
+            BRAND_DEEP     = 0xFF0A84FF;
+            BRAND_SOFT     = 0xFF0A2540;   // 蓝色 12% 的深色淡底
+            INK            = 0xFFFFFFFF;
+            INK_SUB        = 0xFF98989F;
+            INK_FAINT      = 0xFF7C7C80;
+            LINE           = 0xFF2C2C2E;   // 卡片发丝线：很淡，只用来"分界"
+            SEP            = 0xFF38383A;   // iOS opaqueSeparator
+            PRESS          = 0xFF3A3A3C;
+            OK             = 0xFF30D158;
+            ERR            = 0xFFFF453A;
+            WARN           = 0xFFFF9F0A;
             ON_BRAND       = 0xFFFFFFFF;
-            ON_WARN        = 0xFF201A00;
-            FIELD_BG       = 0xFF232529;
-            FIELD_ALT_BG   = 0xFF232529;
-            CHIP_BG        = 0xFF26282D;
-            STOP_BG        = 0xFF2E3340;
-            PLAN_BG        = 0xFF1B2233;
+            ON_WARN        = 0xFFFFFFFF;
+            FIELD_BG       = 0xFF2C2C2E;
+            FIELD_ALT_BG   = 0xFF2C2C2E;
+            CHIP_BG        = 0xFF2C2C2E;
+            STOP_BG        = 0xFF3A3A3C;
+            PLAN_BG        = 0xFF1C1C1E;
+            SEG_BG         = 0xFF2C2C2E;
+            SEG_THUMB      = 0xFF636366;
+            SWITCH_OFF     = 0xFF39393D;
+            SWITCH_ON      = 0xFF30D158;
             BANNER_WARN_BG = 0xFF3A2E12;
-            BANNER_WARN_FG = 0xFFFCD34D;
+            BANNER_WARN_FG = 0xFFFFD60A;
             BANNER_ERR_BG  = 0xFF3A1D1D;
-            BANNER_ERR_FG  = 0xFFFCA5A5;
-            LINE_AGENT     = 0xFF3F5090;
-            LINE_APPROVAL  = 0xFF7A6420;
+            BANNER_ERR_FG  = 0xFFFF9F9A;
+            LINE_AGENT     = 0xFF2C4A6E;
+            LINE_APPROVAL  = 0xFF7A5A20;
             LINE_DANGER    = 0xFF7F3A3A;
-            LINE_QUESTION  = 0xFF3F5A99;
+            LINE_QUESTION  = 0xFF2C4A6E;
             LINE_OK        = 0xFF2F5A44;
             LINE_SELECTED  = 0xFF3D4E85;
             BADGE_OK_BG    = 0xFF16351F;
             BADGE_OFF_BG   = 0xFF26282C;
-            LINK_OK        = 0xFF4ADE80;
-            CODE_BG        = 0xFF26282E;
+            LINK_OK        = 0xFF30D158;
+            CODE_BG        = 0xFF2C2C2E;
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
         } else {
-            BG             = 0xFFF4F6FB;
+            // ---- 浅色：iOS systemGroupedBackground #F2F2F7 + 纯白卡片 + #0A84FF 主色
+            BG             = 0xFFF2F2F7;
             SURFACE        = 0xFFFFFFFF;
-            BRAND          = 0xFF4D6BFE;
-            BRAND_FILL     = 0xFF4D6BFE;
-            BRAND_DEEP     = 0xFF3A57E8;
-            BRAND_SOFT     = 0xFFEEF2FF;
-            INK            = 0xFF17181C;
-            INK_SUB        = 0xFF6B7280;
-            INK_FAINT      = 0xFF9CA3AF;
-            LINE           = 0xFFE8EBF2;
-            OK             = 0xFF16A34A;
-            ERR            = 0xFFDC2626;
-            WARN           = 0xFFD97706;
+            SURFACE_2      = 0xFFFFFFFF;
+            BRAND          = 0xFF0A84FF;
+            BRAND_FILL     = 0xFF0A84FF;
+            BRAND_DEEP     = 0xFF0A84FF;
+            BRAND_SOFT     = 0xFFE9F2FF;
+            INK            = 0xFF000000;
+            INK_SUB        = 0xFF8E8E93;
+            INK_FAINT      = 0xFFAEAEB2;
+            LINE           = 0xFFE5E5EA;
+            SEP            = 0xFFC6C6C8;
+            PRESS          = 0xFFD1D1D6;
+            OK             = 0xFF34C759;
+            ERR            = 0xFFFF3B30;
+            WARN           = 0xFFFF9500;
             ON_BRAND       = 0xFFFFFFFF;
             ON_WARN        = 0xFFFFFFFF;
-            FIELD_BG       = 0xFFF7F8FC;
-            FIELD_ALT_BG   = 0xFFF5F6FA;
-            CHIP_BG        = 0xFFF1F3F9;
-            STOP_BG        = 0xFFE5E9F5;
-            PLAN_BG        = 0xFFF5F8FF;
-            BANNER_WARN_BG = 0xFFFFF7E6;
-            BANNER_WARN_FG = 0xFF92400E;
-            BANNER_ERR_BG  = 0xFFFEF2F2;
-            BANNER_ERR_FG  = 0xFF991B1B;
-            LINE_AGENT     = 0xFFC7D2FE;
-            LINE_APPROVAL  = 0xFFFDE68A;
-            LINE_DANGER    = 0xFFFCA5A5;
-            LINE_QUESTION  = 0xFFBFD2FF;
-            LINE_OK        = 0xFFBFE7CC;
-            LINE_SELECTED  = 0xFFC7D3FF;
-            BADGE_OK_BG    = 0xFFE7F7EC;
-            BADGE_OFF_BG   = 0xFFF1F3F7;
-            LINK_OK        = 0xFF2FB344;
-            CODE_BG        = 0xFFF1F3F9;
+            FIELD_BG       = 0xFFF2F2F7;
+            FIELD_ALT_BG   = 0xFFF2F2F7;
+            CHIP_BG        = 0xFFE9E9EB;
+            STOP_BG        = 0xFFE5E5EA;
+            PLAN_BG        = 0xFFF2F2F7;
+            SEG_BG         = 0xFFE9E9EB;
+            SEG_THUMB      = 0xFFFFFFFF;
+            SWITCH_OFF     = 0xFFE9E9EA;
+            SWITCH_ON      = 0xFF34C759;
+            BANNER_WARN_BG = 0xFFFFF8E6;
+            BANNER_WARN_FG = 0xFF8A5300;
+            BANNER_ERR_BG  = 0xFFFFEEED;
+            BANNER_ERR_FG  = 0xFFC1271E;
+            LINE_AGENT     = 0xFFB9D9FF;
+            LINE_APPROVAL  = 0xFFFFD8A8;
+            LINE_DANGER    = 0xFFFFC9C5;
+            LINE_QUESTION  = 0xFFB9D9FF;
+            LINE_OK        = 0xFFB7E4C7;
+            LINE_SELECTED  = 0xFFB9D9FF;
+            BADGE_OK_BG    = 0xFFE4F8E9;
+            BADGE_OFF_BG   = 0xFFE9E9EB;
+            LINK_OK        = 0xFF34C759;
+            CODE_BG        = 0xFFF2F2F7;
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
         }
     }
+
+    // ============================================================ 字号 / 行高 / 圆角（iOS 类型比例）
+    //
+    // 与系统设置同款层级：大标题 34 · 标题 22 · 正文 17 · 次要 15 · 脚注 13 · 说明 11~12。
+    // 视图里尽量用这些常量，别再各写一个 15.5f/12.5f —— 层级一散，"iOS 感"就没了。
+    public static final float S_LARGE   = 34f;   // Large Title（我的设备 / 对话）
+    public static final float S_TITLE2  = 22f;   // Title2
+    public static final float S_TITLE3  = 20f;   // Title3
+    public static final float S_HEAD    = 17f;   // Headline / Body（设置行标题、气泡正文）
+    public static final float S_BODY    = 17f;
+    public static final float S_CALLOUT = 16f;   // Callout（按钮文字）
+    public static final float S_SUB     = 15f;   // Subheadline
+    public static final float S_FOOT    = 13f;   // Footnote（组标题、说明）
+    public static final float S_CAP1    = 12f;   // Caption1
+    public static final float S_CAP2    = 11f;   // Caption2（徽标）
+
+    /** iOS 分组卡片圆角。 */
+    public static final float R_CARD  = 14f;
+    /** iOS 弹窗（bottom sheet）顶部圆角。 */
+    public static final float R_SHEET = 22f;
+    /** 按钮圆角（胶囊）。 */
+    public static final float R_PILL  = 999f;
+    /** iOS 列表行最小高度。 */
+    public static final float H_ROW   = 52f;
 
     /**
      * 系统 AlertDialog 的统一入口。
@@ -326,80 +379,384 @@ public final class Ui {
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
+    /**
+     * 顶部栏的圆形图标按钮：36dp 圆形触区 + 居中字形，带 iOS 按压反馈
+     * （按下整颗变淡缩一点，抬起回弹）。
+     */
     public static TextView circleButton(Context c, String glyph, int fill, int fg) {
         TextView t = new TextView(c);
         t.setText(glyph);
-        t.setTextSize(17f);
+        t.setTextSize(S_BODY);
         t.setTextColor(fg);
         t.setGravity(Gravity.CENTER);
-        int s = dp(c, 40);
+        int s = dp(c, 36);
         t.setLayoutParams(new LinearLayout.LayoutParams(s, s));
         t.setBackground(pill(fill));
         t.setClickable(true);
+        tap(t, 0.92f);
         return t;
     }
 
+    /** 全宽分隔线（旧样式，卡片之间用）。 */
     public static View divider(Context c) {
+        return hairline(c, SEP, 0);
+    }
+
+    /**
+     * iOS 的 **inset separator**：1px、颜色比卡片描边深一档、**从文字左缘开始**（左缩进）。
+     * iOS 设置那种"组内条目用细分隔线、左端对齐文字"的观感就靠它。
+     *
+     * @param insetLeftDp 左缩进 dp（一般传组内水平内边距 16）
+     */
+    public static View insetDivider(Context c, int insetLeftDp) {
+        return hairline(c, SEP, insetLeftDp);
+    }
+
+    private static View hairline(Context c, int color, int insetLeftDp) {
         View v = new View(c);
-        v.setBackgroundColor(LINE);
-        v.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 0.6f))));
+        v.setBackgroundColor(color);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 0.5f)));
+        lp.leftMargin = dp(c, insetLeftDp);
+        v.setLayoutParams(lp);
         return v;
+    }
+
+    // ------------------------------------------------------------ iOS 交互反馈
+
+    /**
+     * 按压反馈（iOS 的"按下去变淡缩一点"）。
+     *
+     * 用 OnTouchListener 而不是 StateListAnimator：后者只对 elevation 生效，
+     * 而本 App 的卡片用的是自绘 GradientDrawable（无 elevation 语义）。
+     * 关键点：onTouch **返回 false** —— 只做视觉，不消费事件，点击照旧走 OnClickListener。
+     *
+     * @param scale 按下时缩到多少（按钮 0.97，列表行 1.0 = 只压暗不缩放）
+     */
+    public static void tap(final View v, final float scale) {
+        if (v == null) return;
+        if (Boolean.TRUE.equals(v.getTag(com.dsh.mobile.R.id.tag_press))) return;   // 防重复挂
+        v.setTag(com.dsh.mobile.R.id.tag_press, Boolean.TRUE);
+        v.setOnTouchListener(new View.OnTouchListener() {
+            private boolean down;
+
+            @Override
+            public boolean onTouch(View view, android.view.MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        down = true;
+                        view.animate().cancel();
+                        view.animate().alpha(0.55f)
+                                .scaleX(scale).scaleY(scale).setDuration(90).start();
+                        break;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        if (down) {
+                            down = false;
+                            view.animate().cancel();
+                            view.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                                    .setDuration(160).start();
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                return false;   // 不消费：click / longClick 全按原样走
+            }
+        });
+    }
+
+    /** 按压反馈（按钮默认 0.97 的缩放）。 */
+    public static void tap(View v) { tap(v, 0.97f); }
+
+    /**
+     * 列表行的按下高亮：正常态用传进来的 drawable，按下时换成 PRESS 灰底。
+     * iOS 的行是按**整行底色**给反馈，不是只变文字色。
+     *
+     * 用 OnTouchListener 手动换背景（而不是 StateListDrawable）：ListView 的子 View
+     * 不一定能收到 pressed 状态（选择器是画在列表层的），手动换色在任何容器里都成立。
+     * 仍然返回 false，点击/长按照旧。
+     */
+    public static void tapRow(final View v, GradientDrawable normal, int pressFill) {
+        if (v == null || normal == null) return;
+        final GradientDrawable pressed = normal.getConstantState() == null
+                ? round(normal.getCornerRadius(), pressFill)
+                : (GradientDrawable) normal.getConstantState().newDrawable().mutate();
+        pressed.setColor(pressFill);
+        v.setBackground(normal);
+        v.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, android.view.MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        view.setBackground(pressed);
+                        break;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        view.setBackground(normal);
+                        break;
+                    default:
+                        break;
+                }
+                return false;   // 不消费：click / longClick 全按原样走
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ iOS 开关（自绘，无依赖）
+
+    /**
+     * iOS 风格开关：51x31dp 胶囊轨道 + 白色圆钮，开=绿/关=灰，点一下带滑动动画。
+     *
+     * 为什么自绘：框架只有 Switch/ToggleButton，它们的轨道尺寸/留白/配色都不是 iOS 的比例，
+     * 用 tint 也改不动"轨道粗细 + 圆钮边距"。这里纯 Canvas 画，不引入任何依赖。
+     */
+    public static final class Switch extends View {
+        public interface OnChange { void onChanged(boolean on); }
+
+        private final android.graphics.Paint track = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint knob = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final float wPx, hPx, knobPx, padPx;
+        private boolean checked;
+        private float pos;                       // 0=关 1=开（动画中间值）
+        private OnChange listener;
+
+        public Switch(Context c) {
+            super(c);
+            wPx = dp(c, 51);
+            hPx = dp(c, 31);
+            knobPx = dp(c, 27);
+            padPx = dp(c, 2);
+            knob.setColor(0xFFFFFFFF);
+            knob.setShadowLayer(dp(c, 1), 0, dp(c, 0.8f), 0x40000000);
+            setLayoutParams(new LinearLayout.LayoutParams(Math.round(wPx), Math.round(hPx)));
+        }
+
+        public boolean isChecked() { return checked; }
+
+        public void setChecked(boolean on) { setChecked(on, false); }
+
+        public void setChecked(boolean on, boolean animate) {
+            checked = on;
+            float target = on ? 1f : 0f;
+            if (animate) {
+                android.animation.ValueAnimator a =
+                        android.animation.ValueAnimator.ofFloat(pos, target);
+                a.setDuration(160L);
+                a.addUpdateListener(an -> {
+                    pos = ((Float) an.getAnimatedValue()).floatValue();
+                    invalidate();
+                });
+                a.start();
+            } else {
+                pos = target;
+                invalidate();
+            }
+        }
+
+        public void setOnChange(OnChange l) { listener = l; }
+
+        @Override
+        protected void onMeasure(int ws, int hs) {
+            int w = Math.round(wPx);
+            int h = Math.round(hPx);
+            // 父容器给的空间不够时**收缩**（iOS 开关不该把行挤爆）；EXACTLY/AT_MOST 都认
+            int wm = MeasureSpec.getMode(ws);
+            if (wm == MeasureSpec.AT_MOST || wm == MeasureSpec.EXACTLY) {
+                w = Math.min(w, MeasureSpec.getSize(ws));
+            }
+            int hm = MeasureSpec.getMode(hs);
+            if (hm == MeasureSpec.AT_MOST || hm == MeasureSpec.EXACTLY) {
+                h = Math.min(h, MeasureSpec.getSize(hs));
+            }
+            setMeasuredDimension(w, h);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas cv) {
+            int w = getWidth() > 0 ? getWidth() : Math.round(wPx);
+            int h = getHeight() > 0 ? getHeight() : Math.round(hPx);
+            float r = h / 2f;
+            track.setColor(blend(SWITCH_OFF, SWITCH_ON, pos));
+            cv.drawRoundRect(0, 0, w, h, r, r, track);
+            float kn = Math.min(knobPx, h - padPx * 2f);
+            float cx = padPx + kn / 2f + (w - kn - padPx * 2f) * pos;
+            cv.drawCircle(cx, h / 2f, kn / 2f, knob);
+        }
+
+        @Override
+        public boolean onTouchEvent(android.view.MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    setAlpha(0.75f);
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    setAlpha(1f);
+                    checked = !checked;
+                    setChecked(checked, true);
+                    if (listener != null) listener.onChanged(checked);
+                    performClick();
+                    return true;
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    setAlpha(1f);
+                    return true;
+                default:
+                    return super.onTouchEvent(e);
+            }
+        }
+
+        @Override
+        public boolean performClick() {
+            super.performClick();
+            return true;
+        }
+    }
+
+    /** 两个 ARGB 颜色按 t(0..1) 线性混合（开关轨道从灰滑到绿）。 */
+    private static int blend(int from, int to, float t) {
+        if (t <= 0f) return from;
+        if (t >= 1f) return to;
+        return Color.argb(
+                Math.round(Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * t),
+                Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * t),
+                Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * t),
+                Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t));
+    }
+
+    // ------------------------------------------------------------ iOS 分段控件 / 列表结构
+
+    /** 分段控件的底槽（圆角灰底，内衬 2dp）。往里加 {@link #segmentItem}。 */
+    public static LinearLayout segmentTrack(Context c) {
+        LinearLayout l = row(c);
+        l.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        l.setBackground(round(dp(c, 9), SEG_BG));
+        l.setPadding(dp(c, 2), dp(c, 2), dp(c, 2), dp(c, 2));
+        return l;
+    }
+
+    /** 分段控件的一项（默认未选中；选中态用 {@link #paintSegment}）。 */
+    public static TextView segmentItem(Context c, String s) {
+        TextView t = text(c, s, S_FOOT, INK, false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(c, 4), dp(c, 7), dp(c, 4), dp(c, 7));
+        t.setClickable(true);
+        paintSegment(t, false);
+        return t;
+    }
+
+    /** 画分段项：选中 = 白滑块 + 深字，未选中 = 透明 + 灰字。 */
+    public static void paintSegment(TextView t, boolean on) {
+        if (t == null) return;
+        t.setTextColor(on ? INK : INK_SUB);
+        t.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        t.setBackground(on ? round(dp(t.getContext(), 7), SEG_THUMB) : round(0, 0x00000000));
+    }
+
+    /** 组标题：iOS 的 13sp 灰色小字（"分组列表"上方那一行）。 */
+    public static TextView groupTitle(Context c, String s) {
+        TextView t = text(c, s, S_FOOT, INK_SUB, false);
+        t.setPadding(dp(c, 16), dp(c, 6), dp(c, 16), dp(c, 6));
+        return t;
+    }
+
+    /**
+     * 一张 iOS 分组卡片：纯白/深灰底、14dp 圆角、**极细**发丝描边（不是粗彩边）。
+     * 卡片靠"底色与分组背景的色差"立起来（iOS 的做法），不靠 elevation 阴影
+     * —— Android 的 elevation 在自绘背景上表现很差，会把浅色卡片画成一坨脏阴影。
+     */
+    public static LinearLayout card(Context c) {
+        LinearLayout c0 = col(c);
+        c0.setBackground(roundStroke(dp(c, R_CARD), SURFACE, dp(c, 0.5f), LINE));
+        c0.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return c0;
+    }
+
+    /** 卡片里的一行：最小 52dp 高、左右 16dp 内边距（iOS 的列表行规格）。 */
+    public static LinearLayout cardRow(Context c) {
+        LinearLayout r = row(c);
+        r.setMinimumHeight(dp(c, H_ROW));
+        r.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10));
+        r.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return r;
+    }
+
+    /** iOS 的 "›" 细箭头（列表行右侧的"可以进去"暗示）。 */
+    public static TextView chevron(Context c) {
+        TextView t = text(c, "›", S_TITLE3, INK_FAINT, false);
+        t.setPadding(dp(c, 6), 0, 0, 0);
+        return t;
+    }
+
+    /**
+     * iOS「分组内嵌列表」里某一行的背景：整组共用一张卡，靠 top/bottom 决定哪几个角是圆的
+     * （第一行圆上两角、最后一行圆下两角、中间直角）—— 组内条目之间再用
+     * {@link #insetDivider} 画细分隔线，就是系统设置那张列表。
+     */
+    public static GradientDrawable rowBg(Context c, int fill, boolean top, boolean bottom) {
+        GradientDrawable d = round(0, fill);
+        float r = dp(c, R_CARD);
+        d.setCornerRadii(new float[] {
+                top ? r : 0f, top ? r : 0f,          // 左上
+                top ? r : 0f, top ? r : 0f,          // 右上
+                bottom ? r : 0f, bottom ? r : 0f,    // 右下
+                bottom ? r : 0f, bottom ? r : 0f }); // 左下
+        return d;
     }
 
     // ------------------------------------------------------------ 表单控件（全 App 一套样式）
 
-    // 输入框底色 FIELD_BG 已并入上面的主题色板（浅色 #F7F8FC / 深色 #232529）：
-    // 比卡片底色深一点，12dp 圆角 + 0.8dp 描边才看得出来。
-
     /** 字段上方的小号灰标签。 */
     public static TextView fieldLabel(Context c, String s) {
-        TextView t = text(c, s, 12.5f, INK_SUB, false);
+        TextView t = text(c, s, S_FOOT, INK_SUB, false);
         t.setPadding(0, dp(c, 12), 0, dp(c, 5));
         return t;
     }
 
     /** 字段下方的说明 / 内联错误小字（错误时调用方把颜色改成 ERR 即可）。 */
     public static TextView fieldHint(Context c, String s) {
-        TextView t = text(c, s, 11.5f, INK_FAINT, false);
+        TextView t = text(c, s, S_CAP1, INK_FAINT, false);
         t.setPadding(dp(c, 2), dp(c, 6), dp(c, 2), 0);
         return t;
     }
 
     /**
-     * 统一的圆角输入框：系统默认的下划线输入框跟卡片风格不搭，
-     * 这里统一成「浅底 + 12dp 圆角 + 0.8dp 描边 + 12dp 内边距」。
+     * 统一的圆角输入框（iOS 的"浅灰内嵌输入框"）：无边框、灰底、10dp 圆角、17sp 文字。
      * 设置页、手动添加等所有表单都用这一个，别各自再画一套。
      */
     public static EditText field(Context c, String hint) {
         EditText e = new EditText(c);
         e.setHint(hint);
-        e.setTextSize(14f);
+        e.setTextSize(S_CALLOUT);
         e.setHintTextColor(INK_FAINT);
         e.setTextColor(INK);
-        e.setBackground(roundStroke(dp(c, 12), FIELD_BG, dp(c, 0.8f), LINE));
-        e.setPadding(dp(c, 12), dp(c, 11), dp(c, 12), dp(c, 11));
+        e.setBackground(round(dp(c, 10), FIELD_BG));
+        e.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
         e.setSingleLine(true);
         return e;
     }
 
-    /** 主按钮：品牌色实心圆角（保存 / 连接这类正向操作）。 */
+    /** 主按钮：主色实心圆角（保存 / 连接这类正向操作），带 iOS 按压反馈。 */
     public static TextView primaryButton(Context c, String s) {
-        TextView t = text(c, s, 14.5f, ON_BRAND, true);
+        TextView t = text(c, s, S_CALLOUT, ON_BRAND, true);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(0, dp(c, 12), 0, dp(c, 12));
-        t.setBackground(round(dp(c, 999), BRAND_FILL));
+        t.setPadding(dp(c, 14), dp(c, 14), dp(c, 14), dp(c, 14));
+        t.setBackground(round(dp(c, 14), BRAND_FILL));
         t.setClickable(true);
+        tap(t);
         return t;
     }
 
-    /** 次按钮：白底浅描边圆角（取消 / 扫码这类辅助操作）。 */
+    /** 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），无边框，带按压反馈。 */
     public static TextView secondaryButton(Context c, String s) {
-        TextView t = text(c, s, 14.5f, INK, false);
+        TextView t = text(c, s, S_CALLOUT, BRAND, false);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(0, dp(c, 12), 0, dp(c, 12));
-        t.setBackground(roundStroke(dp(c, 999), SURFACE, dp(c, 1f), LINE));
+        t.setPadding(dp(c, 14), dp(c, 14), dp(c, 14), dp(c, 14));
+        t.setBackground(round(dp(c, 14), CHIP_BG));
         t.setClickable(true);
+        tap(t);
         return t;
     }
 
@@ -412,17 +769,31 @@ public final class Ui {
     }
 
     /**
-     * 手搓底部弹窗的上圆角白卡片（不引入 Material BottomSheet 依赖）。
-     * 半径 / 内边距与「添加设备」弹窗、设置页卡片保持一致。
+     * 手搓底部弹窗的上圆角卡片（不引入 Material BottomSheet 依赖）。
+     * iOS bottom sheet：**22dp 上圆角**、卡片色底、顶部 10dp 留给抓手。
      */
     public static LinearLayout sheetCard(Context c) {
         LinearLayout box = col(c);
         GradientDrawable bg = round(0, SURFACE);
-        int r = dp(c, 20);
+        int r = dp(c, R_SHEET);
         bg.setCornerRadii(new float[] { r, r, r, r, 0f, 0f, 0f, 0f });
         box.setBackground(bg);
         box.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 16));
         return box;
+    }
+
+    /**
+     * 底部弹窗顶部的"抓手"横条（iOS 的 grabber）：36x5dp 圆角灰条、水平居中。
+     * 加在 {@link #sheetCard} 的第一个子 View，视觉上就是一张可以下拉的 iOS 面板。
+     */
+    public static View grabber(Context c) {
+        View v = new View(c);
+        v.setBackground(pill(alpha(INK, 0.18f)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(c, 36), dp(c, 5));
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = dp(c, 10);
+        v.setLayoutParams(lp);
+        return v;
     }
 
     // ------------------------------------------------------------ 轻量 Markdown

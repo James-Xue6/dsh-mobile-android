@@ -87,10 +87,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         TextView tip = new TextView(this);
         tip.setText("把电脑端「移动设备」里的配对二维码放进框内");
         tip.setTextColor(Ui.ON_BRAND);
-        tip.setTextSize(13.5f);
+        tip.setTextSize(Ui.S_FOOT);
         tip.setGravity(Gravity.CENTER);
         tip.setBackgroundColor(Ui.SCAN_TIP_BG);
-        tip.setPadding(24, 22, 24, 22);
+        tip.setPadding(Ui.dp(this, 20), Ui.dp(this, 20), Ui.dp(this, 20), Ui.dp(this, 20));
         FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tlp.gravity = Gravity.TOP;
@@ -102,10 +102,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         // 失败时的可见提示（旧版是静默 finish，排查无从下手）
         errorView = new TextView(this);
         errorView.setTextColor(Ui.ON_BRAND);
-        errorView.setTextSize(14f);
+        errorView.setTextSize(Ui.S_SUB);
         errorView.setGravity(Gravity.CENTER);
         errorView.setBackgroundColor(Ui.SCAN_PANEL_BG);
-        errorView.setPadding(40, 40, 40, 40);
+        errorView.setPadding(Ui.dp(this, 28), Ui.dp(this, 28), Ui.dp(this, 28), Ui.dp(this, 28));
         errorView.setVisibility(TextView.GONE);
         root.addView(errorView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -113,10 +113,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         TextView cancel = new TextView(this);
         cancel.setText("返回");
         cancel.setTextColor(Ui.ON_BRAND);
-        cancel.setTextSize(15f);
+        cancel.setTextSize(Ui.S_CALLOUT);
         cancel.setGravity(Gravity.CENTER);
-        cancel.setBackground(Ui.pill(Ui.alpha(Ui.SCAN_BG, 0.40f)));
-        cancel.setPadding(48, 22, 48, 22);
+        cancel.setBackground(Ui.roundStroke(Ui.dp(this, 999), Ui.alpha(Ui.SCAN_BG, 0.55f), Ui.dp(this, 1f), 0x40FFFFFF));
+        cancel.setPadding(Ui.dp(this, 30), Ui.dp(this, 13), Ui.dp(this, 30), Ui.dp(this, 13));
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
@@ -131,10 +131,10 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         TextView pasteBtn = new TextView(this);
         pasteBtn.setText("粘贴 / 手输配对串");
         pasteBtn.setTextColor(Ui.ON_BRAND);
-        pasteBtn.setTextSize(15f);
+        pasteBtn.setTextSize(Ui.S_CALLOUT);
         pasteBtn.setGravity(Gravity.CENTER);
         pasteBtn.setBackground(Ui.pill(Ui.alpha(Ui.BRAND_FILL, 0.80f)));
-        pasteBtn.setPadding(48, 22, 48, 22);
+        pasteBtn.setPadding(Ui.dp(this, 30), Ui.dp(this, 13), Ui.dp(this, 30), Ui.dp(this, 13));
         FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         plp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;

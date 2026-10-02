@@ -20,6 +20,7 @@ import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.net.LanAddress;
 import com.dsh.mobile.net.NetStatus;
 import com.dsh.mobile.net.RoutePolicy;
+import com.dsh.mobile.notify.Notifier;
 import com.dsh.mobile.ui.ConversationView;
 import com.dsh.mobile.ui.DeviceHubView;
 import com.dsh.mobile.ui.DrawerHost;
@@ -58,6 +59,11 @@ public final class MainActivity extends Activity implements
     private static final int REQ_QR = 1001;
     private static final int REQ_VOICE = 1002;
     private static final int REQ_IMAGE = 1003;
+    /**
+     * Android 13+ 的通知权限申请（POST_NOTIFICATIONS）。
+     * 只主动问一次，被拒之后不再骚扰 —— 改由设置页「通知」分组给出「去系统设置开启」的引导。
+     */
+    private static final int REQ_NOTIF = 1010;
 
     /**
      * 是否允许用外部 Intent 的 pairing extra 直接触发配对（自动化测试/脚本联调用）：
@@ -155,6 +161,48 @@ public final class MainActivity extends Activity implements
     private String lastStateText = "";
     /** 非当前会话的待处理交互：sessionId -> 1 提问 / 2 审批 */
     private final Map<String, Integer> pendingBySession = new HashMap<>();
+
+    // ---------------------------------------------------------------- 通知（见 com.dsh.mobile.notify.Notifier）
+    //
+    // 三个触发点：① 回合结束 →「任务完成」；② 审批/提问 →「需要处理」（高优先级，点进去就能选）；
+    // ③ 会话在跑且人没在看 →「进行中」（低优先级静默）。
+    // 全部由 Notifier 统一收口（渠道、隐私文案、权限降级都在那边），这里只负责"什么时候触发"。
+
+    /** App 是否前台可见：进行中通知、以及"正在看这条会话就不打扰"的判断都要它。 */
+    private boolean appVisible = false;
+    /**
+     * 点通知进来时要进入的会话 / 要滚到的那张卡。
+     *
+     * 为什么不在 onNewIntent 里直接滚：进入会话后卡片是网关重放才出现的（还有网络往返），
+     * 所以要留个待办、按间隔重试几次，直到 {@code ConversationView.scrollToKey} 说"找到了"。
+     * 这两个值只活在内存里（不落盘、不进日志、不进任何被跟踪的文件）。
+     */
+    private String pendingOpenSessionId = "";
+    private String pendingScrollKey = "";
+    /** 待滚动的重试计数与定时任务。 */
+    private int pendingScrollTries = 0;
+    private Runnable pendingScrollTask;
+    private static final long SCROLL_RETRY_MS = 400L;
+    private static final int SCROLL_MAX_TRIES = 25;                 // ~10 秒还没找到就放弃
+    /**
+     * 已经提示过「任务完成」的会话 → 那次完成对应的 updatedAt。
+     * 用来防止重连后会话列表又给出一次"running 由真变假"而重复提醒同一次完成。
+     */
+    private final Map<String, Long> doneNotifiedAt = new HashMap<>();
+    /**
+     * 后台会话列表轮询：只有它会告诉我们「**别的**会话跑完了」。
+     * 当前会话有实时流（turn/end 直接到），别的会话只在拉列表时才知道 running 变没变，
+     * 所以退到后台后每 {@link #BG_POLL_MS} 拉一次（前台不拉，省电也不打扰）。
+     */
+    private static final long BG_POLL_MS = 60_000L;
+    private final Runnable bgSessionsPoll = new Runnable() {
+        @Override public void run() {
+            if (appVisible || gw == null) return;
+            if (!gw.wantConnected()) return;                 // 没连着/没配好：不空转
+            gw.requestSessions();
+            uiHandler.postDelayed(this, BG_POLL_MS);
+        }
+    };
     /** 反馈草稿：发完不清空，方便继续补充。 */
     private String lastFeedbackDraft = "";
     /** 自动切换端点只用一次，连接成功或手动切换后复位。 */
@@ -296,6 +344,11 @@ public final class MainActivity extends Activity implements
         else SHARED_GW.setListener(this);
         gw = SHARED_GW;
 
+        // 通知：建三个渠道（幂等）+ 对齐"人此刻在看哪条会话"（冷启动还没进任何会话）。
+        // 渠道必须在任何一条通知之前建好，否则 Android 8+ 直接丢弃。
+        Notifier.init(this);
+        Notifier.setViewedSession(this, "");
+
         root = new FrameLayout(this);
         root.setBackgroundColor(Ui.BG);
         // targetSdk 35+ 强制 edge-to-edge：把系统栏内边距加到根容器，各屏不再自己留状态栏高度
@@ -363,6 +416,11 @@ public final class MainActivity extends Activity implements
         refreshListStatus();
         registerNetworkCallback();
         registerBackInvoked();
+
+        // 从通知点进来的冷启动：Intent 里带着"进哪条会话、滚到哪张卡"
+        handleNotifyIntent(getIntent());
+        // Android 13+ 通知是运行时权限：晚一点问（先让界面画出来，别一进 App 就弹窗盖住它）
+        uiHandler.postDelayed(this::maybeAskNotificationPermission, 900L);
     }
 
     // ---- 网络变化感知（评审 P0-1 第三条）
@@ -680,6 +738,26 @@ public final class MainActivity extends Activity implements
             uiHandler.removeCallbacks(titleSweep);
             titleSweep = null;
         }
+        // 切后台：通知这边要翻转两件事 ——
+        //  ①「进行中」这类低优先级状态从此刻起才有意义（人在 App 里时没意义，见 Notifier.running）；
+        //  ② 只有列表能告诉我们别的会话是否跑完了，所以后台每 60s 拉一次会话列表。
+        appVisible = false;
+        Notifier.setForeground(this, false);
+        uiHandler.removeCallbacks(bgSessionsPoll);
+        if (gw != null && gw.wantConnected() && store.notifyEnabled()) {
+            uiHandler.postDelayed(bgSessionsPoll, BG_POLL_MS);
+        }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        appVisible = true;
+        Notifier.setForeground(this, true);
+        Notifier.setViewedSession(this, currentSessionId);
+        // 回到前台：不再需要"别的会话跑完了"的轮询（人就在看列表），
+        // 通知栏里那条「进行中」也一并撤掉。
+        uiHandler.removeCallbacks(bgSessionsPoll);
     }
 
     @Override
@@ -957,10 +1035,119 @@ public final class MainActivity extends Activity implements
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        // 点通知进来（App 已经在跑）：进对应会话、滚到那张待选的卡
+        handleNotifyIntent(intent);
         String pv = intent == null ? null : intent.getStringExtra("pairing");
         if (ALLOW_TEST_PAIRING_INTENT && pv != null && !pv.trim().isEmpty()) {
             final String v = pv.trim();
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> startPairing(v), 500);
+        }
+    }
+
+    // ============================================================ 通知的深链落点
+
+    /**
+     * 处理"从通知点进来"的 Intent：进对应会话，并（需要处理时）滚到那张卡。
+     *
+     * 只认 Notifier 写进去的两个 extra；其它 Intent（launcher、配对）走原路不受影响。
+     * 这里刻意**不**把会话 id / 卡 key 写进任何日志或诊断区（它们属于"用户此刻在干什么"）。
+     */
+    private void handleNotifyIntent(android.content.Intent intent) {
+        if (intent == null) return;
+        String sid = intent.getStringExtra(Notifier.EXTRA_SESSION);
+        if (sid == null || sid.trim().isEmpty()) return;
+        final String sessionId = sid.trim();
+        final String key = intent.getStringExtra(Notifier.EXTRA_KEY);
+        pendingOpenSessionId = sessionId;
+        pendingScrollKey = key == null ? "" : key;
+        pendingScrollTries = 0;
+        // 冷启动时会话列表还没到：先请求一次，onSessions 回来后再落位（见 applyPendingNotifyTarget）
+        SessionInfo s = findSession(sessionId);
+        if (s != null) onOpenSession(s);
+        else if (gw != null) gw.requestSessions();
+        showChat();
+        schedulePendingScroll();
+    }
+
+    /**
+     * 会话列表（重新）到达后再落位一次：冷启动/断线期间点通知时，findSession 当时找不到人。
+     * 已经落位过（pendingOpenSessionId 为空）就什么都不做。
+     */
+    private void applyPendingNotifyTarget() {
+        if (pendingOpenSessionId.isEmpty()) return;
+        if (!pendingOpenSessionId.equals(currentSessionId)) {
+            SessionInfo s = findSession(pendingOpenSessionId);
+            if (s == null) return;                     // 还不在列表里（已归档/还没同步）
+            onOpenSession(s);
+            showChat();
+            pendingScrollTries = 0;
+            schedulePendingScroll();
+            return;
+        }
+        schedulePendingScroll();
+    }
+
+    /**
+     * 把"滚到那张卡"排成几次重试：点通知进来时会话还要重新订阅，卡是网关重放后才有的，
+     * 一次找不到很正常 —— 不能因此把人丢在列表底部（那就等于"点进去看不到待选的卡"）。
+     */
+    private void schedulePendingScroll() {
+        if (pendingScrollTask != null) {
+            uiHandler.removeCallbacks(pendingScrollTask);
+            pendingScrollTask = null;
+        }
+        if (pendingScrollKey.isEmpty()) {
+            pendingOpenSessionId = "";
+            return;
+        }
+        pendingScrollTask = new Runnable() {
+            @Override public void run() {
+                pendingScrollTask = null;
+                if (pendingScrollKey.isEmpty()) return;
+                if (convo != null && convo.scrollToKey(pendingScrollKey)) {
+                    // 找到了：这一次深链的使命完成（再看几毫秒确认卡片真的画出来了就收工）
+                    pendingScrollKey = "";
+                    pendingOpenSessionId = "";
+                    return;
+                }
+                if (++pendingScrollTries >= SCROLL_MAX_TRIES) {
+                    pendingScrollKey = "";
+                    pendingOpenSessionId = "";
+                    Toast.makeText(MainActivity.this, "没能定位到那张待处理的卡，请在上面的会话里找一下",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                uiHandler.postDelayed(this, SCROLL_RETRY_MS);
+            }
+        };
+        uiHandler.postDelayed(pendingScrollTask, SCROLL_RETRY_MS);
+    }
+
+    /**
+     * Android 13+ 的运行时通知权限：只在**第一次**进 App 时问一次。
+     *
+     * 被拒绝不阻断任何功能（App 照常用，卡片照旧在对话页里），只是没有系统提醒；
+     * 之后由设置页「通知」分组给出「去系统设置开启」的引导，不再反复弹窗。
+     */
+    private void maybeAskNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return;         // Android 13 以下不需要运行时申请
+        if (store == null || store.notifPermAsked()) return;
+        if (Notifier.notificationsAllowed(this)) return; // 已经开着（升级安装/用户已授权）
+        store.setNotifPermAsked(true);
+        try {
+            requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, REQ_NOTIF);
+        } catch (Throwable ignored) { }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request != REQ_NOTIF) return;
+        boolean ok = results != null && results.length > 0
+                && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!ok) {
+            Toast.makeText(this, "通知权限没开：任务完成/需要处理时不会提醒（可在设置页「通知」里打开）",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
@@ -998,12 +1185,19 @@ public final class MainActivity extends Activity implements
         refreshMoreStatus();   // 回到对话页时把分页状态行按当前状态重画
         paintBanner();   // 从设置页切回来时把横幅按当前状态重画（连接告警 / 流中断）
         convo.refreshNow();
-        convo.scrollToBottom();
+        // 深链/切会话的落点由 handleNotifyIntent 排定（见 schedulePendingScroll）；
+        // 没有待滚动目标时这里照旧贴底，不会把用户的列表位置弄乱。
+        if (!pendingScrollKey.isEmpty()) schedulePendingScroll();
+        else convo.scrollToBottom();
         if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
+        // 通知这边：人在对话页 = 正在看这条会话（"正在看就不打扰"的判断依据）
+        Notifier.setViewedSession(this, currentSessionId);
     }
 
     private void showSettings() {
         screen = Screen.SETTINGS;
+        // 在设置页 = 没在看任何会话：这条会话的提醒照样该响
+        Notifier.setViewedSession(this, "");
         if (settingsView == null) settingsView = new SettingsView(this, this);
         setContent(settingsView);
         settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
@@ -1026,6 +1220,8 @@ public final class MainActivity extends Activity implements
     /** 进「我的设备」页并重画卡片（在线状态以当前 WebSocket 实况为准）。 */
     private void showDevices() {
         screen = Screen.DEVICE;
+        // 设备页同样不算"正在看某条会话"（通知该响就响）
+        Notifier.setViewedSession(this, "");
         if (deviceHub == null) deviceHub = new DeviceHubView(this, this);
         setContent(deviceHub);
         refreshDevices();
@@ -1224,6 +1420,9 @@ public final class MainActivity extends Activity implements
      */
     private void maybeAutoEnter() {
         if (autoEntered || !store.paired()) return;
+        // 点通知进来的落点还没定（会话列表还没到）时不要抢：冷启动自动进"最近一条"
+        // 会把用户从通知指向的那条会话上带跑（随后由 applyPendingNotifyTarget 落位）。
+        if (!pendingOpenSessionId.isEmpty()) return;
         autoEntered = true;
         if (!currentSessionId.isEmpty()) return;
         if (screen != Screen.CHAT) return;
@@ -1272,6 +1471,43 @@ public final class MainActivity extends Activity implements
         }
         if (listScreen != null) listScreen.setRows(buildRows());
         Toast.makeText(this, "「" + name + "」" + label, Toast.LENGTH_LONG).show();
+    }
+
+    // ---- 通知：「需要处理」的高优先级提醒（三个触发点之一，见 notify/Notifier.java）
+
+    /** 审批帧对应的卡片 key：与 onApprovalRequested 建档、与历史 approval/asked 同一把键。 */
+    private static String approvalKey(JSONObject frame) {
+        if (frame == null) return "";
+        String approvalId = frame.optString("approvalId", "");
+        String rpcId = frame.optString("rpcId", "");
+        return "approval:" + (approvalId.isEmpty() ? rpcId : approvalId);
+    }
+
+    /** 提问帧对应的卡片 key。 */
+    private static String questionKey(JSONObject frame) {
+        if (frame == null) return "";
+        return "question:" + frame.optString("rpcId", "");
+    }
+
+    /**
+     * 发一条「需要处理」的高优先级通知（审批 / 提问）。
+     *
+     * 要不要真的发由 {@link Notifier} 判定：通知总开关、系统权限、以及
+     * 「App 在前台且正在看这条会话」这几种情况都会安静地不发 —— 卡片本来就摆在眼前。
+     */
+    private void notifyPendingRequest(String sessionId, String itemKey, boolean question) {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        Notifier.pending(this, store, sessionId, itemKey, sessionLabel(sessionId), question);
+    }
+
+    /** 通知里显示的会话名：会话列表的标题优先，其次标题缓存；都没有就交回中性文案。 */
+    private String sessionLabel(String sessionId) {
+        if (sessionId == null || sessionId.isEmpty()) return "";
+        for (SessionInfo s : sessions) {
+            if (s != null && sessionId.equals(s.id)) return s.display();
+        }
+        String cached = store == null ? "" : store.cachedTitle(sessionId);
+        return cached == null ? "" : cached;
     }
 
     /** 「关于」：版本 / 协议 / 设备 / 网关 / 令牌掩码。 */
@@ -1466,6 +1702,14 @@ public final class MainActivity extends Activity implements
         lastStateText = detail == null ? "" : detail;
         GatewayClient.State prevState = lastGatewayState;
         lastGatewayState = st;
+        // 通知这边跟着连接状态走：
+        //  READY → 起前台服务（常驻「保持后台接收」，没有它切后台就收不到事件）；
+        //  断开  → 停服务并撤掉「进行中」，不然通知栏会留一条骗人的状态。
+        Notifier.onGatewayState(this, st == GatewayClient.State.READY);
+        if (st != GatewayClient.State.READY) {
+            Notifier.clearRunning(this);
+            uiHandler.removeCallbacks(bgSessionsPoll);   // 断线时不轮询（拉了也没用）
+        }
         boolean err = (st == GatewayClient.State.UNAUTHORIZED
                 || st == GatewayClient.State.FAILED
                 || st == GatewayClient.State.GATEWAY_OFF);
@@ -1592,6 +1836,13 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onSessions(JSONArray arr, JSONObject raw) {
+        // 通知用：先记下"上一份列表里谁在跑"。列表本身马上要 clear()，
+        // 只有这里能把"跑过、现在不跑了"这个切换捞出来 —— 别的会话结束只有这条线索。
+        Map<String, Boolean> wasRunning = new HashMap<>();
+        for (SessionInfo old : sessions) {
+            if (old == null || old.id == null) continue;
+            wasRunning.put(old.id, old.running);
+        }
         sessions.clear();
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
@@ -1632,6 +1883,44 @@ public final class MainActivity extends Activity implements
         // 快照的历史窗口可能不含 turn/end，只靠快照回放会漏掉"回合已在断线期间结束"，
         // 那样停止按钮会一直卡着。这里只在网关明确说该会话已不在跑时才复位。
         if (runningUncertain && !turnRunningOnGateway()) setRunning(false);
+
+        // 通知：从这份列表里捞"刚才还在跑、现在不跑了"的会话 —— 当前会话有实时流
+        // （turn/end 直接到），**别的**会话只有这条线索能告诉我们它跑完了。
+        notifyFinishedFromSessions(wasRunning);
+        // 点通知进来时列表还没到的话，这里补一次落位（进会话 + 滚到那张卡）
+        applyPendingNotifyTarget();
+    }
+
+    /**
+     * 列表里 running 由真变假的会话 → 发一条「任务完成」。
+     *
+     * 三条防线，避免误报/重复报：
+     *  ① 上一份列表里它确实在跑（wasRunning=true），现在不跑了；
+     *  ② 这次完成对应的 updatedAt 没提示过（doneNotifiedAt）——重连后列表重置不会重复响同一次；
+     *  ③ Notifier 那边还会挡掉"正在看这条会话"的情况。
+     */
+    private void notifyFinishedFromSessions(Map<String, Boolean> wasRunning) {
+        if (wasRunning.isEmpty() || store == null) return;
+        for (SessionInfo s : sessions) {
+            if (s == null || s.id == null || s.id.isEmpty()) continue;
+            Boolean before = wasRunning.get(s.id);
+            if (before == null || !before.booleanValue() || s.running) continue;
+            Long already = doneNotifiedAt.get(s.id);
+            // 同一次完成（updatedAt 没变）= 重连/重拉列表又给了一遍，不重复提醒
+            if (already != null && already.longValue() == s.updatedAt) continue;
+            markDoneNotified(s.id);
+            Notifier.done(this, store, s.id, s.display());
+        }
+    }
+
+    /** 记下"这条会话的这次完成已经提示过"（key = sessionId，value = 那次完成对应的 updatedAt）。 */
+    private void markDoneNotified(String sessionId) {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        long at = 0L;
+        for (SessionInfo s : sessions) {
+            if (s != null && sessionId.equals(s.id)) { at = s.updatedAt; break; }
+        }
+        doneNotifiedAt.put(sessionId, Long.valueOf(at));
     }
 
     @Override
@@ -1854,6 +2143,9 @@ public final class MainActivity extends Activity implements
     @Override
     public void onApprovalRequested(JSONObject frame) {
         String sid = frame.optString("sessionId", "");
+        // 「需要处理」高优先级通知：审批是要人当场做决定的事，人不在这一页时必须响一下。
+        // key 与下面建档用同一把（approval:approvalId），点通知进来才滚得到那张卡。
+        notifyPendingRequest(sid, approvalKey(frame), false);
         if (!sid.equals(currentSessionId)) {
             notifyPending(sid, 2, "有待审批");
             return;
@@ -1889,6 +2181,8 @@ public final class MainActivity extends Activity implements
     @Override
     public void onQuestionRequested(JSONObject frame) {
         String sid = frame.optString("sessionId", "");
+        // 同审批：提问也必须把人叫回来（高优先级，点通知直达那张待回答的卡）
+        notifyPendingRequest(sid, questionKey(frame), true);
         if (!sid.equals(currentSessionId)) {
             notifyPending(sid, 1, "有提问待回答");
             return;
@@ -2781,12 +3075,24 @@ public final class MainActivity extends Activity implements
             }
             case "turn/start": {
                 turnStartedAt = t;
+                // 历史回放（historical=true）不是"现在开始了"：快照里几十个 turn/start 不能
+                // 各弹一条通知。只有实时帧才认。
+                if (!historical) {
+                    Notifier.running(this, store, currentSessionId, sessionLabel(currentSessionId));
+                }
                 setRunning(true);
                 break;
             }
             case "turn/end": {
+                // 「任务完成」通知：只认实时帧（回放的历史 turn/end 是老早的事），
+                // 且必须"此前确实在跑"——否则首次订阅时的一堆历史回合结束会连着刷通知。
+                boolean wasRunning = running;
                 setRunning(false);
                 turnStartedAt = 0;
+                if (!historical && wasRunning) {
+                    markDoneNotified(currentSessionId);
+                    Notifier.done(this, store, currentSessionId, sessionLabel(currentSessionId));
+                }
                 // 某些历史窗口里 tool/result 不在其中，避免工具条永远停在「运行中」
                 for (ChatItem ci : items) {
                     if (ci.kind == ChatItem.TOOL && ci.toolRunning) ci.toolRunning = false;
@@ -3073,6 +3379,11 @@ public final class MainActivity extends Activity implements
             turnStartedAt = 0;
             // 回合结束了：把因为「有活跃会话」而推迟的 内网→公网 切换补上（需求：不打断进行中的会话）
             maybeApplyAutoFailover();
+            // 当前会话不再"进行中"：撤掉它的低优先级状态通知（完成通知在 turn/end 那一路单独发，
+            // 这里不粘 —— 看门狗超时、流中断也会走到这里，那些不是"任务完成"）。
+            if (!currentSessionId.isEmpty() && store != null && store.notifyEnabled()) {
+                Notifier.clearSession(this, currentSessionId);
+            }
         }
     }
 
@@ -3275,6 +3586,10 @@ public final class MainActivity extends Activity implements
         currentParentId = (!p.isEmpty() && !p.equals(s.id) && findSession(p) != null) ? p : "";
         closeDrawer();          // 选中任务 -> 抽屉收起 -> 右侧对话扩大并进入该任务
         if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
+        // 通知这边同步"人此刻在看哪条会话"：① 正在看这条 → 有审批/完成也不再打扰它；
+        // ② 通知栏里这条会话的旧提醒已经没意义了，直接撤掉。
+        Notifier.setViewedSession(this, currentSessionId);
+        Notifier.clearSession(this, currentSessionId);
         subscribeCurrent();
     }
 
@@ -3866,21 +4181,14 @@ public final class MainActivity extends Activity implements
 
         final LinearLayout card = Ui.sheetCard(this);
 
-        // 头部（小横条 + 标题 + 副标题）：高度不随字段区变化，用来算"还能留给字段区多少"
+        // 头部（iOS 抓手 + 标题 + 副标题）：高度不随字段区变化，用来算"还能留给字段区多少"
         final LinearLayout head = Ui.col(this);
         head.setLayoutParams(Ui.fill());
-        android.view.View bar = new android.view.View(this);
-        bar.setBackground(Ui.pill(Ui.LINE));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
-                Ui.dp(this, 40), Ui.dp(this, 4));
-        blp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
-        blp.bottomMargin = Ui.dp(this, 12);
-        bar.setLayoutParams(blp);
-        head.addView(bar);
+        head.addView(Ui.grabber(this));
 
-        head.addView(Ui.text(this, "手动添加设备", 17f, Ui.INK, true));
+        head.addView(Ui.text(this, "手动添加设备", Ui.S_TITLE3, Ui.INK, true));
         TextView sub = Ui.text(this, "电脑端 DSH 打开「移动设备」面板，照着那边的信息填过来",
-                12.5f, Ui.INK_SUB, false);
+                Ui.S_FOOT, Ui.INK_SUB, false);
         sub.setPadding(0, Ui.dp(this, 5), 0, Ui.dp(this, 2));
         head.addView(sub);
         card.addView(head);
@@ -3901,7 +4209,7 @@ public final class MainActivity extends Activity implements
         form.addView(Ui.fieldLabel(this, "设备名称（可留空）"));
         form.addView(alias);
 
-        final TextView err = Ui.text(this, "", 12f, Ui.ERR, false);
+        final TextView err = Ui.text(this, "", Ui.S_FOOT, Ui.ERR, false);
         err.setPadding(Ui.dp(this, 2), Ui.dp(this, 10), Ui.dp(this, 2), 0);
         err.setVisibility(android.view.View.GONE);
         form.addView(err);
@@ -4936,7 +5244,7 @@ public final class MainActivity extends Activity implements
         scroller.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 92)));
 
-        final android.widget.TextView msg = Ui.text(this, "", 12.5f, Ui.INK_SUB, false);
+        final android.widget.TextView msg = Ui.text(this, "", Ui.S_FOOT, Ui.INK_SUB, false);
         msg.setPadding(0, Ui.dp(this, 8), 0, 0);
 
         android.widget.LinearLayout box = Ui.col(this);

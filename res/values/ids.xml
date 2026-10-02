@@ -2,4 +2,5 @@
 <resources>
     <item name="tag_reason" type="id" />
     <item name="tag_paint" type="id" />
+    <item name="tag_press" type="id" />
 </resources>

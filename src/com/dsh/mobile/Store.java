@@ -57,6 +57,26 @@ public final class Store {
      * 存字符串而不是布尔，是为了以后再加"护眼/纯黑"这类档位时不用做数据迁移。
      */
     private static final String K_THEME_MODE = "theme_mode";
+    /**
+     * 通知总开关（默认开）。关掉后一条系统通知都不发，App 照常用（降级）。
+     */
+    private static final String K_NOTIFY_ENABLED = "notify_enabled";
+    /**
+     * 「仅需处理时提醒」（默认关）：开着就只推审批/提问，回合完成与进行中都不打扰。
+     */
+    private static final String K_NOTIFY_ONLY_PENDING = "notify_only_pending";
+    /**
+     * 通知里是否显示会话标题（默认开）。关掉只写一句概括 —— 锁屏/锁屏通知中心
+     * 上就看不出用户在跑什么内容（隐私）。正文永远不会进通知，无论这个开关。
+     */
+    private static final String K_NOTIFY_DETAIL = "notify_detail";
+    /**
+     * 后台保持接收（前台服务，默认开）：切后台后进程不被挂起，才收得到事件、发得出通知。
+     * 关掉后 App 一切后台就可能收不到通知（用户自己选）。
+     */
+    private static final String K_KEEPALIVE = "keepalive";
+    /** 通知权限是否已经申请过（Android 13+ 只主动问一次，被拒后改为设置页引导）。 */
+    private static final String K_NOTIF_ASKED = "notify_perm_asked";
 
     private final SharedPreferences sp;
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
@@ -166,6 +186,33 @@ public final class Store {
         // 同步给进程级镜像：Dialog 等窗口没有 Store 实例，也能通过 Ui 读到同一份策略
         com.dsh.mobile.ui.Ui.setAllowScreenshot(v);
     }
+
+    // ------------------------------------------------------------ 通知（见 com.dsh.mobile.notify.Notifier）
+
+    /**
+     * 通知总开关，**默认开**。
+     *
+     * 关掉只是「不发系统通知」，不影响会话本身：审批/提问卡照旧出现在对话页里，
+     * 只在通知中心里安静下来（被系统关掉通知权限时是这个开关的等价位，见 Notifier 的降级）。
+     */
+    public boolean notifyEnabled() { return sp.getBoolean(K_NOTIFY_ENABLED, true); }
+    public void setNotifyEnabled(boolean v) { sp.edit().putBoolean(K_NOTIFY_ENABLED, v).apply(); }
+
+    /** 「仅需处理时提醒」，默认关：开着只推审批/提问，任务完成与进行中都不发。 */
+    public boolean notifyOnlyPending() { return sp.getBoolean(K_NOTIFY_ONLY_PENDING, false); }
+    public void setNotifyOnlyPending(boolean v) { sp.edit().putBoolean(K_NOTIFY_ONLY_PENDING, v).apply(); }
+
+    /** 通知里是否显示会话标题（默认开）；关掉锁屏上就只看到一句「点开查看详情」。 */
+    public boolean notifyShowDetail() { return sp.getBoolean(K_NOTIFY_DETAIL, true); }
+    public void setNotifyShowDetail(boolean v) { sp.edit().putBoolean(K_NOTIFY_DETAIL, v).apply(); }
+
+    /** 后台保持接收（前台服务），默认开：这是「切后台后还收得到通知」的前提。 */
+    public boolean keepAlive() { return sp.getBoolean(K_KEEPALIVE, true); }
+    public void setKeepAlive(boolean v) { sp.edit().putBoolean(K_KEEPALIVE, v).apply(); }
+
+    /** 通知权限是否已经主动申请过（Android 13+ 只问一次，之后走设置页引导）。 */
+    public boolean notifPermAsked() { return sp.getBoolean(K_NOTIF_ASKED, false); }
+    public void setNotifPermAsked(boolean v) { sp.edit().putBoolean(K_NOTIF_ASKED, v).apply(); }
 
     /** 本地留一份反馈记录（最新在前，用 --- 分隔）。 */
     public void addFeedback(String text) {

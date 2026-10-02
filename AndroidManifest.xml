@@ -9,6 +9,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 通知：Android 13+ 是运行时权限，首次进入时申请（见 MainActivity.maybeAskNotificationPermission）。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 后台保持接收的前台服务（KeepAliveService）：
+         FOREGROUND_SERVICE 是基础权限；CONNECTED_DEVICE / SPECIAL_USE 是 Android 14+
+         按服务类型各自要求的权限（类型见下面 <service> 的 foregroundServiceType）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -43,5 +51,18 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme.Translucent" />
+
+        <!-- 后台保持接收：只挂一条低优先级常驻通知，让进程在后台不被挂起（否则收不到
+             会话事件，任务完成/待审批的通知根本发不出来）。见 notify/KeepAliveService.java。
+             connectedDevice 语义最贴，但它有运行时前置条件；specialUse 作为兜底，
+             所以两个类型都声明（运行时会逐级降级地 startForeground）。 -->
+        <service
+            android:name="com.dsh.mobile.notify.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持与用户自有电脑上 DSH 网关的长连接，以便在后台接收会话事件并提醒" />
+        </service>
     </application>
 </manifest>

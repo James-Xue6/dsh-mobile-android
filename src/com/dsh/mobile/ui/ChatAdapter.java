@@ -101,8 +101,8 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 5), 0, Ui.dp(ctx, 5));
         wrap.setGravity(Gravity.END);
 
-        TextView bubble = Ui.text(ctx, it.text, 15.5f, Ui.ON_BRAND, false);
-        bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 14), Ui.dp(ctx, 10));
+        TextView bubble = Ui.text(ctx, it.text, Ui.S_BODY, Ui.ON_BRAND, false);
+        bubble.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 11), Ui.dp(ctx, 15), Ui.dp(ctx, 11));
         bubble.setMaxWidth(maxBubble);
         android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 18), Ui.BRAND_FILL);
         bubble.setBackground(bg);
@@ -146,13 +146,14 @@ public final class ChatAdapter extends BaseAdapter {
 
         TextView bubble = new TextView(ctx);
         bubble.setText(Ui.md(ctx, body));
-        bubble.setTextSize(15.5f);
+        bubble.setTextSize(Ui.S_BODY);
         bubble.setTextColor(Ui.INK);
         bubble.setLineSpacing(Ui.dp(ctx, 4), 1.08f);
         bubble.setIncludeFontPadding(false);
-        bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
+        bubble.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 12), Ui.dp(ctx, 15), Ui.dp(ctx, 12));
         bubble.setMaxWidth(maxBubble);
-        bubble.setBackground(Ui.roundStroke(Ui.dp(ctx, 18), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE));
+        // iOS 助手气泡：浅灰实体（无描边），与左侧对齐；用户气泡才是蓝色
+        bubble.setBackground(Ui.round(Ui.dp(ctx, 18), Ui.CHIP_BG));
         bubble.setTextIsSelectable(true);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -164,7 +165,7 @@ public final class ChatAdapter extends BaseAdapter {
         // 思考过程折叠展示：**完整模式专属**。简洁模式要的是"和 PC 端一致的一句话摘要"，
         // 每个助手气泡后面再挂一条「▸ 思考过程」正是用户报的"显示了一大堆"。
         if (!compact && it.reasoning != null && !it.reasoning.trim().isEmpty()) {
-            TextView r = Ui.text(ctx, "▸ 思考过程", 12.5f, Ui.INK_FAINT, false);
+            TextView r = Ui.text(ctx, "▸ 思考过程", Ui.S_FOOT, Ui.INK_FAINT, false);
             r.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 4), 0, 0);
             r.setTag(it.reasoning);
             r.setOnClickListener(v -> {
@@ -190,15 +191,15 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 0.8f), Ui.LINE_AGENT));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_AGENT));
 
         TextView head = Ui.text(ctx, "👥 " + (it.agentName.isEmpty() ? "专家团回传" : it.agentName),
-                12.5f, Ui.BRAND, true);
+                Ui.S_FOOT, Ui.BRAND, true);
         card.addView(head);
 
         String body = it.text == null ? "" : it.text;
         if (body.trim().isEmpty()) body = "(空回传)";
-        TextView bubble = Ui.text(ctx, body, 14.5f, Ui.INK, false);
+        TextView bubble = Ui.text(ctx, body, Ui.S_SUB, Ui.INK, false);
         bubble.setPadding(0, Ui.dp(ctx, 5), 0, 0);
         bubble.setMaxWidth(maxBubble);
         bubble.setTextIsSelectable(true);
@@ -222,7 +223,7 @@ public final class ChatAdapter extends BaseAdapter {
             TextView dot = Ui.text(ctx, "●", 10f, it.toolError ? Ui.ERR : Ui.WARN, false);
             one.addView(dot);
             TextView line = Ui.text(ctx, "正在执行：" + (it.toolName.isEmpty() ? "工具" : it.toolName),
-                    13f, Ui.INK_SUB, false);
+                    Ui.S_FOOT, Ui.INK_SUB, false);
             line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
             one.addView(line);
             return one;
@@ -232,7 +233,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 11), Ui.dp(ctx, 8), Ui.dp(ctx, 11), Ui.dp(ctx, 8));
-        card.setBackground(Ui.round(Ui.dp(ctx, 13), Ui.BRAND_SOFT));
+        card.setBackground(Ui.round(Ui.dp(ctx, 14), Ui.BRAND_SOFT));
         card.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -243,15 +244,15 @@ public final class ChatAdapter extends BaseAdapter {
         TextView dot = Ui.text(ctx, "●", 10f, dotColor, false);
         head.addView(dot);
 
-        TextView name = Ui.text(ctx, it.toolName.isEmpty() ? "工具" : it.toolName, 13f, Ui.INK, true);
+        TextView name = Ui.text(ctx, it.toolName.isEmpty() ? "工具" : it.toolName, Ui.S_FOOT, Ui.INK, true);
         name.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 8), 0);
         head.addView(name);
 
-        head.addView(Ui.text(ctx, status, 12f, Ui.INK_SUB, false));
+        head.addView(Ui.text(ctx, status, Ui.S_CAP1, Ui.INK_SUB, false));
         card.addView(head);
 
         if (it.toolPreview != null && !it.toolPreview.trim().isEmpty()) {
-            TextView p = Ui.text(ctx, it.toolPreview, 12f, Ui.INK_SUB, false);
+            TextView p = Ui.text(ctx, it.toolPreview, Ui.S_CAP1, Ui.INK_SUB, false);
             p.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 3), 0, 0);
             p.setMaxLines(4);
             p.setMaxWidth(maxBubble);
@@ -282,7 +283,7 @@ public final class ChatAdapter extends BaseAdapter {
                 11.5f, color, false);
         wrap.addView(dot);
 
-        TextView line = Ui.text(ctx, it.text == null ? "" : it.text, 12.5f, color, false);
+        TextView line = Ui.text(ctx, it.text == null ? "" : it.text, Ui.S_FOOT, color, false);
         line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
         line.setTextIsSelectable(true);
         wrap.addView(line);
@@ -296,7 +297,7 @@ public final class ChatAdapter extends BaseAdapter {
         if (s == null || s.trim().isEmpty()) s = runningHint;
         LinearLayout wrap = Ui.col(ctx);
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
-        TextView t = Ui.text(ctx, s == null ? "" : s, 12.5f, Ui.INK_FAINT, false);
+        TextView t = Ui.text(ctx, s == null ? "" : s, Ui.S_CAP1, Ui.INK_FAINT, false);
         t.setGravity(Gravity.CENTER);
         t.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -311,26 +312,26 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_APPROVAL));
+        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_APPROVAL));
         card.setLayoutParams(Ui.fill());
 
-        TextView title = Ui.text(ctx, "需要你的批准", 14.5f, Ui.INK, true);
+        TextView title = Ui.text(ctx, "需要你的批准", Ui.S_HEAD, Ui.INK, true);
         card.addView(title);
 
-        TextView tool = Ui.text(ctx, "工具：" + (it.toolName.isEmpty() ? "未知" : it.toolName), 13f, Ui.BRAND, false);
+        TextView tool = Ui.text(ctx, "工具：" + (it.toolName.isEmpty() ? "未知" : it.toolName), Ui.S_FOOT, Ui.BRAND, false);
         tool.setPadding(0, Ui.dp(ctx, 5), 0, 0);
         tool.setTypeface(android.graphics.Typeface.MONOSPACE);
         card.addView(tool);
 
         if (it.reason != null && !it.reason.trim().isEmpty()) {
-            TextView r = Ui.text(ctx, it.reason, 13f, Ui.INK_SUB, false);
+            TextView r = Ui.text(ctx, it.reason, Ui.S_FOOT, Ui.INK_SUB, false);
             r.setPadding(0, Ui.dp(ctx, 5), 0, 0);
             card.addView(r);
         }
 
         if (it.sendError != null && !it.sendError.isEmpty()) {
-            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, 12.5f, Ui.ERR, false);
+            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, Ui.S_FOOT, Ui.ERR, false);
             warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
             card.addView(warn);
         }
@@ -341,13 +342,13 @@ public final class ChatAdapter extends BaseAdapter {
             else if ("rejected".equals(it.resolvedOutcome)) label = "✕ 已拒绝";
             else if ("cancelled".equals(it.resolvedOutcome)) label = "已取消";
             else label = "已由其他端处理";
-            TextView done = Ui.text(ctx, label, 13f, Ui.INK_SUB, true);
+            TextView done = Ui.text(ctx, label, Ui.S_FOOT, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 9), 0, 0);
             card.addView(done);
         } else if (it.pendingConfirm) {
             // 已发出、还没等到电脑端回执：不显示 ✓（回执没到就可能是进了黑洞），
             // 也不显示按钮（避免重复提交）（评审 P0-3）。
-            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", 13f, Ui.INK_SUB, true);
+            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", Ui.S_FOOT, Ui.INK_SUB, true);
             waiting.setPadding(0, Ui.dp(ctx, 9), 0, 0);
             card.addView(waiting);
         } else {
@@ -364,7 +365,7 @@ public final class ChatAdapter extends BaseAdapter {
             actions.addView(allow);
 
             TextView deny = actionButton("拒绝", Ui.SURFACE, Ui.ERR);
-            deny.setBackground(Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_DANGER));
+            deny.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_DANGER));
             deny.setOnClickListener(v -> host.onApprove(it, "rejected"));
             deny.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -383,11 +384,11 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_QUESTION));
+        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_QUESTION));
         card.setLayoutParams(Ui.fill());
 
-        card.addView(Ui.text(ctx, "Agent 在等你的回答", 14.5f, Ui.INK, true));
+        card.addView(Ui.text(ctx, "Agent 在等你的回答", Ui.S_HEAD, Ui.INK, true));
 
         final JSONArray qs = it.questions == null ? new JSONArray() : it.questions;
         List<String> ids = new ArrayList<>();
@@ -402,17 +403,17 @@ public final class ChatAdapter extends BaseAdapter {
 
             String header = q.optString("header", "");
             if (!header.isEmpty()) {
-                TextView h = Ui.text(ctx, header, 12.5f, Ui.INK_FAINT, false);
+                TextView h = Ui.text(ctx, header, Ui.S_FOOT, Ui.INK_FAINT, false);
                 h.setPadding(0, Ui.dp(ctx, 8), 0, 0);
                 card.addView(h);
             }
-            TextView qt = Ui.text(ctx, q.optString("question", ""), 14.5f, Ui.INK, true);
+            TextView qt = Ui.text(ctx, q.optString("question", ""), Ui.S_HEAD, Ui.INK, true);
             qt.setPadding(0, Ui.dp(ctx, 4), 0, 0);
             card.addView(qt);
 
             String detail = q.optString("detail", "");
             if (!detail.isEmpty()) {
-                TextView d = Ui.text(ctx, detail, 12.5f, Ui.INK_SUB, false);
+                TextView d = Ui.text(ctx, detail, Ui.S_FOOT, Ui.INK_SUB, false);
                 d.setPadding(0, Ui.dp(ctx, 2), 0, 0);
                 card.addView(d);
             }
@@ -458,7 +459,7 @@ public final class ChatAdapter extends BaseAdapter {
         }
 
         if (it.sendError != null && !it.sendError.isEmpty()) {
-            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, 12.5f, Ui.ERR, false);
+            TextView warn = Ui.text(ctx, "⚠ " + it.sendError, Ui.S_FOOT, Ui.ERR, false);
             warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
             card.addView(warn);
         }
@@ -467,12 +468,12 @@ public final class ChatAdapter extends BaseAdapter {
             String label;
             if ("answered".equals(it.resolvedOutcome)) label = "✓ 已回答";
             else label = "已取消 / 已由其他端处理";
-            TextView done = Ui.text(ctx, label, 13f, Ui.INK_SUB, true);
+            TextView done = Ui.text(ctx, label, Ui.S_FOOT, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 10), 0, 0);
             card.addView(done);
         } else if (it.pendingConfirm) {
             // 与审批卡一致：回执没到就不显示 ✓、也不显示按钮（评审 P0-3）。
-            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", 13f, Ui.INK_SUB, true);
+            TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", Ui.S_FOOT, Ui.INK_SUB, true);
             waiting.setPadding(0, Ui.dp(ctx, 10), 0, 0);
             card.addView(waiting);
         } else {
@@ -532,7 +533,7 @@ public final class ChatAdapter extends BaseAdapter {
             actions.addView(submit);
 
             TextView skip = actionButton("跳过", Ui.SURFACE, Ui.INK_SUB);
-            skip.setBackground(Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE));
+            skip.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE));
             skip.setOnClickListener(v -> host.onQuestionCancel(it));
             skip.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -547,20 +548,22 @@ public final class ChatAdapter extends BaseAdapter {
     private View optionRow(ChatItem it, String qid, String label, String desc,
                            boolean multi, LinearLayout parent) {
         LinearLayout row = Ui.row(ctx);
-        row.setPadding(Ui.dp(ctx, 11), Ui.dp(ctx, 9), Ui.dp(ctx, 11), Ui.dp(ctx, 9));
+        row.setMinimumHeight(Ui.dp(ctx, 50));
+        row.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 11), Ui.dp(ctx, 13), Ui.dp(ctx, 11));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rlp.topMargin = Ui.dp(ctx, 5);
+        rlp.topMargin = Ui.dp(ctx, 6);
         row.setLayoutParams(rlp);
+        Ui.tap(row, 0.97f);   // 选项行按下反馈（背景由 paint() 管，这里只压暗，不抢背景）
 
-        TextView mark = Ui.text(ctx, "○", 15f, Ui.INK_FAINT, false);
+        TextView mark = Ui.text(ctx, "○", 16f, Ui.INK_FAINT, false);
         row.addView(mark);
 
         LinearLayout texts = Ui.col(ctx);
         texts.setPadding(Ui.dp(ctx, 9), 0, 0, 0);
-        texts.addView(Ui.text(ctx, label, 14f, Ui.INK, false));
+        texts.addView(Ui.text(ctx, label, Ui.S_SUB, Ui.INK, false));
         if (desc != null && !desc.isEmpty()) {
-            texts.addView(Ui.text(ctx, desc, 12f, Ui.INK_SUB, false));
+            texts.addView(Ui.text(ctx, desc, Ui.S_FOOT, Ui.INK_SUB, false));
         }
         row.addView(texts);
 
@@ -573,8 +576,8 @@ public final class ChatAdapter extends BaseAdapter {
             boolean on = sel.contains(label);
             mark.setText(on ? (multi ? "☑" : "◉") : (multi ? "☐" : "○"));
             mark.setTextColor(on ? Ui.BRAND : Ui.INK_FAINT);
-            row.setBackground(Ui.roundStroke(Ui.dp(ctx, 12),
-                    on ? Ui.BRAND_SOFT : Ui.SURFACE,
+            row.setBackground(Ui.roundStroke(Ui.dp(ctx, 11),
+                    on ? Ui.BRAND_SOFT : Ui.FIELD_BG,
                     Ui.dp(ctx, 1.0f), on ? Ui.LINE_SELECTED : Ui.LINE));
         };
         paint.run();
@@ -605,14 +608,14 @@ public final class ChatAdapter extends BaseAdapter {
         wrap.setPadding(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6));
 
         LinearLayout card = Ui.col(ctx);
-        card.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
-        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE_OK));
+        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_OK));
         card.setLayoutParams(Ui.fill());
-        card.addView(Ui.text(ctx, "交付物", 14.5f, Ui.INK, true));
+        card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));
 
         JSONArray fs = it.files;
         if (fs == null || fs.length() == 0) {
-            card.addView(Ui.text(ctx, "(无文件)", 12.5f, Ui.INK_FAINT, false));
+            card.addView(Ui.text(ctx, "(无文件)", Ui.S_FOOT, Ui.INK_FAINT, false));
         } else {
             for (int i = 0; i < fs.length(); i++) {
                 JSONObject f = fs.optJSONObject(i);
@@ -625,8 +628,8 @@ public final class ChatAdapter extends BaseAdapter {
 
                 LinearLayout row = Ui.col(ctx);
                 row.setPadding(0, Ui.dp(ctx, 8), 0, 0);
-                row.addView(Ui.text(ctx, name.isEmpty() ? "(未命名)" : name, 13.5f, Ui.BRAND, true));
-                if (!desc.isEmpty()) row.addView(Ui.text(ctx, desc, 12f, Ui.INK_SUB, false));
+                row.addView(Ui.text(ctx, name.isEmpty() ? "(未命名)" : name, Ui.S_SUB, Ui.BRAND, true));
+                if (!desc.isEmpty()) row.addView(Ui.text(ctx, desc, Ui.S_FOOT, Ui.INK_SUB, false));
                 if (!path.isEmpty()) {
                     String ds = it.downloadState;
                     TextView p = Ui.text(ctx,
@@ -657,10 +660,11 @@ public final class ChatAdapter extends BaseAdapter {
     }
 
     private TextView actionButton(String label, int fill, int fg) {
-        TextView t = Ui.text(ctx, label, 14f, fg, true);
+        TextView t = Ui.text(ctx, label, Ui.S_CALLOUT, fg, true);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(0, Ui.dp(ctx, 11), 0, Ui.dp(ctx, 11));
-        t.setBackground(Ui.round(Ui.dp(ctx, 999), fill));
+        t.setPadding(0, Ui.dp(ctx, 13), 0, Ui.dp(ctx, 13));
+        t.setBackground(Ui.round(Ui.dp(ctx, 12), fill));
+        Ui.tap(t);
         return t;
     }
 }

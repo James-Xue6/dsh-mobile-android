@@ -59,41 +59,43 @@ public final class SessionListView extends FrameLayout {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         addView(root);
 
-        // ---- 头部
+        // ---- 头部（iOS 大标题）
         header = Ui.col(ctx);
         header.setBackgroundColor(Ui.BG);
-        header.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 6));
+        header.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 6));
 
         LinearLayout top = Ui.row(ctx);
-        TextView t = Ui.text(ctx, "对话", 27f, Ui.INK, true);
+        TextView t = Ui.text(ctx, "对话", Ui.S_LARGE, Ui.INK, true);
         headerTitle = t;
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         t.setLayoutParams(tlp);
         top.addView(t);
 
-        TextView refresh = Ui.circleButton(ctx, "↻", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        TextView refresh = Ui.circleButton(ctx, "↻", Ui.CHIP_BG, Ui.INK_SUB);
         refreshBtn = refresh;
-        refresh.setTextSize(19f);
+        refresh.setTextSize(18f);
+        refresh.setContentDescription("刷新会话");
         refresh.setOnClickListener(v -> host.onRefresh());
         top.addView(refresh);
 
         // 「我的设备」入口：启动页是设备页，这里给对话页一个随时回去看在线状态的入口
-        TextView devices = Ui.circleButton(ctx, "🖥", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        TextView devices = Ui.circleButton(ctx, "🖥", Ui.CHIP_BG, Ui.INK_SUB);
         devicesBtn = devices;
-        devices.setTextSize(17f);
+        devices.setTextSize(16f);
         devices.setContentDescription("我的设备");
         devices.setOnClickListener(v -> host.onDevices());
         top.addView(devices);
 
-        TextView gear = Ui.circleButton(ctx, "⚙", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        TextView gear = Ui.circleButton(ctx, "⚙", Ui.CHIP_BG, Ui.INK_SUB);
         gearBtn = gear;
-        gear.setTextSize(19f);
+        gear.setTextSize(18f);
+        gear.setContentDescription("连接设置");
         gear.setOnClickListener(v -> host.onSettings());
         top.addView(gear);
         header.addView(top);
 
-        statusLine = Ui.text(ctx, "", 12.5f, Ui.INK_FAINT, false);
+        statusLine = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_FAINT, false);
         statusLine.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 2), 0, Ui.dp(ctx, 8));
         header.addView(statusLine);
         root.addView(header, Ui.fill());
@@ -106,7 +108,8 @@ public final class SessionListView extends FrameLayout {
         list.setDividerHeight(0);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         list.setVerticalScrollBarEnabled(false);
-        list.setPadding(Ui.dp(ctx, 12), 0, Ui.dp(ctx, 12), Ui.dp(ctx, 90));
+        // iOS 分组列表：左右外边距 16dp（组内条目自己画圆角与分隔线）
+        list.setPadding(Ui.dp(ctx, 16), 0, Ui.dp(ctx, 16), Ui.dp(ctx, 90));
         list.setClipToPadding(false);
         LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -114,7 +117,7 @@ public final class SessionListView extends FrameLayout {
         root.addView(list);
 
         // ---- 空态：一个会话都没有时给一句话，别让抽屉看起来像坏了
-        emptyView = Ui.text(ctx, "还没有对话\n点右下角 ＋ 给 Agent 派个任务", 14f, Ui.INK_FAINT, false);
+        emptyView = Ui.text(ctx, "还没有对话\n点右下角 ＋ 给 Agent 派个任务", Ui.S_SUB, Ui.INK_FAINT, false);
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setLineSpacing(Ui.dp(ctx, 6), 1.1f);
         FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
@@ -208,25 +211,44 @@ public final class SessionListView extends FrameLayout {
         public View getView(int position, View convertView, ViewGroup parent) {
             Object row = data.get(position);
             if (row instanceof String) {
+                // 工作区分组标题：iOS 组标题的规格（13sp 灰字 + 一点字间距）
                 LinearLayout head = Ui.col(ctx);
-                head.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 16), 0, Ui.dp(ctx, 2));
-                head.addView(Ui.text(ctx, (String) row, 12.5f, Ui.INK_SUB, true));
+                head.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 18), 0, Ui.dp(ctx, 6));
+                TextView gt = Ui.text(ctx, (String) row, Ui.S_FOOT, Ui.INK_SUB, false);
+                gt.setLetterSpacing(0.06f);
+                head.addView(gt);
                 return head;
             }
             SessionInfo s = (SessionInfo) row;
-            // 当前正在看的那个会话：实心淡蓝底 + 品牌色描边，在抽屉里一眼认出来
+            // 当前正在看的那个会话：淡蓝底 + 品牌色字，在抽屉里一眼认出来
             boolean current = s.id != null && !s.id.isEmpty() && s.id.equals(currentId);
 
-            LinearLayout outer = Ui.col(ctx);
-            // 子会话缩进 + 淡底：一眼看出它挂在上面那个父会话下面，而不是一条独立对话
-            outer.setPadding(Ui.dp(ctx, 22) * s.childDepth, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4));
+            // 整组共用一张卡：只有组内第一行圆上角、最后一行圆下角（iOS 内嵌列表）
+            boolean top = cardTop(position);
+            boolean bottom = cardBottom(position);
+            int fill = current ? Ui.BRAND_SOFT : Ui.SURFACE;
+            android.graphics.drawable.GradientDrawable bg = Ui.rowBg(ctx, fill, top, bottom);
 
+            int depth = Math.max(0, s.childDepth);
             LinearLayout card = Ui.row(ctx);
-            card.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 13), Ui.dp(ctx, 13), Ui.dp(ctx, 13));
-            card.setBackground(Ui.roundStroke(Ui.dp(ctx, 16),
-                    (current || s.childDepth > 0) ? Ui.BRAND_SOFT : Ui.SURFACE,
-                    Ui.dp(ctx, current ? 1.6f : 0.8f), current ? Ui.BRAND : Ui.LINE));
-            card.setElevation(Ui.dp(ctx, current ? 1.5f : 0.5f));
+            card.setMinimumHeight(Ui.dp(ctx, 56));
+            card.setPadding(Ui.dp(ctx, 16) + Ui.dp(ctx, 18) * depth,
+                    Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            card.setLayoutParams(rlp);
+            Ui.tapRow(card, bg, Ui.PRESS);
+
+            // 子会话左侧画一条竖向导引线：一眼看出它挂在上面那个父会话下面
+            if (depth > 0) {
+                View guide = new View(ctx);
+                guide.setBackgroundColor(Ui.LINE);
+                LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                        Math.max(1, Ui.dp(ctx, 1.5f)), Ui.dp(ctx, 34));
+                glp.rightMargin = Ui.dp(ctx, 10);
+                guide.setLayoutParams(glp);
+                card.addView(guide);
+            }
 
             LinearLayout texts = Ui.col(ctx);
             LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
@@ -235,7 +257,7 @@ public final class SessionListView extends FrameLayout {
 
             String shownTitle = s.displayForList();
             if (s.childDepth > 0) shownTitle = "└ " + shownTitle;
-            TextView title = Ui.text(ctx, shownTitle, 15.5f, current ? Ui.BRAND_DEEP : Ui.INK, true);
+            TextView title = Ui.text(ctx, shownTitle, Ui.S_BODY, current ? Ui.BRAND_DEEP : Ui.INK, current);
             title.setSingleLine(true);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             texts.addView(title);
@@ -255,7 +277,7 @@ public final class SessionListView extends FrameLayout {
                 sub.append(s.agentPreset);
             }
             if (sub.length() > 0) {
-                TextView st = Ui.text(ctx, sub.toString(), 12f, Ui.INK_FAINT, false);
+                TextView st = Ui.text(ctx, sub.toString(), Ui.S_FOOT, Ui.INK_FAINT, false);
                 st.setSingleLine(true);
                 st.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 st.setPadding(0, Ui.dp(ctx, 3), 0, 0);
@@ -266,7 +288,7 @@ public final class SessionListView extends FrameLayout {
             // 折叠开关：父会话名下挂着子智能体/专家团会话时给一个可点的入口（默认折叠）
             if (s.childCount > 0) {
                 TextView tog = Ui.text(ctx, (s.expanded ? "▾ " : "▸ ") + s.childCount + " 子会话",
-                        11.5f, Ui.BRAND, true);
+                        Ui.S_CAP1, Ui.BRAND, true);
                 tog.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
                 tog.setBackground(Ui.pill(Ui.BRAND_SOFT));
                 LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
@@ -279,7 +301,7 @@ public final class SessionListView extends FrameLayout {
 
             if (s.pending > 0) {
                 TextView badge = Ui.text(ctx, s.pending == 1 ? "❓ 待回答" : "⚠ 待批准",
-                        11.5f, s.pending == 1 ? Ui.ON_BRAND : Ui.ON_WARN, true);
+                        Ui.S_CAP1, s.pending == 1 ? Ui.ON_BRAND : Ui.ON_WARN, true);
                 badge.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
                 badge.setBackground(Ui.pill(s.pending == 1 ? Ui.BRAND_FILL : Ui.WARN));
                 LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
@@ -288,13 +310,11 @@ public final class SessionListView extends FrameLayout {
                 badge.setLayoutParams(blp);
                 card.addView(badge);
             } else if (s.running) {
-                TextView dot = Ui.text(ctx, "● 运行中", 11.5f, Ui.WARN, false);
+                TextView dot = Ui.text(ctx, "● 运行中", Ui.S_CAP1, Ui.WARN, false);
                 dot.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 4), 0);
                 card.addView(dot);
             } else {
-                TextView chev = Ui.text(ctx, "›", 20f, Ui.INK_FAINT, false);
-                chev.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 2), 0);
-                card.addView(chev);
+                card.addView(Ui.chevron(ctx));
             }
 
             card.setOnClickListener(v -> host.onOpenSession(s));
@@ -309,8 +329,26 @@ public final class SessionListView extends FrameLayout {
                 return true;
             });
 
+            LinearLayout outer = Ui.col(ctx);
+            outer.setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                    android.widget.AbsListView.LayoutParams.MATCH_PARENT,
+                    android.widget.AbsListView.LayoutParams.WRAP_CONTENT));
             outer.addView(card);
+            // 组内细分隔线：从文字左缘开始（iOS 的 inset separator），最后一行不画
+            if (!bottom) outer.addView(Ui.insetDivider(ctx, 16));
             return outer;
+        }
+
+        /** 这一项是不是所在分组卡的**第一行**（上一项是工作区标题，或就是列表开头）。 */
+        private boolean cardTop(int pos) {
+            if (pos <= 0) return true;
+            return data.get(pos - 1) instanceof String;
+        }
+
+        /** 这一项是不是所在分组卡的**最后一行**（下一项是工作区标题，或就到列表末尾）。 */
+        private boolean cardBottom(int pos) {
+            if (pos >= data.size() - 1) return true;
+            return data.get(pos + 1) instanceof String;
         }
     }
 }

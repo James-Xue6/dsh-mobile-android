@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  XML 侧只有系统件需要的那几个色值（窗口底、系统 AlertDialog 的浮动底、accent、图标底）。
+  界面本身的颜色**全部**在 Ui.java 的双色板里（Ui.applyTheme），这里改不了深浅。
+  数值与 Ui.java 的浅色档保持一致（iOS 语义色）。
+-->
 <resources>
-    <color name="bg">#FFF4F6FB</color>
+    <color name="bg">#FFF2F2F7</color>
     <color name="surface">#FFFFFFFF</color>
-    <color name="brand">#FF4D6BFE</color>
-    <color name="ink">#FF17181C</color>
-    <color name="launcher_bg">#FF4D6BFE</color>
+    <color name="brand">#FF0A84FF</color>
+    <color name="ink">#FF000000</color>
+    <color name="ink_secondary">#FF8E8E93</color>
+    <color name="dialog_bg_dark">#FF1C1C1E</color>
+    <color name="ink_dark">#FFFFFFFF</color>
+    <color name="ink_secondary_dark">#FF98989F</color>
+    <color name="launcher_bg">#FF0A84FF</color>
 </resources>

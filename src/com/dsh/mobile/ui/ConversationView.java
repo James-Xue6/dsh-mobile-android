@@ -117,16 +117,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
 
-        // ---- 顶部栏
+        // ---- 顶部栏（iOS 导航栏：44dp、细箭头返回、标题 17sp 粗体、底部一条发丝线）
         LinearLayout bar = Ui.row(ctx);
         barRow = bar;
         bar.setBackgroundColor(Ui.SURFACE);
-        bar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8));
+        bar.setMinimumHeight(Ui.dp(ctx, 44));
+        bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 5), Ui.dp(ctx, 8), Ui.dp(ctx, 5));
 
         // 左上角箭头：保留箭头样式，但行为改成「打开左侧任务列表」（豆包式两级导航）
-        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.INK);
+        TextView back = Ui.circleButton(ctx, "‹", android.graphics.Color.TRANSPARENT, Ui.BRAND);
         backBtn = back;
-        back.setTextSize(26f);
+        back.setTextSize(28f);
+        back.setContentDescription("任务列表");
         back.setOnClickListener(v -> host.onOpenTasks());
         bar.addView(back);
 
@@ -134,33 +136,39 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         titles.setLayoutParams(tlp);
-        title = Ui.text(ctx, "对话", 16.5f, Ui.INK, true);
+        title = Ui.text(ctx, "对话", Ui.S_HEAD, Ui.INK, true);
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        subtitle = Ui.text(ctx, "", 11.5f, Ui.INK_FAINT, false);
+        subtitle = Ui.text(ctx, "", Ui.S_CAP1, Ui.INK_FAINT, false);
         subtitle.setSingleLine(true);
         titles.addView(title);
         titles.addView(subtitle);
         bar.addView(titles);
 
-        TextView menu = Ui.circleButton(ctx, "⋮", android.graphics.Color.TRANSPARENT, Ui.INK_SUB);
+        TextView menu = Ui.circleButton(ctx, "⋮", android.graphics.Color.TRANSPARENT, Ui.BRAND);
         menuBtn = menu;
         menu.setTextSize(22f);
+        menu.setContentDescription("更多");
         menu.setOnClickListener(v -> host.onMenu());
         bar.addView(menu);
         addView(bar, Ui.fill());
+        View barLine = new View(ctx);
+        barLine.setBackgroundColor(Ui.SEP);
+        barLine.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
+        addView(barLine, Ui.fill());
 
-        // ---- 状态横幅
-        banner = Ui.text(ctx, "", 12f, Ui.BANNER_WARN_FG, false);
+        // ---- 状态横幅（可点时整条可点）
+        banner = Ui.text(ctx, "", Ui.S_FOOT, Ui.BANNER_WARN_FG, false);
         banner.setGravity(Gravity.CENTER);
-        banner.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
+        banner.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
         banner.setBackgroundColor(Ui.BANNER_WARN_BG);
         banner.setVisibility(GONE);
         addView(banner, Ui.fill());
 
         // ---- 目标 / 任务提要（有目标或任务时才显示）
-        planView = Ui.text(ctx, "", 12f, Ui.INK_SUB, false);
-        planView.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 8), Ui.dp(ctx, 14), Ui.dp(ctx, 8));
+        planView = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
+        planView.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
         planView.setBackgroundColor(Ui.PLAN_BG);
         planView.setMaxLines(8);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -168,22 +176,22 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         addView(planView, Ui.fill());
 
         // ---- 分页状态行：正在加载更早 / 加载失败可重试（点一下 = 重新请求）
-        moreStatus = Ui.text(ctx, "", 12f, Ui.INK_SUB, false);
+        moreStatus = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
         moreStatus.setGravity(Gravity.CENTER);
-        moreStatus.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
+        moreStatus.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
         moreStatus.setBackgroundColor(Ui.PLAN_BG);
         moreStatus.setVisibility(GONE);
         moreStatus.setOnClickListener(v -> host.onLoadMore());
         addView(moreStatus, Ui.fill());
 
-        // ---- 消息列表
+        // ---- 消息列表（iOS 列表左右留白 16dp）
         adapter = new ChatAdapter(ctx, this);
         list = new ListView(ctx);
         list.setAdapter(adapter);
         list.setDivider(null);
         list.setDividerHeight(0);
         list.setCacheColorHint(0);
-        list.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
+        list.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 10), Ui.dp(ctx, 16), Ui.dp(ctx, 10));
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
@@ -233,7 +241,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
         toBottom = new TextView(ctx);
         toBottom.setText("↓");
-        toBottom.setTextSize(19f);
+        toBottom.setTextSize(20f);
         toBottom.setTextColor(Ui.ON_BRAND);
         toBottom.setGravity(Gravity.CENTER);
         toBottom.setBackground(Ui.pill(Ui.BRAND_FILL));
@@ -261,8 +269,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         preInputRow = preInput;
         preInput.setBackgroundColor(Ui.SURFACE);
 
-        subEntry = Ui.text(ctx, "", 12.5f, Ui.BRAND, true);
-        subEntry.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 8), Ui.dp(ctx, 16), Ui.dp(ctx, 8));
+        subEntry = Ui.text(ctx, "", Ui.S_FOOT, Ui.BRAND, true);
+        subEntry.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
         subEntry.setBackground(Ui.pill(Ui.BRAND_SOFT));
         subEntry.setGravity(Gravity.CENTER);
         subEntry.setClickable(true);
@@ -276,8 +284,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         subEntry.setVisibility(GONE);
         preInput.addView(subEntry);
 
-        readOnlyNote = Ui.text(ctx, "", 11.5f, Ui.INK_SUB, false);
-        readOnlyNote.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 5), Ui.dp(ctx, 14), Ui.dp(ctx, 3));
+        readOnlyNote = Ui.text(ctx, "", Ui.S_CAP1, Ui.INK_SUB, false);
+        readOnlyNote.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 6), Ui.dp(ctx, 16), Ui.dp(ctx, 4));
         readOnlyNote.setVisibility(GONE);
         preInput.addView(readOnlyNote);
 
@@ -285,18 +293,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 子 View 以为自己是显示状态"这种自查不出来的形态）。
         addView(preInput, Ui.fill());
 
-        // ---- 输入条
+        // ---- 输入条（iOS iMessage 制式：灰底胶囊输入框 + 圆形发送键）
         LinearLayout inputBar = Ui.row(ctx);
         inputBar.setBackgroundColor(Ui.SURFACE);
-        inputBar.setPadding(Ui.dp(ctx, 10), Ui.dp(ctx, 8), Ui.dp(ctx, 10), Ui.dp(ctx, 8));
+        inputBar.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
 
         input = new EditText(ctx);
         input.setHint("给 Agent 派个任务…");
-        input.setTextSize(15f);
+        input.setTextSize(Ui.S_BODY);
         input.setHintTextColor(Ui.INK_FAINT);
         input.setTextColor(Ui.INK);
-        input.setBackground(Ui.roundStroke(Ui.dp(ctx, 20), Ui.FIELD_ALT_BG, Ui.dp(ctx, 0.8f), Ui.LINE));
-        input.setPadding(Ui.dp(ctx, 15), Ui.dp(ctx, 10), Ui.dp(ctx, 15), Ui.dp(ctx, 10));
+        input.setBackground(Ui.round(Ui.dp(ctx, 19), Ui.FIELD_ALT_BG));
+        input.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 11), Ui.dp(ctx, 16), Ui.dp(ctx, 11));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_ENTER_ACTION);
@@ -307,7 +315,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         input.setLayoutParams(ilp);
 
         pick = Ui.circleButton(ctx, "＋", Ui.CHIP_BG, Ui.INK_SUB);
-        pick.setTextSize(19f);
+        pick.setTextSize(18f);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(Ui.dp(ctx, 38), Ui.dp(ctx, 38));
         plp.rightMargin = Ui.dp(ctx, 6);
         pick.setLayoutParams(plp);
@@ -316,7 +324,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         inputBar.addView(input);
 
         action = Ui.circleButton(ctx, "↑", Ui.BRAND_FILL, Ui.ON_BRAND);
-        action.setTextSize(20f);
+        action.setTextSize(19f);
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(Ui.dp(ctx, 42), Ui.dp(ctx, 42));
         alp.leftMargin = Ui.dp(ctx, 8);
         action.setLayoutParams(alp);
@@ -470,7 +478,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 所以运行状态一变必须重算一次；完整模式只是多一个提示，重算也无害。
         applyFilter();
         action.setText(value ? "■" : "↑");
-        action.setTextSize(value ? 16f : 20f);
+        action.setTextSize(value ? 15f : 19f);
         action.setBackground(Ui.pill(value ? Ui.STOP_BG : Ui.BRAND_FILL));
         action.setTextColor(value ? Ui.INK : Ui.ON_BRAND);
         // 只读子会话里停止按钮同样禁用（宿主也只会用 subagents.interruptByParent 停子会话）
@@ -661,6 +669,35 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     }
 
     /**
+     * 深链：把消息列表滚到 key 对应的那一张卡（点「有操作等你批准 / 有提问等你回答」通知
+     * 进来后的落点——必须让人一进来就看到那张待选的卡）。
+     *
+     * @return true = 这张卡此刻就在显示的列表里，已排定滚动；
+     *         false = 还没有这张卡（会话刚切过去、网关重放的卡还没到），调用方稍后重试。
+     *
+     * 只认 key（审批卡是 approval:xx、提问卡是 question:xx），与 MainActivity 建档用的是
+     * 同一把键，所以不依赖"用户点的是第几条"这种会随重放变化的序号。
+     */
+    public boolean scrollToKey(String key) {
+        if (key == null || key.isEmpty()) return false;
+        java.util.List<ChatItem> shown = adapter.items();
+        if (shown == null) return false;
+        for (int i = 0; i < shown.size(); i++) {
+            ChatItem it = shown.get(i);
+            if (it == null || it.key == null || !key.equals(it.key)) continue;
+            final int pos = i;
+            // 这是"去看某一条"，不是"跟到最后"：显式退出贴底态，
+            // 否则流式刷新（refresh 里的 atBottom 分支）会立刻把列表拽回底部。
+            atBottom = false;
+            list.post(() -> {
+                try { list.setSelection(pos); } catch (Throwable ignored) { }
+            });
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * 系统窗口内边距变化（典型场景：输入法弹起/收起，MainActivity 的
      * OnApplyWindowInsetsListener 会把键盘高度加到根容器底部）。
      *
@@ -713,7 +750,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (input != null) {
             input.setTextColor(Ui.INK);
             input.setHintTextColor(Ui.INK_FAINT);
-            input.setBackground(Ui.roundStroke(Ui.dp(ctx, 20), Ui.FIELD_ALT_BG, Ui.dp(ctx, 0.8f), Ui.LINE));
+            input.setBackground(Ui.round(Ui.dp(ctx, 19), Ui.FIELD_ALT_BG));
         }
         if (pick != null) {
             pick.setTextColor(Ui.INK_SUB);

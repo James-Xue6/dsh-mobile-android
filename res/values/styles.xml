@@ -18,6 +18,8 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
         <item name="android:textColorPrimary">@color/ink</item>
+        <!-- 系统选择器 / 下拉的强调色也走 iOS 系统蓝 -->
+        <item name="android:colorControlHighlight">#330A84FF</item>
     </style>
 
     <style name="AppTheme.Translucent" parent="@android:style/Theme.Material.NoActionBar">
@@ -32,18 +34,28 @@
       而 AppTheme 是 Light 系 —— 深色模式下会弹出一张刺眼的白底框，和界面完全脱节。
       所以显式给它两套，由 Ui.dialog(ctx) 按当前主题挑一套。
       只用框架自带的 Theme.Material.*.Dialog.Alert，不引入任何新依赖。
+
+      iOS 化：圆角 24dp（dialogCornerRadius / API 28+，旧系统忽略该属性）、
+      浮动底走 iOS 的卡片色（浅 #FFFFFF / 深 #1C1C1E，靠 colorBackgroundFloating 换掉
+      Material 的 #FFFFFF/#424242，形状与内衬由框架原样保留）、按钮强调色 = 系统蓝。
     -->
     <style name="DshDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:colorAccent">@color/brand</item>
+        <item name="android:colorBackgroundFloating">@color/surface</item>
+        <item name="android:dialogCornerRadius">24dp</item>
         <item name="android:textColorPrimary">@color/ink</item>
-        <item name="android:textColorSecondary">#FF6B7280</item>
+        <item name="android:textColorSecondary">@color/ink_secondary</item>
+        <item name="android:colorControlHighlight">#330A84FF</item>
     </style>
 
     <style name="DshDialog.Dark" parent="@android:style/Theme.Material.Dialog.Alert">
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:colorAccent">@color/brand</item>
-        <item name="android:textColorPrimary">#FFE6E6E6</item>
-        <item name="android:textColorSecondary">#FFA8ADB8</item>
+        <item name="android:colorBackgroundFloating">@color/dialog_bg_dark</item>
+        <item name="android:dialogCornerRadius">24dp</item>
+        <item name="android:textColorPrimary">@color/ink_dark</item>
+        <item name="android:textColorSecondary">@color/ink_secondary_dark</item>
+        <item name="android:colorControlHighlight">#330A84FF</item>
     </style>
 </resources>

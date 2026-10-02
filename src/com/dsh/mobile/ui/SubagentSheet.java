@@ -46,19 +46,14 @@ public final class SubagentSheet {
 
         LinearLayout box = Ui.sheetCard(ctx);
 
-        // 顶部抓手
-        View bar = new View(ctx);
-        bar.setBackground(Ui.pill(Ui.LINE));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(ctx, 40), Ui.dp(ctx, 4));
-        blp.gravity = Gravity.CENTER_HORIZONTAL;
-        blp.bottomMargin = Ui.dp(ctx, 10);
-        bar.setLayoutParams(blp);
-        box.addView(bar);
+        // 顶部抓手（iOS grabber）
+        box.addView(Ui.grabber(ctx));
 
         int n = children == null ? 0 : children.size();
-        box.addView(Ui.text(ctx, "子智能体", 17f, Ui.INK, true));
-        TextView sub = Ui.text(ctx, n + " 个子会话 · 点一项切过去看它在做什么", 12.5f, Ui.INK_SUB, false);
-        sub.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 6));
+        box.addView(Ui.text(ctx, "子智能体", Ui.S_TITLE3, Ui.INK, true));
+        TextView sub = Ui.text(ctx, n + " 个子会话 · 点一项切过去看它在做什么",
+                Ui.S_FOOT, Ui.INK_SUB, false);
+        sub.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 8));
         box.addView(sub);
 
         LinearLayout rows = Ui.col(ctx);
@@ -87,8 +82,8 @@ public final class SubagentSheet {
         }
 
         if (n == 0) {
-            TextView empty = Ui.text(ctx, "这条会话名下还没有子智能体", 13f, Ui.INK_FAINT, false);
-            empty.setPadding(Ui.dp(ctx, 4), Ui.dp(ctx, 10), Ui.dp(ctx, 4), Ui.dp(ctx, 10));
+            TextView empty = Ui.text(ctx, "这条会话名下还没有子智能体", Ui.S_FOOT, Ui.INK_FAINT, false);
+            empty.setPadding(Ui.dp(ctx, 4), Ui.dp(ctx, 12), Ui.dp(ctx, 4), Ui.dp(ctx, 12));
             rows.addView(empty);
         }
 
@@ -123,24 +118,25 @@ public final class SubagentSheet {
         dlg.show();
     }
 
-    /** 一行：左「主/子」标记 + 标题 + 状态·时间·工作区。当前项高亮（与抽屉卡片同一套配色）。 */
+    /** 一行：左「主/子」标记 + 标题 + 状态·时间·工作区。当前项高亮（iOS 内嵌列表行）。 */
     private static LinearLayout entry(Context ctx, final Dialog dlg, String kind, String title,
                                       String glyph, String status, int statusColor, long updatedAt,
                                       boolean current, boolean isParent, final SessionInfo target,
                                       final Host host) {
         LinearLayout row = Ui.row(ctx);
-        row.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 12), Ui.dp(ctx, 13), Ui.dp(ctx, 12));
-        row.setBackground(Ui.roundStroke(Ui.dp(ctx, 14),
-                (current || isParent) ? Ui.BRAND_SOFT : Ui.FIELD_BG,
-                Ui.dp(ctx, current ? 1.6f : 0.8f), current ? Ui.BRAND : Ui.LINE));
+        row.setMinimumHeight(Ui.dp(ctx, 58));
+        row.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 12), Ui.dp(ctx, 12));
+        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 12),
+                (current || isParent) ? Ui.BRAND_SOFT : Ui.FIELD_BG);
+        Ui.tapRow(row, bg, Ui.PRESS);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = Ui.dp(ctx, 6);
+        lp.topMargin = Ui.dp(ctx, 8);
         row.setLayoutParams(lp);
 
-        TextView tag = Ui.text(ctx, glyph, 12f, current ? Ui.ON_BRAND : Ui.INK_SUB, true);
+        TextView tag = Ui.text(ctx, glyph, Ui.S_CAP1, current ? Ui.ON_BRAND : Ui.INK_SUB, true);
         tag.setGravity(Gravity.CENTER);
-        tag.setBackground(Ui.pill(current ? Ui.BRAND_FILL : Ui.LINE));
+        tag.setBackground(Ui.round(Ui.dp(ctx, 7), current ? Ui.BRAND_FILL : Ui.CHIP_BG));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(Ui.dp(ctx, 26), Ui.dp(ctx, 26));
         tlp.rightMargin = Ui.dp(ctx, 10);
         tag.setLayoutParams(tlp);
@@ -152,7 +148,7 @@ public final class SubagentSheet {
         texts.setLayoutParams(xlp);
 
         TextView t = Ui.text(ctx, kind + " · " + (title == null || title.isEmpty() ? "未命名会话" : title),
-                14.5f, current ? Ui.BRAND_DEEP : Ui.INK, true);
+                Ui.S_BODY, current ? Ui.BRAND_DEEP : Ui.INK, current);
         t.setSingleLine(true);
         t.setEllipsize(android.text.TextUtils.TruncateAt.END);
         texts.addView(t);
@@ -171,7 +167,7 @@ public final class SubagentSheet {
         if (target.agentPreset != null && !target.agentPreset.isEmpty()) {
             meta.append(" · ").append(target.agentPreset);
         }
-        TextView m = Ui.text(ctx, meta.toString(), 12f, statusColor, false);
+        TextView m = Ui.text(ctx, meta.toString(), Ui.S_FOOT, statusColor, false);
         m.setSingleLine(true);
         m.setEllipsize(android.text.TextUtils.TruncateAt.END);
         m.setPadding(0, Ui.dp(ctx, 3), 0, 0);
@@ -179,10 +175,12 @@ public final class SubagentSheet {
         row.addView(texts);
 
         if (current) {
-            TextView now = Ui.text(ctx, "在看", 11.5f, Ui.ON_BRAND, true);
+            TextView now = Ui.text(ctx, "在看", Ui.S_CAP1, Ui.ON_BRAND, true);
             now.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
             now.setBackground(Ui.pill(Ui.BRAND_FILL));
             row.addView(now);
+        } else {
+            row.addView(Ui.chevron(ctx));
         }
 
         row.setClickable(true);
