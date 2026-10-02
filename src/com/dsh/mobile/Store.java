@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 
+import com.dsh.mobile.net.LanAddress;
+
 /**
  * 本地持久化：网关地址、设备 token、安装级设备 ID、设备名。
  * token 只保存在应用私有 SharedPreferences 中，不落日志。
@@ -19,6 +21,8 @@ public final class Store {
     private static final String K_GATEWAY_NAME = "gateway_name";
     private static final String K_LAN = "lan_url";
     private static final String K_WAN = "wan_url";
+    /** 一次性清洗标记：把历史上存成「内网地址」的虚拟网卡地址（172.16/12 等）清掉，只做一次。 */
+    private static final String K_LAN_CLEANED = "lan_url_sanitized_v1";
     private static final String K_USE_WAN = "use_wan";
     private static final String K_INSECURE_TLS = "insecure_tls";
     private static final String K_FEEDBACK = "feedback_log";
@@ -46,6 +50,41 @@ public final class Store {
         this.titles = ctx.getApplicationContext().getSharedPreferences("dsh_mobile_titles", Context.MODE_PRIVATE);
         // 启动时把「允许截屏」策略同步进进程级镜像：Dialog/扫码等窗口创建时读它决定要不要设 FLAG_SECURE
         com.dsh.mobile.ui.Ui.setAllowScreenshot(sp.getBoolean(K_ALLOW_SCREENSHOT, true));
+        // 老版本可能把虚拟网卡地址（172.16/12 等）当成「内网地址」存了下来 —— 一次迁移清掉
+        sanitizeStoredLan();
+    }
+
+    /**
+     * 一次性清洗历史数据：设备表与旧字段里存的「内网地址」如果手机根本连不上
+     * （虚拟网卡 172.16/12、APIPA 169.254、回环 127、CGNAT 100.64、公网隧道…），
+     * 立刻清掉 —— 不清的话用户会永远卡在「在家也走公网」，
+     * 而且设备卡上还挂着「内网 · 固定」这个假标签。
+     *
+     * <p>清掉的地址若能当公网地址用（不是私网段），就顺手挪进公网槽位，不白扔。
+     * 只跑一次（{@link #K_LAN_CLEANED}）；跑过之后用户在设置里手填的企业 172 内网地址
+     * 依然会被保存（手填是用户的显式决定，见 {@link #setLanUrl(String)}）。
+     */
+    private void sanitizeStoredLan() {
+        if (sp.getBoolean(K_LAN_CLEANED, false)) return;
+        boolean changed = false;
+        try {
+            java.util.List<Device> list = devices();   // 顺带完成「旧字段 -> 设备表」的迁移
+            for (Device d : list) {
+                String lan = d.lanUrl == null ? "" : d.lanUrl.trim();
+                if (lan.isEmpty() || LanAddress.isUsableLanUrl(lan)) continue;
+                if (!isPrivateUrl(lan) && (d.wanUrl == null || d.wanUrl.isEmpty())) d.wanUrl = lan;
+                d.lanUrl = "";
+                changed = true;
+            }
+            if (changed) {
+                saveDevices(list);
+                Device act = activeDevice();
+                if (act != null) writeLegacy(act);     // 旧字段（K_LAN/K_URL）是当前设备的镜像，一起刷新
+            }
+        } catch (Throwable ignored) {
+            // 清洗失败绝不能影响启动：留着老数据总比崩在启动页好
+        }
+        sp.edit().putBoolean(K_LAN_CLEANED, true).apply();
     }
 
     public String cachedTitle(String sessionId) {
@@ -328,6 +367,14 @@ public final class Store {
 
         public boolean pairedReady() {
             return token != null && !token.isEmpty() && !activeUrl().isEmpty();
+        }
+
+        /**
+         * 这台设备的「内网地址」是不是手机真的连得上（虚拟网卡 / APIPA / 回环 / 公网隧道都不算）。
+         * 界面上的「内网 · 固定」标签、以及是否需要提示用户重扫，都按这个判定。
+         */
+        public boolean hasUsableLan() {
+            return com.dsh.mobile.net.LanAddress.isUsableLanUrl(lanUrl);
         }
     }
 

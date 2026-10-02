@@ -14,6 +14,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.dsh.mobile.Store;
+import com.dsh.mobile.net.LanAddress;
 
 import java.util.List;
 
@@ -206,7 +207,8 @@ public final class DeviceHubView extends LinearLayout {
         // 第二行：标签（内网·固定 / 公网 / 桌面端 / 版本号）
         LinearLayout tags = Ui.row(ctx);
         tags.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-        if (d.lanUrl != null && !d.lanUrl.isEmpty()) tags.addView(tag("内网 · 固定", Ui.BRAND));
+        // 只要手机真的连得上才算「内网 · 固定」：虚拟网卡（172.16/12）等假内网地址不给这个标签
+        if (d.hasUsableLan()) tags.addView(tag("内网 · 固定", Ui.BRAND));
         if (d.wanUrl != null && !d.wanUrl.isEmpty()) tags.addView(tag("公网", Ui.WARN));
         if (d.dshVersion != null && !d.dshVersion.isEmpty()) tags.addView(tag("DSH " + d.dshVersion, Ui.INK_SUB));
         card.addView(tags);
@@ -217,8 +219,10 @@ public final class DeviceHubView extends LinearLayout {
         if (url.isEmpty()) {
             addrLine = "还没有地址 · 重新扫码或手动添加";
         } else {
-            // 只显示主机端口；地址属于用户自己的内网信息，不写进任何被跟踪的文件
-            String kind = url.isEmpty() ? "" : (Store.isPrivateUrl(url) ? "走内网" : "走公网");
+            // 只显示主机端口；地址属于用户自己的内网信息，不写进任何被跟踪的文件。
+            // 「走内网」要求地址确实是可用内网地址（虚拟网卡不算），否则一律按公网说明。
+            String kind = url.isEmpty() ? ""
+                    : (d.hasUsableLan() && LanAddress.isUsableLanUrl(url) ? "走内网" : "走公网");
             addrLine = online ? ("已连接" + (kind.isEmpty() ? "" : " · " + kind)) : "离线"
                     + (d.useWan ? "（公网）" : "（内网）");
             if (!online && isActive && d.lastSeenAt > 0) {

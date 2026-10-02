@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      android:forceDarkAllowed="false" 是「一块黑」的治本开关（2026-10-02 真机 bug）：
+      本主题是 Light 系（isLightTheme=true），而 forceDarkAllowed 对 Light 主题**默认就是 true** ——
+      于是系统一开深色模式，系统/ROM 的「强制深色」会把界面里亮度较高的绘制内容（白卡片、
+      浅色底、浅底上的字）按亮度整体压暗，看起来就是"浅色界面里冒出一块块黑"。
+      本 App 的深浅色完全由自己（Store.themeMode + Ui.applyTheme）决定，
+      绝不能让系统再插一手，所以显式关掉它。
+      该属性 API 29 才有；minSdk 26 上系统不认这个 attr id，只是被忽略（不会崩）。
+    -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:colorAccent">@color/brand</item>
         <item name="android:statusBarColor">@color/bg</item>
@@ -11,6 +21,7 @@
     </style>
 
     <style name="AppTheme.Translucent" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:colorAccent">@color/brand</item>
@@ -23,12 +34,14 @@
       只用框架自带的 Theme.Material.*.Dialog.Alert，不引入任何新依赖。
     -->
     <style name="DshDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:colorAccent">@color/brand</item>
         <item name="android:textColorPrimary">@color/ink</item>
         <item name="android:textColorSecondary">#FF6B7280</item>
     </style>
 
     <style name="DshDialog.Dark" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:colorAccent">@color/brand</item>
         <item name="android:textColorPrimary">#FFE6E6E6</item>
         <item name="android:textColorSecondary">#FFA8ADB8</item>

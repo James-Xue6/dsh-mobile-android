@@ -17,6 +17,7 @@ import com.dsh.mobile.model.ChatItem;
 import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.net.GatewayClient;
+import com.dsh.mobile.net.LanAddress;
 import com.dsh.mobile.ui.ConversationView;
 import com.dsh.mobile.ui.DeviceHubView;
 import com.dsh.mobile.ui.DrawerHost;
@@ -4234,21 +4235,30 @@ public final class MainActivity extends Activity implements
                 if (!e.isEmpty()) all.add(e);
             }
         }
-        // 分三档：① 和手机同网段（在家必通、且最快）② 其它内网（可能是虚拟网卡，多半连不上）
-        //        ③ 公网隧道（人在外面时用）。之前不分档，先撞虚拟网卡要白等十几秒超时。
+        // 分档：① 和手机同网段（在家必通、且最快）② 其它可用内网（10.x 等）
+        //      ③ 公网隧道（人在外面时用）④ 「假内网」地址（虚拟网卡 172.16/12、APIPA…）
+        // 之前不分档、也不过滤，先撞虚拟网卡要白等十几秒超时；④ 排在最后只当兜底。
         final String subnet = localSubnetPrefix();
         java.util.List<String> sameNet = new java.util.ArrayList<>();
         java.util.List<String> priv = new java.util.ArrayList<>();
         java.util.List<String> pub = new java.util.ArrayList<>();
+        java.util.List<String> bogus = new java.util.ArrayList<>();
         for (String u : all) {
             if (isLoopbackUrl(u)) continue;
-            if (!Store.isPrivateUrl(u)) { pub.add(u); continue; }
-            String host = hostOf(u);
-            if (!subnet.isEmpty() && host.startsWith(subnet)) sameNet.add(u);
-            else priv.add(u);
+            if (LanAddress.isUsableLanUrl(u)) {
+                // 「私有网段」≠「手机连得上」：172.30.x 也是私网，但那是电脑上的虚拟网卡
+                String host = hostOf(u);
+                if (!subnet.isEmpty() && host.startsWith(subnet)) sameNet.add(u);
+                else priv.add(u);
+            } else if (Store.isPrivateUrl(u)) {
+                bogus.add(u);   // 虚拟网卡 / APIPA / CGNAT / 回环：手机路由不过去
+            } else {
+                pub.add(u);
+            }
         }
         sameNet.addAll(priv);
         sameNet.addAll(pub);
+        sameNet.addAll(bogus);
         return sameNet;
     }
 
@@ -4271,7 +4281,9 @@ public final class MainActivity extends Activity implements
                 pairTraceAdd("· 跳过 " + hostOf(target) + "（安全策略：" + denied + "）");
                 continue;
             }
-            store.setUrl(target);
+            // 虚拟网卡这类「假内网」地址只拿来试连，**不**写进设备的内网地址槽位：
+            // 否则试完失败后卡片上会一直挂着「内网 · 固定」，用户以为有内网其实永远连不上。
+            if (LanAddress.isUsableLanUrl(target) || !Store.isPrivateUrl(target)) store.setUrl(target);
             pairTraceAdd("· 尝试 " + pairIndex + "/" + total + "：" + hostOf(target));
             if (settingsView != null) {
                 settingsView.setStatus("正在配对 " + hostOf(target)
@@ -4871,26 +4883,39 @@ public final class MainActivity extends Activity implements
             // 再写地址/令牌，后续 setUrl/setLanUrl/setToken 才会落到这台设备上。
             store.beginPairing(payload.optString("gatewayId", ""), payload.optString("gatewayName", ""));
             store.setUrl(pairCandidates.get(0));
-            // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
+            // 网关把可用地址都放在 endpoints：可用内网进「内网」，公网/隧道进「公网」。
             // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
+            //
+            // ⚠️ 这里必须用 LanAddress.isUsableLanUrl()（可用性判据），**不能**用
+            // Store.isPrivateUrl()（地址性质判据）：endpoints 里同时含电脑上虚拟网卡的
+            // 172.30.x 地址与真实内网地址，只按「私网」挑就会把虚拟网卡地址存成内网地址，
+            // 手机永远连不上（真机实测：lanUrl 存成了 ws://172.30.x.x:3091/…）。
             String lan = "", wan = "";
             if (eps != null) {
                 for (int i = 0; i < eps.length(); i++) {
                     String e = eps.optString(i, "").trim();
                     if (e.isEmpty()) continue;
-                    if (Store.isPrivateUrl(e)) { if (lan.isEmpty()) lan = e; }
-                    else if (wan.isEmpty()) wan = e;
+                    if (LanAddress.isUsableLanUrl(e)) { if (lan.isEmpty()) lan = e; }
+                    else if (!Store.isPrivateUrl(e) && wan.isEmpty()) wan = e;
+                    // 其余（虚拟网卡 / APIPA / 回环的私网地址）两边都不进：不拿假地址当内网
                 }
             }
-            if (Store.isPrivateUrl(url)) { if (lan.isEmpty()) lan = url; }
-            else if (wan.isEmpty()) wan = url;
-            if (!lan.isEmpty()) store.setLanUrl(lan);
+            if (LanAddress.isUsableLanUrl(url)) { if (lan.isEmpty()) lan = url; }
+            else if (!Store.isPrivateUrl(url) && wan.isEmpty()) wan = url;
+            if (!lan.isEmpty()) {
+                store.setLanUrl(lan);
+            } else if (!LanAddress.isUsableLanUrl(store.lanUrl())) {
+                // 这次配对没有可用内网地址（或刚被 setUrl(candidate) 写进了虚拟网卡地址）：
+                // 清空内网槽位 —— 界面上不显示「内网 · 固定」，也不拿假地址去连
+                store.setLanUrl("");
+                pairTraceAdd("· 没有可用内网地址（虚拟网卡/APIPA/回环已排除），内网槽位留空");
+            }
             if (!wan.isEmpty()) store.setWanUrl(wan);
-            store.setUseWan(lan.isEmpty() && !wan.isEmpty());
+            store.setUseWan(store.lanUrl().isEmpty() && !wan.isEmpty());
             failoverUsed = false;
             pendingPairCode = code;
             pairIndex = 0;
-            pairTraceAdd("⑥ 内网=" + (lan.isEmpty() ? "无" : hostOf(lan))
+            pairTraceAdd("⑥ 内网=" + (store.lanUrl().isEmpty() ? "无" : hostOf(store.lanUrl()))
                     + " · 公网=" + (wan.isEmpty() ? "无" : hostOf(wan))
                     + " · 先走" + (store.useWan() ? "公网" : "内网"));
             refreshDiagnostics();

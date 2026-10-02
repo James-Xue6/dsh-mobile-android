@@ -60,6 +60,8 @@ public final class SettingsView extends LinearLayout {
      * 重建时靠这张表把用户已经展开/收起的区块原样还原，不至于"一切主题全折叠"。
      */
     private final java.util.Map<String, Boolean> sectionOpen = new java.util.HashMap<>();
+    /** 页面滚动容器：重建后要按原位还原滚动位置（否则一切主题就跳回顶部）。 */
+    private ScrollView scrollHost;
 
     public SettingsView(Context ctx, Host host) {
         super(ctx);
@@ -91,6 +93,7 @@ public final class SettingsView extends LinearLayout {
         addView(bar, Ui.fill());
 
         ScrollView scroll = new ScrollView(ctx);
+        scrollHost = scroll;
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         LinearLayout body = Ui.col(ctx);
@@ -342,6 +345,7 @@ public final class SettingsView extends LinearLayout {
         String st = status == null ? "" : status.getText().toString();
         String diagnostics = diag == null ? "" : diag.getText().toString();
         String fbHint = feedbackCount == null ? "" : feedbackCount.getText().toString();
+        final int scrollY = scrollHost == null ? 0 : scrollHost.getScrollY();
         boolean stError = false;   // 状态行的错误态由宿主重放，这里不猜
         build();
         if (!lan.isEmpty()) lanField.setText(lan);
