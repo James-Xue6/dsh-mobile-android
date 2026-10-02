@@ -254,7 +254,7 @@ public final class ChatAdapter extends BaseAdapter {
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
         // 左侧 3dp 主色强调条 + 发丝描边 + 极浅阴影（旧版是整卡一圈淡蓝框 = "土"元素）
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
 
         TextView head = Ui.text(ctx, agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
@@ -313,7 +313,11 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 11), Ui.dp(ctx, 8), Ui.dp(ctx, 11), Ui.dp(ctx, 8));
-        card.setBackground(Ui.round(Ui.dp(ctx, 14), Ui.BRAND_SOFT));
+        // 工具行改成**中性玻璃卡 + 发丝线**（参考图的页面主体只有白/灰/黑）。
+        // 旧版是淡蓝底 —— 一屏能有十几条工具行，每条都染蓝就是"到处都是彩色"，
+        // 状态色（绿/橙/红圆点）反而被底色淹掉了。
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.GLASS, Ui.dp(ctx, 1f),
+                Ui.LINE, 0x00000000, 0f));
         card.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -361,7 +365,7 @@ public final class ChatAdapter extends BaseAdapter {
         // 状态点用真圆点（尺寸/居中可控，不受字体影响）；失败保留 ⚠ 的强语义
         View mark;
         if (it.stepError) {
-            mark = Ui.text(ctx, "⚠", 11.5f, color, false);
+            mark = Ui.text(ctx, "⚠", Ui.S_CAP1, color, false);
         } else {
             mark = Ui.dot(ctx, it.stepRunning ? 8f : 6f, color);
             LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) mark.getLayoutParams();
@@ -399,7 +403,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
 
@@ -473,7 +477,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
 
@@ -529,7 +533,7 @@ public final class ChatAdapter extends BaseAdapter {
 
             EditText custom = new EditText(ctx);
             custom.setHint(multi ? "也可补充输入…" : "或直接输入回答…");
-            custom.setTextSize(14f);
+            custom.setTextSize(Ui.S_CALLOUT);
             custom.setHintTextColor(Ui.INK_FAINT);
             custom.setTextColor(Ui.INK);
             custom.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.FIELD_BG, Ui.dp(ctx, 0.8f), Ui.LINE));
@@ -645,8 +649,10 @@ public final class ChatAdapter extends BaseAdapter {
         row.setLayoutParams(rlp);
         Ui.tap(row, 0.97f);   // 选项行按下反馈（背景由 paint() 管，这里只压暗，不抢背景）
 
+        // 选择圆圈：字形 20→18dp、底 22→20dp。旁边的选项文字是 13.5sp（行高 ≈ 18dp），
+        // 20dp 的圆圈是行高的 1.11 倍，会盖过文字；18dp 正好齐平。
         TextView mark = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_circle,
-                0x00000000, Ui.INK_FAINT, 22f, 0f, 20f);
+                0x00000000, Ui.INK_FAINT, 20f, 0f, 18f);
         row.addView(mark);
 
         LinearLayout texts = Ui.col(ctx);
@@ -670,10 +676,12 @@ public final class ChatAdapter extends BaseAdapter {
                                 : com.dsh.mobile.R.drawable.ic_check_circle)
                        : (multi ? com.dsh.mobile.R.drawable.ic_square
                                 : com.dsh.mobile.R.drawable.ic_circle),
-                    on ? Ui.BRAND : Ui.INK_FAINT, 0x00000000, 22f, 20f);
+                    on ? Ui.BRAND : Ui.INK_FAINT, 0x00000000, 20f, 18f);
+            // 选中 = 浅灰胶囊 + **去掉彩色描边**（对齐参考图）。蓝色只留给左侧那枚对勾图标 ——
+            // 旧版是"淡蓝底 + 淡蓝边"，选中项整块发蓝，一屏好几个选项时非常吵。
             row.setBackground(Ui.roundStroke(Ui.dp(ctx, 11),
-                    on ? Ui.BRAND_SOFT : Ui.FIELD_BG,
-                    Ui.dp(ctx, 1.0f), on ? Ui.LINE_SELECTED : Ui.LINE));
+                    on ? Ui.SELECT_BG : Ui.FIELD_BG,
+                    Ui.dp(ctx, 1.0f), Ui.LINE));
         };
         paint.run();
 
@@ -704,7 +712,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));

@@ -94,6 +94,8 @@ public final class WorkspaceSheet {
             Ui.applyScreenshotPolicy(w);
             w.setDimAmount(0.35f);
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            // 液态玻璃：与子智能体弹窗同一条真模糊（API 31+，不支持则静默回退）
+            Ui.applyWindowBlur(w, 24f);
         }
         dlg.show();
     }

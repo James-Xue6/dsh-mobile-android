@@ -132,8 +132,10 @@ public final class SessionListView extends FrameLayout {
         addView(emptyView);
 
         // ---- 悬浮新建
+        // 比例检查：FAB 56dp 是 iOS 的标准尺寸（触区本来就 ≥48dp，不缩），
+        // 但里面的 ＋ 从 26dp 收到 24dp —— 26dp 是"图标比标准还大一号"，没有文字跟它配。
         TextView fab = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_plus,
-                Ui.BRAND_FILL, Ui.ON_BRAND, 26f, 56f);
+                Ui.BRAND_FILL, Ui.ON_BRAND, 24f, 56f);
         this.fab = fab;
         fab.setElevation(Ui.dp(ctx, 6));
         fab.setContentDescription("新建对话");
@@ -150,7 +152,7 @@ public final class SessionListView extends FrameLayout {
     private void paintEmptyIcon() {
         if (emptyView == null) return;
         Ui.setTopIcon(emptyView, com.dsh.mobile.R.drawable.ic_monitor,
-                Ui.alpha(Ui.INK_FAINT, 0.85f), 46f, 18f);
+                Ui.alpha(Ui.INK_FAINT, 0.85f), Ui.I_EMPTY, 18f);
     }
 
     public void setStatus(String s) {
@@ -246,13 +248,14 @@ public final class SessionListView extends FrameLayout {
                 return head;
             }
             SessionInfo s = (SessionInfo) row;
-            // 当前正在看的那个会话：淡蓝底 + 品牌色字，在抽屉里一眼认出来
+            // 当前正在看的那个会话：**浅灰胶囊** + 行尾蓝色对勾（对齐参考图侧栏选中行）
             boolean current = s.id != null && !s.id.isEmpty() && s.id.equals(currentId);
 
             // 整组共用一张卡：只有组内第一行圆上角、最后一行圆下角（iOS 内嵌列表）
             boolean top = cardTop(position);
             boolean bottom = cardBottom(position);
-            int fill = current ? Ui.BRAND_SOFT : Ui.SURFACE;
+            // 选中 = 浅灰圆角胶囊（SELECT_BG），**不是**蓝底白字 —— 蓝色只留给行尾那一枚对勾
+            int fill = current ? Ui.SELECT_BG : Ui.GLASS;
             android.graphics.drawable.GradientDrawable bg = Ui.rowBg(ctx, fill, top, bottom);
 
             int depth = Math.max(0, s.childDepth);
@@ -283,7 +286,8 @@ public final class SessionListView extends FrameLayout {
 
             String shownTitle = s.displayForList();
             if (s.childDepth > 0) shownTitle = "└ " + shownTitle;
-            TextView title = Ui.text(ctx, shownTitle, Ui.S_BODY, current ? Ui.BRAND_DEEP : Ui.INK, current);
+            // 标题一律用正文色：选中已经由"浅灰胶囊 + 蓝色对勾"表达了，再染蓝就是三重强调
+            TextView title = Ui.text(ctx, shownTitle, Ui.S_BODY, Ui.INK, current);
             title.setSingleLine(true);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             texts.addView(title);
@@ -323,6 +327,17 @@ public final class SessionListView extends FrameLayout {
                 tog.setLayoutParams(glp);
                 tog.setOnClickListener(v -> host.onToggleChildren(s));
                 card.addView(tog);
+            }
+
+            // 选中行的蓝色对勾（参考图：选中行 = 浅灰胶囊 + 一枚蓝色小图标 + 深色文字）
+            if (current) {
+                TextView ck = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_check,
+                        0x00000000, Ui.BRAND, 18f, 0f, 16f);
+                LinearLayout.LayoutParams cklp = new LinearLayout.LayoutParams(
+                        Ui.dp(ctx, 18), Ui.dp(ctx, 18));
+                cklp.rightMargin = Ui.dp(ctx, 6);
+                ck.setLayoutParams(cklp);
+                card.addView(ck);
             }
 
             if (s.pending > 0) {

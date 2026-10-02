@@ -472,6 +472,21 @@ public final class Store {
                 com.dsh.mobile.ui.Theme.MODE_SYSTEM));
     }
 
+    /**
+     * 只读一次主题档位，**不构造 Store**。
+     *
+     * <p>{@code MainActivity.attachBaseContext} 要用它决定 App 自己的 uiMode（见
+     * {@link com.dsh.mobile.ui.Theme#nightOverride}），而那个时刻越轻越好：构造 Store 会顺带
+     * 刷一次网络状态、清洗一遍历史地址，那些是 onCreate 的活，不该在一个"只为读一个字符串"
+     * 的调用里再做第二遍（还会多写一次磁盘）。
+     */
+    public static String themeModeOf(Context ctx) {
+        if (ctx == null) return com.dsh.mobile.ui.Theme.MODE_SYSTEM;
+        return com.dsh.mobile.ui.Theme.normalize(ctx.getApplicationContext()
+                .getSharedPreferences(FILE, Context.MODE_PRIVATE)
+                .getString(K_THEME_MODE, com.dsh.mobile.ui.Theme.MODE_SYSTEM));
+    }
+
     public void setThemeMode(String mode) {
         sp.edit().putString(K_THEME_MODE, com.dsh.mobile.ui.Theme.normalize(mode)).apply();
     }

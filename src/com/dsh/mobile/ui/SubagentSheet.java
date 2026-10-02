@@ -114,6 +114,9 @@ public final class SubagentSheet {
             Ui.applyScreenshotPolicy(w);
             w.setDimAmount(0.35f);
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            // 液态玻璃：底部弹窗背后做**真模糊**（API 31+；窗口底是透明的，模糊才看得见）。
+            // ROM 关掉模糊时什么都不会发生 —— 面板本身是 88~90% 不透明的厚玻璃，照常可读。
+            Ui.applyWindowBlur(w, 24f);
         }
         dlg.show();
     }
@@ -126,8 +129,9 @@ public final class SubagentSheet {
         LinearLayout row = Ui.row(ctx);
         row.setMinimumHeight(Ui.dp(ctx, 58));
         row.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 12), Ui.dp(ctx, 12));
+        // 选中 = 浅灰圆角胶囊（对齐参考图侧栏选中行），**不是**蓝底白字
         android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 12),
-                (current || isParent) ? Ui.BRAND_SOFT : Ui.FIELD_BG);
+                (current || isParent) ? Ui.SELECT_BG : Ui.FIELD_BG);
         Ui.tapRow(row, bg, Ui.PRESS);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -148,7 +152,7 @@ public final class SubagentSheet {
         texts.setLayoutParams(xlp);
 
         TextView t = Ui.text(ctx, kind + " · " + (title == null || title.isEmpty() ? "未命名会话" : title),
-                Ui.S_BODY, current ? Ui.BRAND_DEEP : Ui.INK, current);
+                Ui.S_BODY, Ui.INK, current);
         t.setSingleLine(true);
         t.setEllipsize(android.text.TextUtils.TruncateAt.END);
         texts.addView(t);
@@ -198,10 +202,10 @@ public final class SubagentSheet {
         row.addView(texts);
 
         if (current) {
-            TextView now = Ui.text(ctx, "在看", Ui.S_CAP1, Ui.ON_BRAND, true);
-            now.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
-            now.setBackground(Ui.pill(Ui.BRAND_FILL));
-            row.addView(now);
+            // 选中标记 = 一枚蓝色对勾（**无底色**）。参考图里选中行只有「浅灰胶囊 + 蓝色小图标」，
+            // 不再叠一个蓝底白字的「在看」胶囊 —— 那正是用户点名要去掉的"蓝底高亮"。
+            row.addView(Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_check,
+                    0x00000000, Ui.BRAND, 20f, 0f, 18f));
         } else {
             row.addView(Ui.chevron(ctx));
         }

@@ -69,7 +69,7 @@ public final class NotifySettingsCard {
         // ---- 权限（没给才显示）
         String permHint = Notifier.permissionHint(ctx);
         if (permHint != null) {
-            TextView go = Ui.text(ctx, permHint, 13f, Ui.BRAND, false);
+            TextView go = Ui.text(ctx, permHint, Ui.S_SUB, Ui.BRAND, false);
             go.setPadding(0, Ui.dp(ctx, 12), 0, 0);
             go.setClickable(true);
             go.setOnClickListener(v -> openSystemNotificationSettings(ctx));
@@ -111,7 +111,7 @@ public final class NotifySettingsCard {
     }
 
     private static TextView hint(Context ctx, String s) {
-        TextView t = Ui.text(ctx, s, 12.5f, Ui.INK_SUB, false);
+        TextView t = Ui.text(ctx, s, Ui.S_FOOT, Ui.INK_SUB, false);
         t.setPadding(0, Ui.dp(ctx, 5), 0, 0);
         return t;
     }

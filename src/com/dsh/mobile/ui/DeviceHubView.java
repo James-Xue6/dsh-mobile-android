@@ -30,7 +30,10 @@ import java.util.List;
 public final class DeviceHubView extends LinearLayout {
 
     public interface Host {
-        /** 连接并进入这台设备（对话页）。 */
+        /**
+         * 点「进入对话」/「重连」：在线时直接进对话页；离线时**先重连、连上了才进**，
+         * 连不上就留在本页并明确提示（绝不静默进入）。等待期间调 {@link #setConnecting(boolean)}。
+         */
         void onOpenDevice(Store.Device d);
         /** 修改设备显示名。 */
         void onRenameDevice(Store.Device d);
@@ -62,6 +65,14 @@ public final class DeviceHubView extends LinearLayout {
     private TextView status;
     /** 一张设备都没有时的提示（图标 + 一句话，不是光秃秃一行"空"）。 */
     private LinearLayout emptyView;
+    /**
+     * 用户点了「重连」、App 正在等这台电脑握手成功。
+     *
+     * 离线时按钮**不能**还叫「进入对话」：那会让人以为"点了就进去"，
+     * 而实际能不能进取决于连接是否真的 READY。等待期间按钮显示「重连中…」并置灰，
+     * 连接结果由宿主（MainActivity.onOpenDevice 的等待/超时逻辑）决定后才切页。
+     */
+    private boolean connecting = false;
 
     public DeviceHubView(Context ctx, Host host) {
         super(ctx);
@@ -131,9 +142,9 @@ public final class DeviceHubView extends LinearLayout {
         empty.setPadding(0, Ui.dp(ctx, 56), 0, Ui.dp(ctx, 20));
         empty.setVisibility(GONE);
         TextView emptyIcon = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_monitor,
-                0x00000000, Ui.alpha(Ui.INK_SUB, 0.55f), 56f, 0f, 48f);
+                0x00000000, Ui.alpha(Ui.INK_SUB, 0.55f), 48f, 0f, Ui.I_EMPTY);
         emptyIcon.setLayoutParams(new LinearLayout.LayoutParams(
-                Ui.dp(ctx, 56), Ui.dp(ctx, 56)));
+                Ui.dp(ctx, 48), Ui.dp(ctx, 48)));
         empty.addView(emptyIcon);
         TextView emptyText = Ui.text(ctx, "还没有添加设备", Ui.S_BODY, Ui.INK_SUB, false);
         emptyText.setGravity(Gravity.CENTER);
@@ -189,6 +200,14 @@ public final class DeviceHubView extends LinearLayout {
         }
     }
 
+    /**
+     * 正在等这台设备重连：按钮变「重连中…」并置灰（点了不会重复触发）。
+     * 必须在下一次 {@link #setDevices} 之前调用，卡片是重建的，状态在重建时读。
+     */
+    public void setConnecting(boolean on) {
+        this.connecting = on;
+    }
+
     public void setStatus(String s, boolean error) {
         status.setText(s == null ? "" : s);
         status.setTextColor(error ? Ui.WARN : Ui.INK_FAINT);
@@ -196,11 +215,27 @@ public final class DeviceHubView extends LinearLayout {
 
     // ------------------------------------------------------------ 卡片
 
+    /**
+     * 设备卡：**24dp 大圆角渐变卡**（对齐 ref-ios-health-cards.png 的彩色分类卡）。
+     *
+     * <p>参考图给的三条硬规格这里全落上了：圆角 24dp、**横向**饱和渐变、白字 + 小图标，
+     * 并且**无描边、无阴影** —— 渐变卡本身就是画面里的重色块，再描边/投影只会脏。
+     * 渐变按设备 id 稳定取（{@link Ui#gradientFor(String)}），同一台设备每次进来颜色一样，
+     * 不会"每次刷新换一个色"。
+     *
+     * <p>卡里所有文字都收进白色系（纯白 / 白 78% / 白 88%）：卡面被染成饱和色之后，
+     * 原来的黑字灰字压上去是脏的。唯一例外是主按钮 —— **纯白胶囊 + 固定深字**，
+     * 在彩色卡面上它就是"最该被点到"的那个（参考图的 Edit 按钮正是这个做法）。
+     */
     private LinearLayout deviceCard(final Store.Device d, boolean isActive, boolean online) {
-        // 当前生效的那台：**左侧 3dp 主色强调条**（圆角内裁剪）。
-        // 旧版是"整卡一圈蓝框 + 淡蓝底"——用户点名的"土"元素，一整圈彩边会把内容压下去。
-        LinearLayout card = Ui.accentCard(ctx, isActive ? Ui.BRAND_FILL : 0x00000000);
-        card.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 15), Ui.dp(ctx, 16), Ui.dp(ctx, 15));
+        final int white = 0xFFFFFFFF;
+        final int w78   = Ui.alpha(white, 0.78f);   // 次要文字
+        final int w88   = Ui.alpha(white, 0.88f);   // 状态/线路行
+        final int wOn   = Ui.alpha(white, 0.22f);   // 卡面上的"半透明白"底（图标底 / 标签底）
+
+        LinearLayout card = Ui.col(ctx);
+        card.setBackground(Ui.featureFill(ctx, Ui.gradientFor(d.id == null ? d.displayName() : d.id)));
+        card.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 16));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         clp.bottomMargin = Ui.dp(ctx, 24);          // 分组卡片之间 24dp
@@ -208,9 +243,10 @@ public final class DeviceHubView extends LinearLayout {
 
         // 第一行：图标 + 设备名 + 在线状态
         LinearLayout row1 = Ui.row(ctx);
-        row1.setMinimumHeight(Ui.dp(ctx, 48));
+        row1.setMinimumHeight(Ui.dp(ctx, 44));
+        // 图标 ≈ 行高：设备名 15.5sp（行高 ≈21dp），字形 Ui.I_BODY；底 40dp、圆角 12dp
         TextView icon = Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_monitor,
-                Ui.BRAND_SOFT, Ui.BRAND, 42f, 11f, 22f);
+                wOn, white, 40f, 12f, Ui.I_BODY);
         row1.addView(icon);
 
         LinearLayout names = Ui.col(ctx);
@@ -218,29 +254,43 @@ public final class DeviceHubView extends LinearLayout {
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         nlp.leftMargin = Ui.dp(ctx, 12);
         names.setLayoutParams(nlp);
-        TextView name = Ui.text(ctx, d.displayName(), Ui.S_BODY, Ui.INK, true);
+        TextView name = Ui.text(ctx, d.displayName(), Ui.S_BODY, white, true);
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         names.addView(name);
 
-        TextView plat = Ui.text(ctx, platformLabel(d), Ui.S_FOOT, Ui.INK_SUB, false);
+        TextView plat = Ui.text(ctx, platformLabel(d), Ui.S_FOOT, w78, false);
         plat.setPadding(0, Ui.dp(ctx, 2), 0, 0);
         names.addView(plat);
         row1.addView(names);
 
-        // 在线状态：**8dp 小圆点 + 13sp 灰字**。
-        // 旧版是一枚大绿"在线"胶囊（绿底白字），在一张安静的卡片上像个警报灯。
-        row1.addView(Ui.dotLabel(ctx, 8f, online ? Ui.OK : Ui.INK_FAINT,
-                online ? "在线" : "离线", Ui.S_FOOT, Ui.INK_SUB));
+        // 在线状态：小圆点 + 白字。**不用绿/灰**：卡面本身是饱和色，绿点和灰字都读不清，
+        // 在线/离线的区别交给"点实/点虚 + 文案"承担。
+        row1.addView(Ui.dotLabel(ctx, 8f, online ? white : w78,
+                online ? "在线" : "离线", Ui.S_FOOT, w88));
+
+        // 当前生效的那台：一枚半透明白胶囊。
+        // 旧版是左侧 3dp 蓝条 —— 渐变卡上那条蓝条与卡面撞色，什么也说明不了。
+        if (isActive) {
+            TextView cur = Ui.text(ctx, "当前", Ui.S_CAP1, white, true);
+            cur.setTypeface(Ui.medium());
+            cur.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 3), Ui.dp(ctx, 8), Ui.dp(ctx, 3));
+            cur.setBackground(Ui.pill(wOn));
+            LinearLayout.LayoutParams c2 = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            c2.leftMargin = Ui.dp(ctx, 8);
+            cur.setLayoutParams(c2);
+            row1.addView(cur);
+        }
         card.addView(row1);
 
-        // 第二行：标签（内网·固定 / 公网 / 版本号）
+        // 第二行：标签（内网·固定 / 公网 / 版本号）—— 统一"白字 + 22% 白底"
         LinearLayout tags = Ui.row(ctx);
         tags.setPadding(0, Ui.dp(ctx, 12), 0, 0);
         // 只要手机真的连得上才算「内网 · 固定」：虚拟网卡（172.16/12）等假内网地址不给这个标签
-        if (d.hasUsableLan()) tags.addView(tag("内网 · 固定", Ui.BRAND));
-        if (d.wanUrl != null && !d.wanUrl.isEmpty()) tags.addView(tag("公网", Ui.WARN));
-        if (d.dshVersion != null && !d.dshVersion.isEmpty()) tags.addView(tag("DSH " + d.dshVersion, Ui.INK_SUB));
+        if (d.hasUsableLan()) tags.addView(tag("内网 · 固定"));
+        if (d.wanUrl != null && !d.wanUrl.isEmpty()) tags.addView(tag("公网"));
+        if (d.dshVersion != null && !d.dshVersion.isEmpty()) tags.addView(tag("DSH " + d.dshVersion));
         card.addView(tags);
 
         // 第三行：这次走哪条线路 + 规则来源（**不显示地址**，方便用户截图分享）
@@ -256,24 +306,31 @@ public final class DeviceHubView extends LinearLayout {
                 addrLine += " · 上次在线 " + Ui.ago(d.lastSeenAt);
             }
         }
-        TextView addr = Ui.text(ctx, addrLine, Ui.S_FOOT, online ? Ui.OK : Ui.INK_SUB, false);
+        TextView addr = Ui.text(ctx, addrLine, Ui.S_FOOT, w88, false);
         addr.setPadding(0, Ui.dp(ctx, 10), 0, 0);
         card.addView(addr);
 
-        // 第四行：连接/进入 + 修改名称 + 删除
+        // 第四行：进入/重连 + 修改名称 + 删除
+        //
+        // 文案必须和"在线/离线"一致，不能骗人：只有真的 READY（online）才写「进入对话」；
+        // 离线时写「重连」，点下去由宿主先连、连上了才切页（连接失败会明确提示）。
         LinearLayout btns = Ui.row(ctx);
         btns.setPadding(0, Ui.dp(ctx, 16), 0, 0);
 
-        TextView enter = solid(online ? "进入对话" : "连接");
+        boolean busy = isActive && connecting && !online;
+        TextView enter = Ui.pillButton(ctx, online ? "进入对话" : (busy ? "重连中…" : (isActive ? "重连" : "连接")),
+                white, Ui.INK_ON_WHITE);
+        if (busy) Ui.setButtonEnabled(enter, false);   // 等待期间置灰，防重复点
+        enter.setContentDescription(online ? "进入对话" : "重连");
         enter.setOnClickListener(v -> host.onOpenDevice(d));
         btns.addView(enter, weight(1.35f, 0));
 
-        TextView rename = outline("修改名称");
+        TextView rename = Ui.pillButton(ctx, "修改名称", wOn, white);
         rename.setOnClickListener(v -> host.onRenameDevice(d));
         btns.addView(rename, weight(1f, 10));
 
-        // 危险操作：**红字 + 无底色**（旧版是灰底红字，接近"一块红"的观感）
-        TextView del = Ui.textButton(ctx, "删除", Ui.ERR);
+        // 危险操作：卡面上用白字（红字压在橙/紫渐变上等于看不清），权重靠"无底色"压住
+        TextView del = Ui.textButton(ctx, "删除", w88);
         del.setOnClickListener(v -> host.onDeleteDevice(d));
         btns.addView(del, weight(0.62f, 2));
         card.addView(btns);
@@ -287,11 +344,12 @@ public final class DeviceHubView extends LinearLayout {
         return "桌面端";
     }
 
-    private TextView tag(String s, int color) {
-        TextView t = Ui.text(ctx, s, Ui.S_CAP1, color, false);
+    /** 渐变卡上的小标签：**白字 + 22% 白底胶囊**（卡面是饱和色，彩底彩字都读不清）。 */
+    private TextView tag(String s) {
+        TextView t = Ui.text(ctx, s, Ui.S_CAP1, 0xFFFFFFFF, false);
         t.setTypeface(Ui.medium());
-        t.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 5), Ui.dp(ctx, 9), Ui.dp(ctx, 5));
-        t.setBackground(Ui.pill(Ui.alpha(color, 0.10f)));
+        t.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
+        t.setBackground(Ui.pill(Ui.alpha(0xFFFFFFFF, 0.22f)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = Ui.dp(ctx, 6);
@@ -317,6 +375,8 @@ public final class DeviceHubView extends LinearLayout {
         card.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 26), Ui.dp(ctx, 18), Ui.dp(ctx, 26));
 
         // 「＋ 添加设备」：加号换成手写矢量（旧版是"＋"全角字符，字重/基线都跟着字体跑）
+        // 比例检查：字形 18dp vs 旁边 15.5sp 正文（行高 ≈ 21dp）= 0.86 —— 已在 0.9 附近，
+        // 属于"内联小加号"，**不再缩**（再小就和文字脱节了）。
         LinearLayout line = Ui.row(ctx);
         line.setGravity(Gravity.CENTER);
         line.addView(Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_plus,
@@ -336,16 +396,6 @@ public final class DeviceHubView extends LinearLayout {
         card.setOnClickListener(v -> showAddSheet());
         Ui.tap(card, 0.98f);
         return card;
-    }
-
-    /** 主按钮：与设置页同一套品牌色实心圆角（样式在 Ui.primaryButton）。 */
-    private TextView solid(String s) {
-        return Ui.primaryButton(ctx, s);
-    }
-
-    /** 次按钮：与设置页同一套浅色描边圆角（样式在 Ui.secondaryButton）。 */
-    private TextView outline(String s) {
-        return Ui.secondaryButton(ctx, s);
     }
 
     private LinearLayout.LayoutParams weight(float w, int marginStartDp) {
@@ -399,6 +449,8 @@ public final class DeviceHubView extends LinearLayout {
             Ui.applyScreenshotPolicy(w);
             w.setDimAmount(0.35f);
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            // 液态玻璃：底部弹窗背后真模糊（API 31+，不支持则静默回退到"只有遮罩"）
+            Ui.applyWindowBlur(w, 24f);
         }
         dlg.show();
     }
@@ -414,9 +466,10 @@ public final class DeviceHubView extends LinearLayout {
         lp.topMargin = Ui.dp(ctx, 8);
         row.setLayoutParams(lp);
 
+        // 字形 22→20dp（Ui.I_BODY）、底 24→22dp：旁边是 15.5sp 的标题行（行高 ≈ 21dp）。
         TextView glyph = Ui.iconBox(ctx,
                 scan ? com.dsh.mobile.R.drawable.ic_qr : com.dsh.mobile.R.drawable.ic_keyboard,
-                0x00000000, scan ? Ui.BRAND : Ui.INK_SUB, 24f, 0f, 22f);
+                0x00000000, scan ? Ui.BRAND : Ui.INK_SUB, 22f, 0f, Ui.I_BODY);
         row.addView(glyph);
 
         LinearLayout texts = Ui.col(ctx);

@@ -60,6 +60,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private final LinearLayout preInputRow;
     private final TextView title;
     private final TextView subtitle;
+    /** 顶栏的玻璃底（主题切换要换色，所以留引用）。 */
+    private android.graphics.drawable.GradientDrawable barBg;
+    /** 顶栏下沿的发丝线。 */
+    private View barLine;
     private final TextView banner;
     private final ListView list;
     private final ChatAdapter adapter;
@@ -129,9 +133,12 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         setBackgroundColor(Ui.BG);
 
         // ---- 顶部栏（iOS 导航栏：44dp、细箭头返回、标题 17sp 粗体、底部一条发丝线）
+        // 2026-10-03 液态玻璃：底色从纯 SURFACE 换成半透明 GLASS_BAR（浅色白 80% /
+        // 深色黑 60%），下沿的发丝线由 barLine 画（HAIRLINE，不再是明显的灰 SEP）。
         LinearLayout bar = Ui.row(ctx);
         barRow = bar;
-        bar.setBackgroundColor(Ui.SURFACE);
+        barBg = Ui.glassBar();
+        bar.setBackground(barBg);
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 5), Ui.dp(ctx, 8), Ui.dp(ctx, 5));
 
@@ -166,7 +173,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         bar.addView(menu);
         addView(bar, Ui.fill());
         View barLine = new View(ctx);
-        barLine.setBackgroundColor(Ui.SEP);
+        barLine.setBackgroundColor(Ui.HAIRLINE);
+        this.barLine = barLine;
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
         // 同 SettingsView：Ui.fill() 高度是 WRAP_CONTENT，普通 View 在 AT_MOST 下会吃满
@@ -186,7 +194,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 旧版浅色档用 PLAN_BG(#F2F2F7) 铺在 BG(#F2F2F7) 上，等于没有背景，提要像是浮在页面上。
         planView = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
         planView.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
-        planView.setBackground(new Ui.CardBg(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1f),
+        planView.setBackground(new Ui.CardBg(Ui.dp(ctx, 16), Ui.GLASS, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         planView.setMaxLines(8);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -295,7 +303,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 避免噪音），点开是底部弹窗列出这条会话的全部子会话，点一项即切过去。
         LinearLayout preInput = Ui.col(ctx);
         preInputRow = preInput;
-        preInput.setBackgroundColor(Ui.SURFACE);
+        preInput.setBackground(Ui.glassBar());
 
         subEntry = Ui.text(ctx, "", Ui.S_FOOT, Ui.BRAND, true);
         subEntry.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
@@ -324,17 +332,24 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         addView(preInput, Ui.fill());
 
         // ---- 输入条（iOS iMessage 制式：灰底胶囊输入框 + 圆形发送键）
+        //
+        // 2026-10-03 液态玻璃：整条从"贴着屏幕底的白色通栏"改成**悬浮玻璃胶囊**——
+        //   · 外层 12dp 左右边距 + 12dp 下边距，与内容之间留出呼吸（规范要 12~16dp）；
+        //   · 底 = GLASS_BAR 半透明玻璃 + 棱光/顶部高光（CardBg 的圆角 999 = 高/2，真胶囊）；
+        //   · 输入框自己的灰底撤掉（透明）—— 胶囊本身就是输入框的底，两层灰底会"脏"。
         LinearLayout inputBar = Ui.row(ctx);
-        inputBar.setBackgroundColor(Ui.SURFACE);
-        inputBar.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8));
+        inputBar.setBackground(new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
+                Ui.LINE, 0x00000000, 0f));
+        inputBar.setElevation(Ui.dp(ctx, 3f));
+        inputBar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8), Ui.dp(ctx, 8));
 
         input = new EditText(ctx);
         input.setHint("给 Agent 派个任务…");
         input.setTextSize(Ui.S_BODY);
         input.setHintTextColor(Ui.INK_FAINT);
         input.setTextColor(Ui.INK);
-        input.setBackground(Ui.round(Ui.dp(ctx, 19), Ui.FIELD_ALT_BG));
-        input.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 11), Ui.dp(ctx, 16), Ui.dp(ctx, 11));
+        input.setBackground(Ui.round(Ui.dp(ctx, 19), 0x00000000));   // 透明：胶囊是唯一的底
+        input.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 11), Ui.dp(ctx, 8), Ui.dp(ctx, 11));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_ENTER_ACTION);
@@ -367,7 +382,14 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
         input.setOnLongClickListener(v -> { host.onVoiceInput(); return true; });
         inputBar.addView(action);
-        addView(inputBar, Ui.fill());
+        // 悬浮：左右 12dp、下方 12dp（与内容留白 12~16dp 的规范一致）
+        LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        ibLp.leftMargin = Ui.dp(ctx, 12);
+        ibLp.rightMargin = Ui.dp(ctx, 12);
+        ibLp.topMargin = Ui.dp(ctx, 6);
+        ibLp.bottomMargin = Ui.dp(ctx, 12);
+        addView(inputBar, ibLp);
     }
 
     public String draftText() { return input.getText().toString(); }
@@ -823,7 +845,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      */
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
-        if (barRow != null) barRow.setBackgroundColor(Ui.SURFACE);
+        if (barRow != null) barBg = Ui.topBarGlass(barRow, barLine);
         if (backBtn != null) Ui.setIcon(backBtn, com.dsh.mobile.R.drawable.ic_chevron_left, Ui.BRAND);
         if (menuBtn != null) Ui.setIcon(menuBtn, com.dsh.mobile.R.drawable.ic_more, Ui.INK_SUB);
         if (title != null) title.setTextColor(Ui.INK);
@@ -833,7 +855,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             planView.setBackground(new Ui.CardBg(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1f),
                     Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         }
-        if (preInputRow != null) preInputRow.setBackgroundColor(Ui.SURFACE);
+        if (preInputRow != null) preInputRow.setBackground(Ui.glassBar());
         if (subEntry != null) {
             subEntry.setTextColor(Ui.BRAND);
             subEntry.setBackground(Ui.pill(Ui.BRAND_SOFT));
@@ -843,7 +865,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (input != null) {
             input.setTextColor(Ui.INK);
             input.setHintTextColor(Ui.INK_FAINT);
-            input.setBackground(Ui.round(Ui.dp(ctx, 19), Ui.FIELD_ALT_BG));
+            input.setBackground(Ui.round(Ui.dp(ctx, 19), 0x00000000));   // 透明：胶囊是唯一的底
         }
         if (pick != null) Ui.setIcon(pick, com.dsh.mobile.R.drawable.ic_plus, Ui.INK_SUB);
         if (toBottom != null) Ui.setIconBg(toBottom, com.dsh.mobile.R.drawable.ic_arrow_down,

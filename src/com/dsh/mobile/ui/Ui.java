@@ -132,6 +132,56 @@ public final class Ui {
     public static int BRAND_G1       = 0xFF0A84FF;
     public static int BRAND_G2       = 0xFF0071E3;
 
+    // ---- 液态玻璃（Liquid Glass，2026-10-03）
+    //
+    // 玻璃的「体」：半透明填充。为什么浅色取 60% 而不是更透：本 App 的页面底是均匀的
+    // #F2F2F7，玻璃再透也只是透出同一块灰底 —— 真正的通透感来自**面板比页面亮一点点 +
+    // 一条纯白的上棱**（见 CardBg 的棱光层）。60% 白落在 #F2F2F7 上约 #FAFAFC，
+    // 与页面底刚好差一档，棱光才"有东西可衬"。
+    //
+    // GLASS_SHEET 比 GLASS 更不透明（88~90%）：底部弹窗里全是文字，玻璃再漂亮也不能
+    // 牺牲可读性；iOS 的 sheet 本来就是"厚玻璃"，不是薄玻璃。
+    public static int GLASS        = 0x99FFFFFF;   // 卡片体（浅色 60% 白 / 深色 56% 黑）
+    public static int GLASS_SHEET  = 0xE0FFFFFF;   // 弹窗 / 抽屉体（88% / 90%）
+    public static int GLASS_BAR    = 0xCCFFFFFF;   // 顶部栏 / 输入条（80% / 60%）
+    public static int GLASS_RIM    = 0xFFFFFFFF;   // 棱光顶部（浅色纯白 1px，深色 15% 白）
+    public static int GLASS_LO     = 0x0F000000;   // 棱光底部（浅色 6% 黑，深色 5% 白）
+    /** 抽屉遮罩：不要死黑，25~35% 才"柔和"。 */
+    public static int SCRIM        = 0x59000000;   // #000 35%
+
+    // ---- 浅灰选中胶囊（2026-10-03 对齐 iOS 健康页参考图 ref-ios-health-cards.png）
+    //
+    // 参考图里侧栏选中行是一条**浅灰圆角胶囊**（≈#0000000F），**不是**蓝底白字。
+    // 蓝底白字会把"选中"做成一个高饱和色块，整页的重心被它拽走；浅灰胶囊只做最低限度的
+    // "我在这里"，彩色留给真正要强调的东西（图标、主按钮）—— 这正是参考图"克制用色"的来源。
+    //
+    // 深色档取 14% 白：纯黑底上 8% 白几乎看不见，14% 才刚好浮起来一档。
+    public static int SELECT_BG     = 0x0F000000;   // 浅色 6% 黑 / 深色 14% 白
+    public static int SELECT_BG_HI  = 0x14000000;   // 更明确一档（按下 / 强调项）
+
+    // ---- 大圆角渐变卡（对齐 ref-ios-health-cards.png 的「彩色分类卡」）
+    //
+    // 参考图：圆角 ≈24dp、**横向**饱和渐变（左亮右深）、白字、左上小图标、无描边无阴影。
+    // 六个色对取自参考图的六张分类卡，饱和度对齐（不荧光、也不灰）。
+    // 渐变与主题无关：白字压在饱和色上，浅色/深色两档对比度都够，所以不进 applyTheme。
+    public static final int[] GRAD_ORANGE = { 0xFFF0803C, 0xFFE9502B };
+    public static final int[] GRAD_PURPLE = { 0xFFC46BE0, 0xFFA63BD1 };
+    public static final int[] GRAD_INDIGO = { 0xFF7B86E8, 0xFF4A5AD6 };
+    public static final int[] GRAD_BLUE   = { 0xFF63BDF0, 0xFF3D93DD };
+    public static final int[] GRAD_ROSE   = { 0xFFF06A7A, 0xFFD93F55 };
+    public static final int[] GRAD_TEAL   = { 0xFF4FBFC9, 0xFF2E9AAD };
+    /** 全部渐变（{@link #gradientFor(String)} 按 key 稳定取一组）。 */
+    public static final int[][] GRADIENTS = {
+            GRAD_ORANGE, GRAD_PURPLE, GRAD_INDIGO, GRAD_BLUE, GRAD_ROSE, GRAD_TEAL };
+
+    /**
+     * 压在「**永远是白底**的胶囊」上的字色（渐变卡里的主按钮）。
+     *
+     * <p>不能用 {@link #INK}：INK 在深色档是白色，而这类胶囊的底固定是纯白（它要压在被
+     * 渐变染色的卡面上），白字压白底就消失了。所以它是一个**不随主题变**的固定深色。
+     */
+    public static final int INK_ON_WHITE = 0xFF1C1C1E;
+
     /** 当前生效的是不是深色色板。 */
     private static boolean dark = false;
 
@@ -160,7 +210,7 @@ public final class Ui {
             INK            = 0xFFFFFFFF;
             INK_SUB        = 0xFF98989F;
             INK_FAINT      = 0xFF7C7C80;
-            LINE           = 0x1FFFFFFF;   // 卡片发丝线：8% 白（深色下唯一能"立起卡片"的东西）
+            LINE           = 0x14FFFFFF;   // 卡片发丝线：#FFFFFF14（与 HAIRLINE 对齐；深色下唯一能"立起卡片"的东西）
             SEP            = 0xFF38383A;   // iOS opaqueSeparator
             PRESS          = 0xFF3A3A3C;
             OK             = 0xFF30D158;
@@ -198,6 +248,16 @@ public final class Ui {
             SHADOW         = 0x33000000;   // 纯黑底上阴影不可见，留着只为代码一致
             BRAND_G1       = 0xFF0A84FF;   // 渐变填充与白字对比度与浅色档一致，不随主题变
             BRAND_G2       = 0xFF0071E3;
+            // 液态玻璃（深色）：黑 45~60% 的玻璃体；纯黑底上白棱才看得见，所以深色档
+            // 严格按规范的 15% 白（浅色档相反，见下）。
+            GLASS          = 0x8F1C1C1E;   // #1C1C1E 56%
+            GLASS_SHEET    = 0xE61C1C1E;   // 90%
+            GLASS_BAR      = 0x99000000;   // #000 60%
+            GLASS_RIM      = 0x26FFFFFF;   // 白 15%
+            GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
+            SCRIM          = 0x59000000;   // 遮罩不随主题变
+            SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
+            SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
         } else {
             // ---- 浅色：iOS systemGroupedBackground #F2F2F7 + 纯白卡片 + #0A84FF 主色
             BG             = 0xFFF2F2F7;
@@ -248,28 +308,50 @@ public final class Ui {
             SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
             BRAND_G1       = 0xFF0A84FF;
             BRAND_G2       = 0xFF0071E3;
+            // 液态玻璃（浅色）：卡片体 60% 白 → 落在 #F2F2F7 上约 #FAFAFC，比页面亮一档。
+            // GLASS_RIM 用**纯白**而不是规范的 10~14%：浅色卡片本身近白，12% 白等于没画；
+            // 1px 纯白棱在 #FAFAFC 上才是那条看得见的高光边（设计文档里已标注该取舍）。
+            GLASS          = 0x99FFFFFF;   // 白 60%
+            GLASS_SHEET    = 0xE0FFFFFF;   // 白 88%
+            GLASS_BAR      = 0xCCFFFFFF;   // 白 80%
+            GLASS_RIM      = 0xFFFFFFFF;   // 纯白 1px
+            GLASS_LO       = 0x0F000000;   // 黑 6%（下棱微暗）
+            SCRIM          = 0x59000000;   // 遮罩不随主题变
+            SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
+            SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
         }
     }
 
     // ============================================================ 字号 / 行高 / 圆角（iOS 类型比例）
     //
-    // 与系统设置同款层级：大标题 34 · 标题 22 · 正文 17 · 次要 15 · 脚注 13 · 说明 11~12。
-    // 视图里尽量用这些常量，别再各写一个 15.5f/12.5f —— 层级一散，"iOS 感"就没了。
-    public static final float S_LARGE   = 34f;   // Large Title（我的设备 / 对话）
-    public static final float S_TITLE2  = 22f;   // Title2
-    public static final float S_TITLE3  = 20f;   // Title3
-    public static final float S_HEAD    = 17f;   // Headline / Body（设置行标题、气泡正文）
-    public static final float S_BODY    = 17f;
-    public static final float S_CALLOUT = 16f;   // Callout（按钮文字）
-    public static final float S_SUB     = 15f;   // Subheadline
-    public static final float S_FOOT    = 13f;   // Footnote（组标题、说明）
-    public static final float S_CAP1    = 12f;   // Caption1
-    public static final float S_CAP2    = 11f;   // Caption2（徽标）
+    // **全 App 的字号只有这一处**：视图里不要再写 15.5f / 12.5f 这类字面量，层级一散，
+    // "iOS 感"就没了（旧版就是散在各页，才出现同一档文字大小不一）。
+    //
+    // 2026-10-03 回归调整：上一轮 iOS 风格重做把字号整体调大（大标题 34 / 正文 17 / 次要 15 /
+    // 组标题 13），用户反馈"字体太大，不如之前效果好"。这里按约 -10%~-15% 整体下调，
+    // 并对照改版前的实测值（大标题 27、气泡 15.5/14.5、列表标题 15.5、按钮 14.5、
+    // 说明 12.5/11.5）取"比改版前略大一点点"的中间值 —— 既回到原来的观感，又保留 iOS 层级。
+    // 层级比例保持不变：大标题 29 > 标题 19/17.5 > 正文 15.5 > 次要 13.5 > 脚注 12.5 > 说明 11.5/10.5。
+    public static final float S_LARGE   = 29f;   // Large Title（我的设备 / 对话） 改前 34
+    public static final float S_TITLE2  = 19f;   // Title2                        改前 22
+    public static final float S_TITLE3  = 17.5f; // Title3                        改前 20
+    public static final float S_HEAD    = 15.5f; // Headline / Body（设置行标题、气泡正文）改前 17
+    public static final float S_BODY    = 15.5f; // Body                          改前 17
+    public static final float S_CALLOUT = 14.5f; // Callout（按钮文字）            改前 16
+    public static final float S_SUB     = 13.5f; // Subheadline                   改前 15
+    public static final float S_FOOT    = 12.5f; // Footnote（组标题、说明）        改前 13
+    public static final float S_CAP1    = 11.5f; // Caption1                      改前 12
+    public static final float S_CAP2    = 10.5f; // Caption2（徽标）               改前 11
 
     /** iOS 分组卡片圆角。 */
-    public static final float R_CARD  = 14f;
+    public static final float R_CARD  = 20f;
+    /**
+     * 大圆角「特征卡」圆角（对齐 ref-ios-health-cards.png：那张彩色分类卡的圆角）。
+     * 只给渐变卡/首屏主卡用 —— 普通信息卡仍是 {@link #R_CARD}，圆角档一共就 20/24/26 三档。
+     */
+    public static final float R_CARD_BIG = 24f;
     /** iOS 弹窗（bottom sheet）顶部圆角。 */
-    public static final float R_SHEET = 22f;
+    public static final float R_SHEET = 26f;
     /** 按钮圆角（胶囊）。 */
     public static final float R_PILL  = 999f;
     /** iOS 列表行最小高度。 */
@@ -355,6 +437,148 @@ public final class Ui {
         return d;
     }
 
+    // ------------------------------------------------------------ 参考图精修：渐变卡 / 选中胶囊
+
+    /**
+     * 大圆角渐变卡的底：{@link #R_CARD_BIG}（24dp）圆角 + **横向**饱和渐变。
+     *
+     * <p>方向对齐参考图：左端更亮更饱和、右端沉下去，卡片于是有了"光从左上打过来"的实体感。
+     * 只用 {@code GradientDrawable} 自带的 {@code LEFT_RIGHT}，零依赖。
+     * 参考图里的渐变卡**没有描边也没有阴影** —— 所以这里不套 {@link CardBg}。
+     */
+    public static GradientDrawable featureFill(Context c, int[] colors) {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, colors);
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setCornerRadius(dp(c, R_CARD_BIG));
+        return d;
+    }
+
+    /**
+     * 按 key 稳定取一组渐变（{@link #GRADIENTS} 里挑一个）。
+     *
+     * <p>为什么用 key 而不是随机：同一台设备每次进「我的设备」颜色必须一样，
+     * 否则每次刷新卡片都换色，看着像"页面在闪"。key 用设备 id 即可稳定。
+     */
+    public static int[] gradientFor(String key) {
+        int h = 0;
+        if (key != null) {
+            for (int i = 0; i < key.length(); i++) h = h * 31 + key.charAt(i);
+        }
+        return GRADIENTS[(h & 0x7fffffff) % GRADIENTS.length];
+    }
+
+    /**
+     * 选中态的**浅灰圆角胶囊**（列表行 / 侧栏 / 分段 / 选项行）。
+     *
+     * <p>对齐参考图：选中 = 浅灰胶囊，**不是**蓝底白字。彩色只留给那一项里的图标/主按钮。
+     *
+     * @param radiusDp 圆角；列表行一般 10~14，参考图侧栏选中行约 10dp
+     */
+    public static GradientDrawable selectPill(Context c, float radiusDp) {
+        return round(dp(c, radiusDp), SELECT_BG);
+    }
+
+    /** 卡片内的分隔线：1px 发丝线（{@link #HAIRLINE}），**不是** SEP 那种看得见的灰线。 */
+    public static View cardDivider(Context c) {
+        return barHairline(c);
+    }
+
+    // ------------------------------------------------------------ 液态玻璃：顶栏 / 输入条 / 真模糊
+
+    /**
+     * 顶部栏 / 输入条的玻璃底（**不带棱光**，只有半透明体）。
+     *
+     * <p>为什么顶栏不套 {@link CardBg}：卡片那套棱光是"四周一圈、上亮下暗"，套在一条
+     * 通栏的顶栏上会在**下沿**留下一道亮线 —— 而 iOS 导航栏的下沿是一条发丝线，不是高光。
+     * 顶栏的"玻璃感"来自"内容从下面透过去"，所以这里只给半透明体，下沿交给
+     * {@link #barHairline} 画的 1px。
+     */
+    public static GradientDrawable glassBar() {
+        return round(0, GLASS_BAR);
+    }
+
+    /** 顶栏下沿的发丝线（1px、浅色 #00000014 / 深色 #FFFFFF1A）。不要用 SEP 那种明显的灰线。 */
+    public static View barHairline(Context c) {
+        View v = new View(c);
+        v.setBackgroundColor(HAIRLINE);
+        v.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 0.5f))));
+        return v;
+    }
+
+    /**
+     * 把一个顶栏刷成玻璃：bar 换半透明体，line（下沿发丝线）换发丝色。
+     *
+     * @return bar 的玻璃底 drawable；调用方可以 {@code setAlpha} 做"滚动时逐渐变玻璃"
+     */
+    public static GradientDrawable topBarGlass(View bar, View line) {
+        GradientDrawable bg = glassBar();
+        if (bar != null) bar.setBackground(bg);
+        if (line != null) line.setBackgroundColor(HAIRLINE);
+        return bg;
+    }
+
+    /** 系统是否支持真正的窗口/视图模糊（Android 12 / API 31 起）。 */
+    public static boolean blurSupported() {
+        return android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S;
+    }
+
+    /**
+     * 给一个 View **背后的内容**上真模糊（用于同窗口内的抽屉：内容是兄弟 View）。
+     *
+     * <p>{@code RenderEffect} 是框架自带的（API 31），不需要任何第三方模糊库。
+     * 必须同时切到硬件层：模糊结果会被缓存成一张离屏贴图，抽屉滑动时不再逐帧重算。
+     *
+     * <p>不支持（API < 31）或设备拒绝时**静默跳过** —— 调用方本来就有遮罩兜底，
+     * 绝不能因为模糊不可用就崩或留白。
+     *
+     * @return true = 模糊真的挂上了
+     */
+    public static boolean setBackdropBlur(View v, float radiusDp) {
+        if (v == null || !blurSupported()) return false;
+        try {
+            if (!v.isHardwareAccelerated()) return false;
+            float r = Math.max(1f, dp(v.getContext(), radiusDp));
+            v.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            v.setRenderEffect(android.graphics.RenderEffect.createBlurEffect(
+                    r, r, android.graphics.Shader.TileMode.CLAMP));
+            return true;
+        } catch (Throwable t) {
+            try { v.setRenderEffect(null); } catch (Throwable ignored) { }
+            return false;
+        }
+    }
+
+    /** 撤掉 {@link #setBackdropBlur} 挂上的模糊与硬件层（关抽屉时调，别一直占着离屏贴图）。 */
+    public static void clearBackdropBlur(View v) {
+        if (v == null) return;
+        try { v.setRenderEffect(null); } catch (Throwable ignored) { }
+        try { v.setLayerType(View.LAYER_TYPE_NONE, null); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 独立窗口（Dialog）的真模糊：系统把**窗口背后的界面**模糊后当作窗口背景画出来。
+     *
+     * <p>前提是窗口背景本身是透明的（调用方已经 {@code setBackgroundDrawable(TRANSPARENT)}），
+     * 否则模糊被不透明背景盖住，等于没做。ROM 关掉模糊（windowBlurEnabled=false）时
+     * 什么都不会发生，窗口照旧显示自己的玻璃面板 —— 这就是回退。
+     *
+     * <p>**故意不给 AlertDialog 用**：AlertDialog 的"面板"就是 windowBackground，
+     * 改成透明会让面板整个消失，代价远大于收益。
+     *
+     * @return true = 模糊真的挂上了
+     */
+    public static boolean applyWindowBlur(android.view.Window w, float radiusDp) {
+        if (w == null || !blurSupported()) return false;
+        try {
+            w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+            w.setBackgroundBlurRadius(Math.max(1, dp(w.getContext(), radiusDp)));
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 顶部安全区（状态栏）高度。 */
     public static int statusBar(Context c) {
         int id = c.getResources().getIdentifier("status_bar_height", "dimen", "android");
@@ -371,15 +595,18 @@ public final class Ui {
         t.setText(s);
         t.setTextSize(sizeSp);
         t.setTextColor(color);
-        t.setLineSpacing(dp(c, 3), 1.06f);
+        // 行高随字号一起收：字号调小后仍按固定 3dp 加行距会显得松散"空"，
+        // 这里按档给额外行距（大标题 3 / 正文 2 / 小字 1），比例与字号同步。
+        t.setLineSpacing(dp(c, sizeSp >= 24f ? 3f : (sizeSp >= 14f ? 2f : 1f)), 1.06f);
         t.setIncludeFontPadding(false);
         // 「加粗」分两档（2026-10-02 高级感返工）：
         //   · 大标题（≥24sp）才用真 Bold —— 那是唯一需要"压得住画面"的地方；
-        //   · 其余一律 medium。中文字形笔画密，DEFAULT_BOLD 在 17sp 上会把字糊成一团，
+        //   · 其余一律 medium。中文字形笔画密，DEFAULT_BOLD 在 15sp 上会把字糊成一团，
         //     这正是"看着不精致"的一个主要来源；medium 有分量又不糊。
         if (bold) t.setTypeface(sizeSp >= 24f ? Typeface.DEFAULT_BOLD : medium());
-        // 大标题收紧字距（-0.02em），是 iOS Large Title 的关键细节：字大 + 字距松 = 廉价
-        if (sizeSp >= 30f) t.setLetterSpacing(-0.02f);
+        // 大标题收紧字距（-0.02em），是 iOS Large Title 的关键细节：字大 + 字距松 = 廉价。
+        // 阈值跟着 S_LARGE 走（29sp）：写死 30 的话字号一调小就悄悄失效了。
+        if (sizeSp >= 28f) t.setLetterSpacing(-0.02f);
         return t;
     }
 
@@ -503,6 +730,88 @@ public final class Ui {
 
     /** 按压反馈（按钮默认 0.97 的缩放）。 */
     public static void tap(View v) { tap(v, 0.97f); }
+
+    /** 每个父容器上的 {@link TouchDelegateGroup}（键是父容器本身；弱引用，容器回收后自动消失）。 */
+    private static final java.util.WeakHashMap<android.view.ViewGroup, TouchDelegateGroup>
+            TOUCH_DELEGATES = new java.util.WeakHashMap<>();
+
+    /**
+     * 把 {@code v} 的**可点区域**撑到至少 {@code minDp} —— 视觉尺寸一点不动。
+     *
+     * <p>为什么需要：这一轮把图标/按钮的**视觉**尺寸调小了（图标 ≈ 正文行高），
+     * 但手指没变小 —— 视觉一缩就点不准了。这里在**父容器**上装一个
+     * {@link android.view.TouchDelegate}，把子 View 的触区向外扩：
+     * 点"按钮旁边一点点"也算点按钮。
+     *
+     * <p>两个限制，调用方要知道：
+     * <ol>
+     *   <li>外扩矩形最多到**父容器的边界**（父容器不够大时能扩多少扩多少）——
+     *       所以顶栏那种一行只有 36dp 高的容器里，实际触区是 36dp 而不是 48dp；</li>
+     *   <li>用 post 延迟到布局完成后再装（那时才有真实的宽高与父坐标）。</li>
+     * </ol>
+     *
+     * <p>父容器可能有多个这样的子 View，而框架的 {@code ViewGroup.setTouchDelegate}
+     * 一个父容器只认一个 —— 所以按父容器存一个 {@link TouchDelegateGroup}。
+     */
+    public static void expandTouch(final View v, final float minDp) {
+        if (v == null) return;
+        v.post(new Runnable() {
+            @Override public void run() {
+                if (v.getWidth() <= 0 || v.getHeight() <= 0) return;
+                android.view.ViewParent vp = v.getParent();
+                if (!(vp instanceof android.view.ViewGroup)) return;
+                android.view.ViewGroup parent = (android.view.ViewGroup) vp;
+                int min = dp(v.getContext(), minDp);
+                int dx = Math.max(0, (min - v.getWidth()) / 2);
+                int dy = Math.max(0, (min - v.getHeight()) / 2);
+                if (dx == 0 && dy == 0) return;   // 本来就够大
+                // 矩形必须是**父坐标系**的（getHitRect 给的就是子 View 在父里的位置），
+                // 再夹进父容器边界：越界的部分父容器根本收不到事件，白扩。
+                android.graphics.Rect r = new android.graphics.Rect();
+                v.getHitRect(r);
+                r.left   = Math.max(0, r.left - dx);
+                r.top    = Math.max(0, r.top - dy);
+                r.right  = Math.min(parent.getWidth(), r.right + dx);
+                r.bottom = Math.min(parent.getHeight(), r.bottom + dy);
+                if (r.width() <= v.getWidth() && r.height() <= v.getHeight()) return;
+                // 父容器自己可点（被 Ui.tap/tapRow 挂过触摸监听）时**不接管**：
+                // 框架没有公开的 getOnTouchListener()，接管就会把它的按压反馈顶掉。
+                // 目前所有调用点（顶栏行 / 输入条）都是不可点的普通容器，这条守卫是保险。
+                if (parent.isClickable()) return;
+                TouchDelegateGroup g = TOUCH_DELEGATES.get(parent);
+                if (g == null) {
+                    g = new TouchDelegateGroup();
+                    TOUCH_DELEGATES.put(parent, g);
+                    parent.setOnTouchListener(g);
+                }
+                g.add(new android.view.TouchDelegate(r, v));
+            }
+        });
+    }
+
+    /**
+     * 一个父容器上挂多个 {@link android.view.TouchDelegate} 的合集。
+     *
+     * <p>为什么需要它：{@code ViewGroup.setTouchDelegate} 只能挂一个，一行里三颗按钮
+     * 就会互相覆盖。这里自己转发：父容器**没被子 View 吃掉**的事件（也就是落在按钮
+     * 外扩区里的那些）逐个交给各按钮的 delegate 试一遍。
+     *
+     * <p>不消费事件时返回 false —— 父容器自己的 OnClickListener 照旧生效。
+     * 父容器**原本**的 OnTouchListener 无法读取（框架没公开 getOnTouchListener），
+     * 所以 {@link #expandTouch} 只在父容器不可点时才接管它。
+     */
+    private static final class TouchDelegateGroup implements View.OnTouchListener {
+        private final List<android.view.TouchDelegate> delegates = new ArrayList<>();
+
+        void add(android.view.TouchDelegate d) { delegates.add(d); }
+
+        @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+            for (int i = 0; i < delegates.size(); i++) {
+                if (delegates.get(i).onTouchEvent(e)) return true;
+            }
+            return false;
+        }
+    }
 
     /**
      * 列表行的按下高亮：正常态用传进来的 drawable，按下时换成 PRESS 灰底。
@@ -727,7 +1036,10 @@ public final class Ui {
 
     private static LinearLayout card(Context c, int accent) {
         LinearLayout c0 = col(c);
-        c0.setBackground(new CardBg(dp(c, R_CARD), SURFACE, dp(c, 1f), LINE, accent, dp(c, 3f)));
+        // 玻璃卡：GLASS 半透明体 + 发丝描边 + 顶部棱光/高光（都在 CardBg 里）。
+        // 注意填充是**半透明**的，所以下面那层 elevation 阴影是从卡片轮廓投出去的，
+        // 不会被卡片自己盖住。
+        c0.setBackground(new CardBg(dp(c, R_CARD), GLASS, dp(c, 1f), LINE, accent, dp(c, 3f)));
         c0.setElevation(dp(c, 2f));
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -745,8 +1057,13 @@ public final class Ui {
         private final android.graphics.Paint p =
                 new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Path shape = new android.graphics.Path();
+        private final android.graphics.RectF rf = new android.graphics.RectF();
         private final float radius, stroke, barW;
         private final int fill, line, accent;
+        /** true = 只圆上两角（底部弹窗那种"贴着屏幕下缘"的玻璃）。 */
+        private boolean topOnly;
+        /** 顶部高光带的像素高（1.5dp），由构造时的 density 决定。 */
+        private final float hiH;
 
         public CardBg(float radius, int fill, float stroke, int line, int accent, float barW) {
             this.radius = radius;
@@ -755,21 +1072,32 @@ public final class Ui {
             this.line = line;
             this.accent = accent;
             this.barW = barW;
+            this.hiH = Math.max(1f, stroke * 1.5f);
         }
+
+        /** 只圆上两角（底部弹窗 / sheet 用）。返回 this 便于链式写。 */
+        public CardBg topOnly(boolean v) { this.topOnly = v; return this; }
 
         @Override
         public void draw(android.graphics.Canvas cv) {
             android.graphics.Rect b = getBounds();
             float w = b.width(), h = b.height();
             float inset = stroke / 2f;
+            rf.set(inset, inset, w - inset, h - inset);
             shape.reset();
-            shape.addRoundRect(new android.graphics.RectF(inset, inset, w - inset, h - inset),
-                    radius, radius, android.graphics.Path.Direction.CW);
+            // 上两角圆 / 下两角直角（topOnly）——圆角顺序：左上、右上、右下、左下
+            shape.addRoundRect(rf, topOnly
+                    ? new float[] { radius, radius, radius, radius, 0f, 0f, 0f, 0f }
+                    : new float[] { radius, radius, radius, radius, radius, radius, radius, radius },
+                    android.graphics.Path.Direction.CW);
 
+            // ① 玻璃体（半透明填充）
             p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setShader(null);
             p.setColor(fill);
             cv.drawPath(shape, p);
 
+            // ② 左侧 3dp 强调条（被卡片圆角裁掉才不露方角）
             if (android.graphics.Color.alpha(accent) != 0 && barW > 0f) {
                 cv.save();
                 cv.clipPath(shape);
@@ -778,10 +1106,35 @@ public final class Ui {
                 cv.restore();
             }
 
+            // ③ 发丝描边（原有能力：让边缘不发虚）
             p.setStyle(android.graphics.Paint.Style.STROKE);
             p.setStrokeWidth(stroke);
+            p.setShader(null);
             p.setColor(line);
             cv.drawPath(shape, p);
+
+            // ④ 顶部高光边 + 底部微暗（液态玻璃的关键：玻璃的"反光棱"）。
+            //
+            // **真机教训（2026-10-03，PGT-AN10）**：这里原来用 LinearGradient 描一条
+            // 纵向渐变棱 + 一条横向渐变高光带，逻辑上没问题，但真机逐像素采样发现
+            // **两者一个像素都没画出来**（卡片最上面一行 = 玻璃体自身亮度 251，没有任何
+            // 更亮的一行）。所以改成**纯色叠层**：把高光做成 4 条逐级变淡的实心细带
+            // （1.0 / 0.5 / 0.25 / 0.10 的 GLASS_RIM）—— 不用 shader，肉眼就是一条柔和
+            // 的顶光，且与已经验证能画出来的发丝线走同一条绘制路径。
+            cv.save();
+            cv.clipPath(shape);
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setShader(null);
+            float band = Math.max(1f, stroke * 0.6f);
+            float[] bandAlpha = { 1f, 0.5f, 0.25f, 0.10f };
+            for (int i = 0; i < bandAlpha.length; i++) {
+                p.setColor(alpha(GLASS_RIM, bandAlpha[i]));
+                cv.drawRect(0f, band * i, w, band * (i + 1), p);
+            }
+            // 底棱：一条极淡的暗线，让玻璃"有厚度"（浅色 6% 黑 / 深色 5% 白）
+            p.setColor(GLASS_LO);
+            cv.drawRect(0f, h - Math.max(1f, stroke), w, h, p);
+            cv.restore();
         }
 
         @Override public void setAlpha(int a) { p.setAlpha(a); invalidateSelf(); }
@@ -818,6 +1171,33 @@ public final class Ui {
         return iconBox(c, com.dsh.mobile.R.drawable.ic_chevron_right, 0x00000000, INK_FAINT,
                 18f, 0f, 16f);
     }
+
+    // ------------------------------------------------------------ 图标 / 按钮的尺寸比例（2026-10-03 调校）
+
+    // **比例规则**：图标的视觉尺寸 ≈ 相邻正文行高的 0.9~1.1 倍。
+    //
+    // 字号是基准，图标必须跟着字号走 —— 上一轮把字号整体调小 10~15% 之后图标没跟着缩，
+    // 相对就"长大"了，这正是用户说的"图标也不要太大，整体适配文字就行"。
+    //     正文 15.5sp（行高 ≈ 21dp）→ 图标 20dp（I_BODY）
+    //     小字 12.5~13.5sp（行高 ≈ 17dp）→ 图标 15dp（各页现在就是 14~16dp，本轮不动）
+    //     大标题 29sp 旁的圆形按钮 → 图标 18dp + 圆底 36dp（I_TITLE / B_ICON）
+    // 两类例外（不套上式）：
+    //     · 方向细箭头（chevron）：本就是"比文字小一号"的指示符，15~16dp；
+    //     · 空态插图（"大图标 + 一句话"）：是排版元素，44dp（I_EMPTY）。
+    //
+    // 容器随图标同步缩：IconBg 的圆底 / iconBox 的圆角方块，边长 ≈ 图标 × 1.9~2.1 ——
+    // 只缩字形不缩底，看着还是"图标很大"。
+    //
+    // **热区与视觉解耦**：视觉可以变小，可点区域一律 ≥48dp（见 {@link #expandTouch}）。
+
+    /** 图标尺寸：配正文/按钮（15.5sp，行高 ≈ 21dp）。 */
+    public static final float I_BODY  = 20f;
+    /** 图标尺寸：配大标题（29sp）旁的圆形按钮。 */
+    public static final float I_TITLE = 18f;
+    /** 图标底（圆形按钮 / 圆角方块）边长：≈ 图标 × 2。 */
+    public static final float B_ICON  = 36f;
+    /** 空态插图尺寸（唯一允许超出正文比例的图标）。 */
+    public static final float I_EMPTY = 44f;
 
     // ------------------------------------------------------------ 矢量图标（手写，无依赖）
 
@@ -896,11 +1276,15 @@ public final class Ui {
     }
 
     /**
-     * 圆形图标按钮（默认 36dp 触区 + 19dp 图标），替代原来的 {@link #circleButton} 字符版。
+     * 圆形图标按钮（默认 36dp 圆底 + 18dp 图标；**可点区域外扩到 48dp**），
+     * 替代原来的 {@link #circleButton} 字符版。
      * 返回的仍然是 {@code TextView}（空文本），字段类型与 applyTheme 分支都不用改。
+     *
+     * <p>2026-10-03：图标从 19dp 收到 18dp（I_TITLE）—— 字号调小后图标要跟着缩；
+     * 圆底 36dp 保持不变（它就是触区的载体，缩了会让手指更难点）。
      */
     public static TextView circleIconButton(Context c, int resId, int fill, int fg) {
-        return circleIconButton(c, resId, fill, fg, 19f, 36f);
+        return circleIconButton(c, resId, fill, fg, I_TITLE, B_ICON);
     }
 
     public static TextView circleIconButton(Context c, int resId, int fill, int fg,
@@ -911,6 +1295,8 @@ public final class Ui {
         t.setLayoutParams(new LinearLayout.LayoutParams(dp(c, boxDp), dp(c, boxDp)));
         t.setClickable(true);
         tap(t, 0.92f);
+        // 圆形图标按钮天生比 48dp 小（36dp 才好看）：视觉不动，触区外扩到 48dp。
+        expandTouch(t, 48f);
         return t;
     }
 
@@ -1095,14 +1481,20 @@ public final class Ui {
      * ① {@link #brandPill()} 把圆角设成 999（无论多高都是胶囊）；
      * ② 用 {@code GradientDrawable.setColors} 铺一层 #0A84FF → #0071E3 的极窄渐变，
      *    上沿微亮、下沿微沉，按钮立刻有了"实体"的光感。
+     * <p>2026-10-03「按钮太胖、字显得小」调校：用户要的是**按钮变小**，不是把字放大。
+     * 旧版 ≈51dp 高（minHeight 50 + 上下各 15dp 内边距），一行里并排三个就像三块砖。
+     * 现在视觉高度 42dp、水平内边距 20→18dp；字号 S_HEAD **不动**（字号归全局类型比例管）。
+     *
+     * <p>但**可点区域不许跟着缩**：视图仍是 48dp（iOS 最小触区），多出的 3dp 上下
+     * 用 {@link #insetV} 把胶囊缩进去 —— 视觉变小、热区不变。
      */
     public static TextView primaryButton(Context c, String s) {
         TextView t = text(c, s, S_HEAD, ON_BRAND, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
-        t.setMinHeight(dp(c, 50));
-        t.setPadding(dp(c, 20), dp(c, 15), dp(c, 20), dp(c, 15));
-        t.setBackground(brandPill());
+        t.setMinHeight(dp(c, B_BTN_TOUCH));
+        t.setPadding(dp(c, 18), dp(c, 10), dp(c, 18), dp(c, 10));
+        t.setBackground(insetV(c, brandPill(), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
         return t;
@@ -1127,14 +1519,40 @@ public final class Ui {
         return brandGradient(999f);
     }
 
-    /** 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），**无边框**胶囊，带按压反馈。 */
+    /**
+     * 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），**无边框**胶囊，带按压反馈。
+     * 尺寸与 {@link #primaryButton} 完全一致（同一排并排时不能一高一矮）。
+     */
     public static TextView secondaryButton(Context c, String s) {
         TextView t = text(c, s, S_HEAD, BRAND, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
-        t.setMinHeight(dp(c, 50));
-        t.setPadding(dp(c, 20), dp(c, 15), dp(c, 20), dp(c, 15));
-        t.setBackground(pill(CHIP_BG));
+        t.setMinHeight(dp(c, B_BTN_TOUCH));
+        t.setPadding(dp(c, 18), dp(c, 10), dp(c, 18), dp(c, 10));
+        t.setBackground(insetV(c, pill(CHIP_BG), (B_BTN_TOUCH - B_BTN_H) / 2f));
+        t.setClickable(true);
+        tap(t);
+        return t;
+    }
+
+    /**
+     * 任意底色的胶囊按钮：**与 {@link #primaryButton} 完全同一套尺寸与热区**
+     * （视觉高 {@link #B_BTN_H}、可点高 {@link #B_BTN_TOUCH}、同一段按压反馈）。
+     *
+     * <p>为什么要它：渐变卡（见 {@link #featureFill}）上的按钮不能再用蓝色主按钮 ——
+     * 蓝胶囊压在一张饱和色卡上是"两块重色打架"。但尺寸/热区必须与别处一致，
+     * 所以把「配色」抽成参数，把「规格」留在这里唯一一份。
+     *
+     * @param fill 胶囊底色（渐变卡上用纯白或 22% 白）
+     * @param fg   文字色（纯白底配 {@link #INK_ON_WHITE}）
+     */
+    public static TextView pillButton(Context c, String s, int fill, int fg) {
+        TextView t = text(c, s, S_HEAD, fg, false);
+        t.setTypeface(medium());
+        t.setGravity(Gravity.CENTER);
+        t.setMinHeight(dp(c, B_BTN_TOUCH));
+        t.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10));
+        t.setBackground(insetV(c, pill(fill), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
         return t;
@@ -1146,18 +1564,36 @@ public final class Ui {
      * <p>危险操作绝不能做成一块大红底 —— 那是"土"的另一半来源。iOS 的删除入口就是
      * 一行红字，视觉权重低但语义明确，不会把整个页面的注意力拽过去。
      *
+     * <p>无底色 = 没有"视觉高度"，所以这里只把**可点区域**统一到 48dp
+     * （旧版 46dp 高、内边距 14/13；与同排的胶囊按钮并排时看着更矮，现在齐平）。
+     *
      * @param color 文字色（危险操作用 {@link #ERR}）
      */
     public static TextView textButton(Context c, String s, int color) {
         TextView t = text(c, s, S_HEAD, color, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
-        t.setMinHeight(dp(c, 46));
-        t.setPadding(dp(c, 14), dp(c, 13), dp(c, 14), dp(c, 13));
+        t.setMinHeight(dp(c, B_BTN_TOUCH));
+        t.setPadding(dp(c, 12), dp(c, 9), dp(c, 12), dp(c, 9));
         t.setBackground(pill(0x00000000));
         t.setClickable(true);
         tap(t);
         return t;
+    }
+
+    /**
+     * 按钮的**视觉**高度（dp）：胶囊真正画出来的高度。
+     * 视图高度是 {@link #B_BTN_TOUCH}（48dp，热区），多出来的部分由 {@link #insetV} 缩掉。
+     */
+    public static final float B_BTN_H = 42f;
+    /** 按钮的**可点**高度（dp）：iOS 最小触区，视觉再小也不许低于它。 */
+    public static final float B_BTN_TOUCH = 48f;
+
+    /** 把 drawable 在**上下**各缩进 {@code vDp}：视觉变小、控件本身（=热区）不变。 */
+    private static android.graphics.drawable.Drawable insetV(
+            Context c, android.graphics.drawable.Drawable d, float vDp) {
+        int v = dp(c, vDp);
+        return new android.graphics.drawable.InsetDrawable(d, 0, v, 0, v);
     }
 
     /** 按钮置灰：字段没填全时主按钮不可点（半透明 + 不吃点击）。 */
@@ -1170,14 +1606,17 @@ public final class Ui {
 
     /**
      * 手搓底部弹窗的上圆角卡片（不引入 Material BottomSheet 依赖）。
-     * iOS bottom sheet：**22dp 上圆角**、卡片色底、顶部 10dp 留给抓手。
+     * iOS bottom sheet：**26dp 上圆角**、顶部 10dp 留给抓手。
+     *
+     * <p>2026-10-03 液态玻璃：底不再是纯色 SURFACE，而是 {@link #GLASS_SHEET}
+     * （88~90% 不透明，弹窗里全是文字，可读性优先）+ 同一条 26dp 上圆角的**棱光**
+     * （顶部纯白/15% 白 1px、底部微暗）—— 玻璃的"厚度感"就来自这道上棱。
+     * 用 CardBg 而不是 GradientDrawable，是为了让它自动带上棱光与顶部高光边。
      */
     public static LinearLayout sheetCard(Context c) {
         LinearLayout box = col(c);
-        GradientDrawable bg = round(0, SURFACE);
-        int r = dp(c, R_SHEET);
-        bg.setCornerRadii(new float[] { r, r, r, r, 0f, 0f, 0f, 0f });
-        box.setBackground(bg);
+        box.setBackground(new CardBg(dp(c, R_SHEET), GLASS_SHEET, dp(c, 1f), LINE,
+                0x00000000, 0f).topOnly(true));
         box.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 16));
         return box;
     }

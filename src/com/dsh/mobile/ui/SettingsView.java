@@ -88,8 +88,9 @@ public final class SettingsView extends LinearLayout {
         setBackgroundColor(Ui.BG);
 
         // 顶部栏：iOS 导航栏（44dp 高、细箭头返回、标题 17sp 粗体、底部一条发丝线）
+        // 2026-10-03 液态玻璃：底色改成半透明 GLASS_BAR，下沿发丝线改 HAIRLINE。
         LinearLayout bar = Ui.row(ctx);
-        bar.setBackgroundColor(Ui.SURFACE);
+        bar.setBackground(Ui.glassBar());
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 6), Ui.dp(ctx, 12), Ui.dp(ctx, 6));
         TextView back = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_chevron_left,
@@ -102,7 +103,7 @@ public final class SettingsView extends LinearLayout {
         bar.addView(barTitle);
         addView(bar, Ui.fill());
         View barLine = new View(ctx);
-        barLine.setBackgroundColor(Ui.SEP);
+        barLine.setBackgroundColor(Ui.HAIRLINE);
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
         // 必须用上面那条 1px 的 LayoutParams：Ui.fill() 是 WRAP_CONTENT，而普通 View 在
@@ -384,9 +385,10 @@ public final class SettingsView extends LinearLayout {
     /**
      * 主题变了：用新色板重建整棵树。
      *
-     * 重建会丢两样东西，这里显式保住：
+     * 重建会丢三样东西，这里显式保住：
      *   ① 用户正在输入但还没保存的草稿（地址 / 令牌 / 名称）；
-     *   ② 各分区的展开 / 收起状态（靠 sectionOpen 表，见 section()）。
+     *   ② 各分区的展开 / 收起状态（靠 sectionOpen 表，见 section()）；
+     *   ③ 滚动位置（见 {@link #restoreScroll}）—— 不保的话用户一点分段就被弹回页首。
      * 其余状态（开关、分段、状态文字）由 build() 之后宿主重放一遍。
      */
     public void applyTheme() {
@@ -417,6 +419,36 @@ public final class SettingsView extends LinearLayout {
         setAllowScreenshot(shotState);
         paintModes(null);   // 显示模式由宿主随后 setDisplayMode() 覆盖
         paintTheme();
+        restoreScroll(scrollY);
+    }
+
+    /**
+     * 重建后把滚动位置放回去。
+     *
+     * <h3>这一步在修什么</h3>
+     * 用户在设置页滚到中间，点一下「主题」的某个分段 —— {@code onSetThemeMode} →
+     * {@code applyThemeEverywhere()} → 这里 {@link #applyTheme()} 把整棵树 removeAllViews()
+     * 重建，新的 ScrollView 从 scrollY=0 开始。表现就是用户报的
+     * 「设置里面选择东西之后自动跳转到最上面」。
+     *
+     * <h3>为什么要 post</h3>
+     * 此刻新树还没测量：内容高度是 0，直接 scrollTo 会被夹到 0（等于没还原）。
+     * 必须等一次布局完成之后再滚。{@code post} 在视图尚未 attach 时也会排进 run queue、
+     * attach 后执行，所以设置页不在前台时同样安全。
+     *
+     * <h3>为什么要把 y 夹到内容高度</h3>
+     * 重建后内容可能变矮（例如某个分区被收起），旧的 y 会超出可滚范围 ——
+     * 不夹的话会滚到底部，把"跳回顶部"的 bug 换成"跳到底部"的 bug。
+     */
+    private void restoreScroll(final int y) {
+        final ScrollView host = scrollHost;
+        if (host == null || y <= 0) return;
+        host.post(() -> {
+            android.view.View content = host.getChildAt(0);
+            if (content == null) return;
+            int max = Math.max(0, content.getHeight() - host.getHeight());
+            host.scrollTo(0, Math.max(0, Math.min(y, max)));
+        });
     }
 
     public void setFields(String lan, String wan, String token, String name, String netMode) {

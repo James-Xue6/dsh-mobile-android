@@ -350,6 +350,51 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ 生命周期
 
+    /**
+     * 把 **App 自己的 uiMode** 摆到设置里选的那一档（浅色 / 深色）。
+     *
+     * <h3>这一步在修什么</h3>
+     * 本 App 的界面是手搓 View 树、颜色全部来自 {@link com.dsh.mobile.ui.Ui} 的双色板，
+     * 所以「App 选浅色」时我们自己的页面、卡片、AlertDialog（{@code Ui.dialog} 会套
+     * {@code DshDialog} 主题）本来就是浅的。但**系统提供的那些窗口与控件**不看我们的色板，
+     * 只看 {@code Configuration.uiMode} 的 night 位：Toast、权限弹窗、下拉选择器、
+     * 输入法区域、系统栏 —— 而清单里声明了 {@code configChanges="…|uiMode|…"}，
+     * Activity 的 Configuration 一直带着**手机**的 night 位。
+     * 于是「手机深色 + App 选浅色」时，手搓界面是浅的、系统件却是深的 ——
+     * 这正是用户报的「白色模式下，还是有黑的地方」。
+     *
+     * <h3>为什么必须在这里做</h3>
+     * {@code attachBaseContext} 是**任何资源被取用之前**的唯一时机；晚一步配置就烘进已建好的
+     * Context / Resources 里了（{@code applyOverrideConfiguration} 在 getResources() 之后
+     * 调用会直接抛 IllegalStateException）。
+     *
+     * <p>优先 {@code applyOverrideConfiguration}：它把这次覆盖登记给框架，之后系统配置变化
+     * （字号缩放 / 密度 / 方向）会**叠加**在覆盖之上 —— 这正是我们要的（只锁深浅色，别的照跟）。
+     * {@code createConfigurationContext} 只是一次性快照，之后的系统变化就再也进不来了，
+     * 所以只作为兜底：极少数 ROM / 时序下这里可能已经碰过 Resources，那时退化成一个快照，
+     * 至少 night 位是对的（不会崩）。
+     *
+     * <h3>「跟随系统」为什么不覆盖</h3>
+     * {@link com.dsh.mobile.ui.Theme#nightOverride} 在 system 档返回 {@code null}：
+     * 必须保留系统 night 位，否则 {@link #onConfigurationChanged} 里读到的永远是我们覆盖后的
+     * 值，「跟随系统」就再也不会跟着手机切换了。
+     */
+    @Override
+    protected void attachBaseContext(android.content.Context base) {
+        android.content.res.Configuration override =
+                com.dsh.mobile.ui.Theme.nightOverride(base, Store.themeModeOf(base));
+        if (override == null) {
+            super.attachBaseContext(base);          // 跟随系统：原样保留系统 night 位
+            return;
+        }
+        try {
+            applyOverrideConfiguration(override);
+            super.attachBaseContext(base);
+        } catch (Throwable ignored) {
+            super.attachBaseContext(base.createConfigurationContext(override));
+        }
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -665,7 +710,7 @@ public final class MainActivity extends Activity implements
     /** 「走内网（自动 · 已连 WiFi）」这类**不含地址**的线路文案，卡片与顶栏共用。 */
     private String routeLabel() {
         if (gw == null || !store.paired()) return "";
-        if (gw.state() == GatewayClient.State.READY && !lastConnectUrl.isEmpty()) {
+        if (isOnline() && !lastConnectUrl.isEmpty()) {
             // 连上了就报**实际**在用的那条（按地址槽位精确判定，不看 LanAddress 的可用性）
             boolean wan = isWanUrl(lastConnectUrl);
             boolean lan = isLanUrl(lastConnectUrl);
@@ -1187,6 +1232,10 @@ public final class MainActivity extends Activity implements
         contentHost.removeAllViews();
         contentHost.addView(v, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 页面切换淡入（220ms，落在规范的 200~250ms 区间）：纯 ViewPropertyAnimator，
+        // 无依赖、无自定义动画资源。淡入的是**整页**，所以不会出现"半页旧半页新"。
+        v.setAlpha(0f);
+        v.animate().alpha(1f).setDuration(220L).start();
     }
 
     private void closeDrawer() {
@@ -1271,6 +1320,9 @@ public final class MainActivity extends Activity implements
         java.util.List<Store.Device> list = store.devices();
         Store.Device active = store.activeDevice();
         boolean online = active != null && isOnline();
+        boolean waiting = !online && !pendingEnterDeviceId.isEmpty();
+        // 先落"是否在等重连"再重建卡片：卡片是整体重建的，按钮文案/置灰在重建时读这个标志
+        deviceHub.setConnecting(waiting);
         deviceHub.setDevices(list, active == null ? "" : active.id, online);
         if (list.isEmpty()) {
             deviceHub.setStatus("还没有设备 · 点下面的「＋ 添加设备」", false);
@@ -1279,6 +1331,8 @@ public final class MainActivity extends Activity implements
         if (online) {
             // 只显示「走内网/走公网 + 依据哪条规则」，**不显示地址**（用户要求卡片便于截图分享）
             deviceHub.setStatus("已连接 " + active.displayName() + " · " + routeLabel(), false);
+        } else if (waiting) {
+            deviceHub.setStatus("正在重连 " + pendingEnterName() + "…", false);
         } else {
             String detail = lastStateText.isEmpty() ? "还没连上" : lastStateText;
             deviceHub.setStatus("离线 · " + detail, true);
@@ -1292,20 +1346,24 @@ public final class MainActivity extends Activity implements
         maybeAutoEnter();
     }
 
-    /** 按当前生效设备（已镜像进 store 的旧字段）重开连接，并刷新设备卡片。 */
-    private void gatewayReconnect() {
+    /**
+     * 按当前生效设备（已镜像进 store 的旧字段）重开连接，并刷新设备卡片。
+     *
+     * @return true = 连接已经发起（不代表已连上）；false = 缺地址/令牌或明文被拦，根本没发起
+     */
+    private boolean gatewayReconnect() {
         String url = store.url();
         String token = store.token();
         if (url.isEmpty() || token.isEmpty()) {
             Toast.makeText(this, "这台设备还没有地址或令牌，请重新扫码或手动添加", Toast.LENGTH_LONG).show();
             refreshDevices();
-            return;
+            return false;
         }
         String problem = GatewayClient.cleartextProblem(url);
         if (problem != null) {
             Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
             refreshDevices();
-            return;
+            return false;
         }
         failoverUsed = false;
         pendingAutoFailover = false;
@@ -1316,6 +1374,7 @@ public final class MainActivity extends Activity implements
         gw.connect(url, token, store.deviceId(), store.deviceName());
         armAutoLanFailover(url);
         refreshDevices();
+        return true;
     }
 
     private List<SessionInfo> visibleSessions() {
@@ -1807,7 +1866,10 @@ public final class MainActivity extends Activity implements
     private void refreshListStatus() {
         if (listScreen == null) return;
         String s;
-        if (gw.state() == GatewayClient.State.READY) {
+        // 与设备卡片同一条判据（isOnline()：READY **且** 真的发得出帧）。
+        // 改前这里只看 state==READY，半开链路下抽屉顶栏会说"N 个对话 · 已连接"，
+        // 而「我的设备」写的是"离线" —— 同一时刻两处说法不一致。
+        if (isOnline()) {
             int visible = topLevelSessionCount();
             s = visible + " 个对话 · " + (store.gatewayName().isEmpty() ? hostOf(store.url()) : store.gatewayName());
         } else if (!store.paired()) {
@@ -1843,6 +1905,22 @@ public final class MainActivity extends Activity implements
         //  READY → 起前台服务（常驻「保持后台接收」，没有它切后台就收不到事件）；
         //  断开  → 停服务并撤掉「进行中」，不然通知栏会留一条骗人的状态。
         Notifier.onGatewayState(this, st == GatewayClient.State.READY);
+        // 问题 A：用户点了「重连」之后的等待——只有真的 READY 才进对话页；
+        // 明确失败（令牌错/网关没开/连不上）立刻给结论；一直连不上由 10s 超时兜底。
+        if (!pendingEnterDeviceId.isEmpty()) {
+            if (st == GatewayClient.State.READY) {
+                Store.Device pendActive = store.activeDevice();
+                if (pendActive != null && pendingEnterDeviceId.equals(pendActive.id) && isOnline()) {
+                    // 还在设备页才替他切页；用户已经走开（去设置/抽屉）就不再抢屏幕
+                    if (screen == Screen.DEVICE) finishPendingEnter();
+                    else cancelPendingEnter();
+                }
+            } else if (st == GatewayClient.State.FAILED
+                    || st == GatewayClient.State.UNAUTHORIZED
+                    || st == GatewayClient.State.GATEWAY_OFF) {
+                failPendingEnter(detail);
+            }
+        }
         if (st != GatewayClient.State.READY) {
             Notifier.clearRunning(this);
             uiHandler.removeCallbacks(bgSessionsPoll);   // 断线时不轮询（拉了也没用）
@@ -2659,7 +2737,7 @@ public final class MainActivity extends Activity implements
     }
 
     private void startDownload(ChatItem item, String absPath) {
-        if (gw.state() != GatewayClient.State.READY) {
+        if (!isOnline()) {   // 与"在线/离线"同一判据：半开链路下也不再谎报能下载
             Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -4038,8 +4116,8 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "子会话只读：回主智能体才能发消息", Toast.LENGTH_LONG).show();
             return;
         }
-        if (gw.state() != GatewayClient.State.READY) {
-            Toast.makeText(this, "还没连上电脑端，回「我的设备」点连接", Toast.LENGTH_LONG).show();
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端，回「我的设备」点重连", Toast.LENGTH_LONG).show();
             return;
         }
         lastSentText = text == null ? "" : text;
@@ -4279,7 +4357,14 @@ public final class MainActivity extends Activity implements
         return p;
     }
 
-    /** 「连接/进入」：切到这台设备（不是当前生效的那台就先切过去）并连上，然后进对话页。 */
+    /**
+     * 点「进入对话」/「重连」：**先连上，再进对话页**。
+     *
+     * <p>改前这里是 {@code if (!isOnline()) gatewayReconnect(); enterChat();} —— 重连只是"顺手发起"，
+     * 下一行**无条件**进对话页，所以卡片上明明写着「离线」，点一下照样能进到对话页（用户报的 bug）。
+     * 现在离线走 {@link #beginEnterRetry}：等 READY 才进，失败/超时明确提示、留在设备页。
+     * 在线路径行为不变。
+     */
     @Override
     public void onOpenDevice(Store.Device d) {
         if (d == null) return;
@@ -4289,9 +4374,85 @@ public final class MainActivity extends Activity implements
             refreshDevices();
             return;
         }
-        if (!d.id.equals(store.activeDeviceId())) store.setActiveDevice(d.id);
-        if (!isOnline()) gatewayReconnect();
+        if (!d.id.equals(store.activeDeviceId())) {
+            // 换了目标设备：上一条"等重连进对话"的等待作废（否则连上另一台也会误进对话页）
+            cancelPendingEnter();
+            store.setActiveDevice(d.id);
+        }
+        if (isOnline()) {
+            enterChat();
+            return;
+        }
+        beginEnterRetry(d);
+    }
+
+    // ---- 「离线时点重连」的等待/超时（问题 A 的核心）
+
+    /** 用户在等哪台设备重连（非空 = 连上后要自动进对话页）。 */
+    private String pendingEnterDeviceId = "";
+    /** 等待超时的兜底任务（连不上/一直连不上时给明确提示，别让按钮永远「重连中…」）。 */
+    private Runnable pendingEnterTimeout;
+    /**
+     * 等一次重连的上限。网关自身的连接超时（TCP 12s + 退避）可能更久，
+     * 但用户点了按钮就不该干等：10s 给结论，之后仍可再点一次重连（自动重连仍在后台继续）。
+     */
+    private static final long ENTER_RETRY_TIMEOUT_MS = 10_000L;
+
+    private String pendingEnterName() {
+        Store.Device d = store.activeDevice();
+        return d == null ? "这台电脑" : d.displayName();
+    }
+
+    /** 发起重连并等它 READY：连上了进对话页，超时/失败明确提示并留在设备页。 */
+    private void beginEnterRetry(final Store.Device d) {
+        cancelPendingEnter();
+        pendingEnterDeviceId = d.id == null ? "" : d.id;
+        if (!gatewayReconnect()) {          // 缺地址/令牌或明文被拦：连接根本没发起
+            cancelPendingEnter();
+            return;
+        }
+        refreshDevices();                   // 立刻画出「重连中…」
+        pendingEnterTimeout = () -> {
+            pendingEnterTimeout = null;
+            if (!pendingEnterDeviceId.isEmpty() && isOnline()) { finishPendingEnter(); return; }
+            pendingEnterDeviceId = "";
+            refreshDevices();
+            Toast.makeText(this,
+                    "连不上这台电脑：请确认电脑端 DSH 开着、手机与电脑在同一网络（或公网地址可用）",
+                    Toast.LENGTH_LONG).show();
+        };
+        uiHandler.postDelayed(pendingEnterTimeout, ENTER_RETRY_TIMEOUT_MS);
+    }
+
+    /** 连上了：撤掉等待，进对话页。 */
+    private void finishPendingEnter() {
+        pendingEnterDeviceId = "";
+        if (pendingEnterTimeout != null) {
+            uiHandler.removeCallbacks(pendingEnterTimeout);
+            pendingEnterTimeout = null;
+        }
+        refreshDevices();
         enterChat();
+    }
+
+    /** 撤掉"等重连进对话"的等待（用户换设备 / 已连上 / 离开设备页）。 */
+    private void cancelPendingEnter() {
+        pendingEnterDeviceId = "";
+        if (pendingEnterTimeout != null) {
+            uiHandler.removeCallbacks(pendingEnterTimeout);
+            pendingEnterTimeout = null;
+        }
+    }
+
+    /** 重连**明确失败**（令牌不对/电脑端网关没开/连不上）：撤掉等待、说清原因，绝不进对话页。 */
+    private void failPendingEnter(String detail) {
+        if (pendingEnterDeviceId.isEmpty()) return;
+        cancelPendingEnter();
+        refreshDevices();
+        String why = detail == null || detail.trim().isEmpty() ? "" : "（" + detail.trim() + "）";
+        Toast.makeText(this, "连不上这台电脑" + why
+                        + "：请确认电脑端 DSH 开着、手机与电脑在同一网络（或公网地址可用）",
+                Toast.LENGTH_LONG).show();
     }
 
     /** 「修改名称」：改的是本机这张卡片的显示名，电脑端不受影响。 */
@@ -4529,6 +4690,9 @@ public final class MainActivity extends Activity implements
             Ui.applyScreenshotPolicy(win);
             win.setDimAmount(0.35f);
             win.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            // 液态玻璃：手动添加弹窗是**全屏透明窗口 + 贴底玻璃卡**，背后正好适合真模糊
+            // （API 31+；ROM 关掉模糊则什么都不发生，卡片自己是 88% 不透明的厚玻璃）。
+            com.dsh.mobile.ui.Ui.applyWindowBlur(win, 24f);
         }
         dlg.show();
     }
@@ -4661,14 +4825,14 @@ public final class MainActivity extends Activity implements
         int pad = Ui.dp(this, 18);
         box.setPadding(pad, Ui.dp(this, 6), pad, 0);
         box.addView(ed);
-        android.widget.TextView env = Ui.text(this, "会自动附上：" + feedbackEnv(), 11.5f, Ui.INK_FAINT, false);
+        android.widget.TextView env = Ui.text(this, "会自动附上：" + feedbackEnv(), Ui.S_CAP1, Ui.INK_FAINT, false);
         env.setPadding(0, Ui.dp(this, 8), 0, 0);
         box.addView(env);
         final boolean toAuthor = feedbackChannel() != null;
         if (toAuthor) {
             android.widget.TextView hint = Ui.text(this,
                     "点「发给作者」会用浏览器/邮件打开，把内容发给开发这个 App 的人。",
-                    11.5f, Ui.INK_FAINT, false);
+                    Ui.S_CAP1, Ui.INK_FAINT, false);
             hint.setPadding(0, Ui.dp(this, 6), 0, 0);
             box.addView(hint);
         }
@@ -4934,7 +5098,7 @@ public final class MainActivity extends Activity implements
         lastFeedbackDraft = "";
         String full = feedbackText(t);
         copyFeedback(full);
-        if (gw.state() != GatewayClient.State.READY) {
+        if (!isOnline()) {
             Toast.makeText(this, "还没连上电脑端，已复制到剪贴板，可先粘给我", Toast.LENGTH_LONG).show();
             refreshFeedbackHint();
             return;
@@ -4958,10 +5122,10 @@ public final class MainActivity extends Activity implements
                         + "② 不用时及时「关闭公网隧道」，或在手机上切回「用内网」；\n"
                         + "③ 隧道域名每次重启电脑都会变，变了重新扫一次码即可；\n"
                         + "④ 公司/涉密网络请先确认合规。",
-                13f, Ui.INK, false));
+                 Ui.S_SUB, Ui.INK, false));
         final android.widget.CheckBox cb = new android.widget.CheckBox(Ui.dialogContext(this));
         cb.setText("我已知情，同意开启");
-        cb.setTextSize(14f);
+        cb.setTextSize(Ui.S_CALLOUT);
         cb.setPadding(0, Ui.dp(this, 14), 0, 0);
         box.addView(cb);
 
@@ -5565,7 +5729,7 @@ public final class MainActivity extends Activity implements
                 final String name = "image-" + System.currentTimeMillis()
                         + (type.contains("png") ? ".png" : type.contains("webp") ? ".webp" : ".jpg");
                 runOnUiThread(() -> {
-                    if (gw.state() != GatewayClient.State.READY) {
+                    if (!isOnline()) {
                         Toast.makeText(MainActivity.this, "还没连上电脑端", Toast.LENGTH_LONG).show();
                         return;
                     }

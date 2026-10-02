@@ -34,7 +34,9 @@ public final class DrawerHost extends FrameLayout {
      */
     private static final float WIDTH_FRACTION_LANDSCAPE = 0.52f;
     /** 遮罩最深不透明度：右侧那条对话要"看得见但被压暗"。 */
-    private static final float SCRIM_ALPHA = 0.45f;
+    private static final float SCRIM_ALPHA = 0.30f;
+    /** 抽屉背后的真模糊半径（dp）。API 31+ 生效，低版本自动回退到"只有遮罩"。 */
+    private static final float BLUR_DP = 20f;
     /** 开关动画时长。 */
     private static final long ANIM_MS = 220L;
 
@@ -56,6 +58,8 @@ public final class DrawerHost extends FrameLayout {
     private float downX;
     private float downY;
     private float startTx;
+    /** 内容层此刻是否挂着真模糊（避免每帧重复 setRenderEffect）。 */
+    private boolean blurred;
 
     private android.animation.ValueAnimator anim;
 
@@ -67,7 +71,7 @@ public final class DrawerHost extends FrameLayout {
         addView(content, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         scrim = new View(ctx);
-        scrim.setBackgroundColor(android.graphics.Color.BLACK);   // 遮罩固定纯黑，浓度靠 setAlpha 控
+        scrim.setBackgroundColor(Ui.SCRIM);   // 遮罩用 #000 35%，浓度靠 setAlpha 控（不要死黑）
         scrim.setAlpha(0f);
         scrim.setVisibility(GONE);
         addView(scrim, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
@@ -104,24 +108,27 @@ public final class DrawerHost extends FrameLayout {
      */
     public void applyTheme() {
         content.setBackgroundColor(Ui.BG);
+        scrim.setBackgroundColor(Ui.SCRIM);
         applyDrawerBg();
     }
 
     /**
-     * 抽屉底板：底色 + 右缘 1px 发丝线。
+     * 抽屉底板：**玻璃**（半透明体 + 右缘 1px 发丝线）。
      *
      * <p>为什么用 LayerDrawable 而不是加一个子 View：抽屉里的会话列表是**构造之后**
      * 由宿主 {@code drawer().addView(...)} 加进来的，后加的子 View 会盖在边缘线上面；
      * 而 LayerDrawable 是"背景"，永远在所有子 View 之下，与添加顺序无关。
      *
-     * <p>深色档阴影在纯黑底上本来就看不见，这条 1px 亮线是两层在任何主题下都"分得开"的保证。
+     * <p>2026-10-03 液态玻璃：底板从纯色 Ui.BG 换成 {@link Ui#GLASS_SHEET}
+     * （88~90% 不透明）。抽屉是"厚玻璃"——它盖住的是对话内容，太透会让两层文字互相干扰。
+     * 配合 {@link #applyTx} 里对 content 挂的**真模糊**，右侧透出来的内容才是"磨砂玻璃后的影子"。
      */
     private void applyDrawerBg() {
         Context c = getContext();
         android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
                 new android.graphics.drawable.Drawable[] {
-                        new android.graphics.drawable.ColorDrawable(Ui.BG),
-                        new android.graphics.drawable.ColorDrawable(Ui.SEP) });
+                        Ui.round(0, Ui.GLASS_SHEET),
+                        new android.graphics.drawable.ColorDrawable(Ui.HAIRLINE) });
         ld.setLayerGravity(1, android.view.Gravity.END);
         ld.setLayerWidth(1, Math.max(1, Ui.dp(c, 0.5f)));
         ld.setLayerHeight(1, LayoutParams.MATCH_PARENT);
@@ -206,6 +213,14 @@ public final class DrawerHost extends FrameLayout {
         } else {
             scrim.setVisibility(VISIBLE);
             scrim.setClickable(p > 0.5f);
+        }
+        // 真模糊：只要抽屉露出一条，就把内容层糊掉（iOS 抽屉后面那种磨砂）。
+        // 只在"有/无"两个状态间切一次，不在每帧重挂 —— 模糊结果会被缓存成离屏贴图。
+        if (p > 0.02f) {
+            if (!blurred) blurred = Ui.setBackdropBlur(content, BLUR_DP);
+        } else if (blurred) {
+            Ui.clearBackdropBlur(content);
+            blurred = false;
         }
     }
 
