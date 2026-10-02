@@ -49,6 +49,26 @@ public final class ChatAdapter extends BaseAdapter {
     private String runningHint;
     private boolean compact;
 
+    // ---------------------------------------------------------------- 数据/通知自检
+    //
+    // 真机 dropbox 硬崩溃（2026-10-02 20:58:20，v8）：
+    //   java.lang.IllegalStateException: The content of the adapter has changed but
+    //   ListView did not receive a notification.
+    //     at android.widget.ListView.layoutChildren
+    //     at android.widget.AbsListView$FlingRunnable.run
+    // 机制：ListView 只在 notifyDataSetChanged() 时更新自己缓存的 mItemCount；
+    // 一旦"数据已改、还没通知"的中间态被一次布局（惯性滑动每帧都在布局）撞上，就必崩。
+    //
+    // 这里用一对版本号把这件事变成可自检的：每次换数据 dataVersion++，
+    // 每次通知把 notifiedVersion 对齐到 dataVersion。二者不等 = 存在中间态（打日志，不崩溃）。
+    private static final String TAG = "ChatAdapter";
+    /** 列表内容被整体替换的次数。 */
+    private int dataVersion = 0;
+    /** 最后一次 notifyDataSetChanged() 时的数据版本；-1 = 还没通知过。 */
+    private int notifiedVersion = -1;
+    /** 自检日志节流（1s 一条，避免每帧刷屏）。 */
+    private long lastSyncWarnAt = 0L;
+
     public void setCompact(boolean value) { this.compact = value; }
 
     public ChatAdapter(Context ctx, Host host) {
@@ -66,11 +86,50 @@ public final class ChatAdapter extends BaseAdapter {
         this.maxBubble = (int) (w * 0.80f);
     }
 
-    public void setItems(List<ChatItem> list) { this.items = list; }
+    /**
+     * 换掉整份显示数据。**必须**由 {@link #notifyChanged()} 收口通知。
+     *
+     * 调用方（ConversationView.commitData）保证二者在**同一次主线程消息**里成对出现，
+     * 所以 ListView 永远不会观察到"改了但没通知"的中间态。禁止在别处单独调用它。
+     */
+    public void setItems(List<ChatItem> list) { this.items = list; dataVersion++; }
     public List<ChatItem> items() { return items; }
     public void setRunningHint(String hint) { this.runningHint = hint; }
 
-    @Override public int getCount() { return items.size(); }
+    /** 数据版本号（自检/日志用）。 */
+    public int dataVersion() { return dataVersion; }
+    /** 最后一次通知时的数据版本号。 */
+    public int notifiedVersion() { return notifiedVersion; }
+
+    /**
+     * 唯一的通知出口：先把"已通知到哪个版本"对齐，再通知 ListView。
+     * 不要绕过它直接调 notifyDataSetChanged()，否则自检会失去意义。
+     */
+    public void notifyChanged() {
+        notifiedVersion = dataVersion;
+        notifyDataSetChanged();
+    }
+
+    /**
+     * 自检：数据改过却没有通知 —— 正是那个硬崩溃的根因形态。
+     *
+     * 只打日志、**不崩溃**：它是开发期哨兵。正常路径下（ConversationView.commitData）
+     * 数据改动与通知在同一次消息里，这里永远返回 true。
+     */
+    public boolean assertConsistent(String where) {
+        if (dataVersion == notifiedVersion) return true;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - lastSyncWarnAt > 1000L) {
+            lastSyncWarnAt = now;
+            android.util.Log.w(TAG, "数据/通知失步 @" + where
+                    + " data=" + dataVersion + " notified=" + notifiedVersion
+                    + " count=" + items.size()
+                    + "（ListView 下一次布局可能抛 IllegalStateException）");
+        }
+        return false;
+    }
+
+    @Override public int getCount() { assertConsistent("getCount"); return items.size(); }
     @Override public Object getItem(int position) { return items.get(position); }
     @Override public long getItemId(int position) { return position; }
 
@@ -193,8 +252,7 @@ public final class ChatAdapter extends BaseAdapter {
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
         card.setBackground(Ui.roundStroke(Ui.dp(ctx, 14), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE_AGENT));
 
-        TextView head = Ui.text(ctx, "👥 " + (it.agentName.isEmpty() ? "专家团回传" : it.agentName),
-                Ui.S_FOOT, Ui.BRAND, true);
+        TextView head = Ui.text(ctx, "👥 " + agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
         card.addView(head);
 
         String body = it.text == null ? "" : it.text;
@@ -211,6 +269,23 @@ public final class ChatAdapter extends BaseAdapter {
         card.setLayoutParams(lp);
         wrap.addView(card);
         return wrap;
+    }
+
+    /**
+     * 子智能体/专家团卡片的标题文本。
+     *
+     * 真机截图里出现过「👥 c6b099af-…-f48c5b7cb812」—— 裸 agent UUID 不该出现在界面上
+     * （来源见 MainActivity.readableAgentName：宿主在拿不到 senderName 时会退回
+     * source.senderSessionId）。MainActivity 已经把它换成可读名字，这里再兜一层：
+     * 只要拿到的还是 id 形态，就退成「子智能体」，绝不把 id 露出去。
+     */
+    private static String agentLabel(ChatItem it) {
+        String n = it.agentName == null ? "" : it.agentName.trim();
+        if (n.isEmpty()) return "专家团回传";
+        if (n.matches("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
+            return "子智能体";
+        }
+        return n;
     }
 
     // ------------------------------------------------------------ 工具

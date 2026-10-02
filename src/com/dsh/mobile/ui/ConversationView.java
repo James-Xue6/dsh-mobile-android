@@ -99,7 +99,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      * （手指刚按下、还没产生滚动事件时 atBottom 仍是 true，于是被硬拽回底部）。
      */
     private boolean userTouching = false;
-    private boolean refreshPending;
+
+    // ---- 数据改动 + 通知的唯一收口（见 commitData）
+    /** 已经排了一次"合并提交"（60ms 窗口），防重入。 */
+    private boolean commitScheduled = false;
+    /** 惯性滑动期间被挂起的提交：滑停后再落地（见 onScrollStateChanged）。 */
+    private boolean commitDeferred = false;
+    /** 列表是否正在惯性滑动（fling）。 */
+    private boolean listFlinging = false;
+    /** refreshNow() 要求"这一次必须立刻提交"，绕过 fling 挂起。 */
+    private boolean forceCommit = false;
+    /** 合并提交的落点：commitData 是 private，用方法引用做稳定的 Runnable 便于取消。 */
+    private final Runnable commitTask = this::commitData;
     private boolean running;
     private String runningHint = "";
     /** 当前是不是只读的子会话（子智能体 / 专家团子会话）。 */
@@ -198,7 +209,15 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         list.setOnScrollListener(new AbsListView.OnScrollListener() {
-            @Override public void onScrollStateChanged(AbsListView view, int scrollState) { }
+            @Override public void onScrollStateChanged(AbsListView view, int scrollState) {
+                // 惯性滑动（fling）期间**不改数据也不通知**：FlingRunnable 每一帧都在
+                // layoutChildren，任何"改了还没通知"的中间态都会在那里炸成
+                // 「The content of the adapter has changed but ListView did not receive a
+                // notification」（真机 dropbox 实证栈就是这个）。
+                // 滑停后再把挂起的改动一次性落地（改 + notify 同一次消息，见 commitData）。
+                listFlinging = scrollState == AbsListView.OnScrollListener.SCROLL_STATE_FLING;
+                if (!listFlinging && commitDeferred) ui.post(commitTask);
+            }
             @Override public void onScroll(AbsListView view, int first, int visible, int total) {
                 atBottom = computeAtBottom();
                 if (toBottom != null) toBottom.setVisibility(atBottom ? GONE : VISIBLE);
@@ -470,24 +489,30 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         return sb.length() == 0 ? text : sb.toString();
     }
 
-    public void setRunning(boolean value, String hint) {
-        this.running = value;
-        this.runningHint = hint == null ? "" : hint;
-        adapter.setRunningHint(this.runningHint);
-        // 简洁模式的摘要行文案取决于"还在不在跑"（正在运行命令… / 执行了命令），
-        // 所以运行状态一变必须重算一次；完整模式只是多一个提示，重算也无害。
-        applyFilter();
-        action.setText(value ? "■" : "↑");
-        action.setTextSize(value ? 15f : 19f);
-        action.setBackground(Ui.pill(value ? Ui.STOP_BG : Ui.BRAND_FILL));
-        action.setTextColor(value ? Ui.INK : Ui.ON_BRAND);
-        // 只读子会话里停止按钮同样禁用（宿主也只会用 subagents.interruptByParent 停子会话）
-        if (readOnly) Ui.setButtonEnabled(action, false);
+    public void setRunning(final boolean value, final String hint) {
+        // 运行态会改变**可见行数**（简洁模式：回合在跑时尾行要补一条「正在运行…」摘要行），
+        // 所以这里只更新状态 + 排一次提交，真正的"换数据 + notify"由 commitData 收口。
+        // 旧实现在这里直接 applyFilter() 换数据却**不通知** —— 真机 fling 崩溃的两条路径之一。
+        postOnUi(() -> {
+            running = value;
+            runningHint = hint == null ? "" : hint;
+            adapter.setRunningHint(runningHint);
+            action.setText(value ? "■" : "↑");
+            action.setTextSize(value ? 15f : 19f);
+            action.setBackground(Ui.pill(value ? Ui.STOP_BG : Ui.BRAND_FILL));
+            action.setTextColor(value ? Ui.INK : Ui.ON_BRAND);
+            // 只读子会话里停止按钮同样禁用（宿主也只会用 subagents.interruptByParent 停子会话）
+            if (readOnly) Ui.setButtonEnabled(action, false);
+            scheduleRefresh();
+        });
     }
 
-    public void setItems(List<ChatItem> items) {
-        this.full = items == null ? new ArrayList<ChatItem>() : items;
-        applyFilter();
+    public void setItems(final List<ChatItem> items) {
+        final List<ChatItem> next = items == null ? new ArrayList<ChatItem>() : items;
+        postOnUi(() -> {
+            full = next;
+            scheduleRefresh();
+        });
     }
 
     /**
@@ -510,7 +535,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         this.compact = value;
         adapter.setCompact(value);
         renderPlan();
-        applyFilter();
+        // 模式切换会改变可见行数（工具/系统行被压成一条摘要行）→ 走收口重算 + 通知
+        scheduleRefresh();
     }
 
     /**
@@ -622,17 +648,61 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         view.add(row);
     }
 
-    /** 合并高频刷新，避免流式输出时每 token 重绘。 */
-    public void refresh() {
-        if (refreshPending) return;
-        refreshPending = true;
-        ui.postDelayed(() -> {
-            refreshPending = false;
-            applyFilter();
-            adapter.notifyDataSetChanged();
-            if (atBottom && !userTouching) scrollToBottom();
-        }, 60);
+    // ============================================================ 数据改动 + 通知的唯一收口
+    //
+    // 真机 dropbox 硬崩溃（2026-10-02 20:58:20，v8，Foreground=Yes）：
+    //   java.lang.IllegalStateException: The content of the adapter has changed but
+    //   ListView did not receive a notification.
+    //     at android.widget.ListView.layoutChildren(ListView.java:1873)
+    //     at android.widget.AbsListView$FlingRunnable.run(AbsListView.java:5930)
+    //
+    // 机制：ListView 只在 notifyDataSetChanged() 时才把缓存的 mItemCount 与适配器对齐。
+    // 旧实现存在两个"数据已改、通知未到"的中间态：
+    //   ① setItems() 立刻 applyFilter() 换掉适配器数据，而通知要等 refresh() 的 60ms
+    //      合并窗口 —— 流式输出每个 chunk 都走这条路，窗口里随便一帧布局（fling 每帧都布局）
+    //      就会抛上面那个异常；
+    //   ② setRunning() 内部也 applyFilter()（简洁模式会增删"正在运行…"摘要行、改变行数），
+    //      这条路径**完全没有通知**。
+    // 现在：数据改动本身推迟到主线程的一次消息里，并在**同一次消息内**立刻通知。
+    // ListView 不可能再观察到"改了没通知"的中间态。
+
+    /** 所有数据改动与通知都在主线程收口；非主线程调用自动切回主线程（顺序不变）。 */
+    private void postOnUi(Runnable r) {
+        if (Looper.myLooper() == Looper.getMainLooper()) r.run();
+        else ui.post(r);
     }
+
+    /**
+     * 唯一的数据改动 + 通知落点：applyFilter() 换数据，紧接着在同一次主线程消息里
+     * adapter.notifyChanged()。二者不可分 —— 这就是"绝不让 ListView 看到中间态"的保证。
+     */
+    private void commitData() {
+        if (Looper.myLooper() != Looper.getMainLooper()) { ui.post(commitTask); return; }
+        commitScheduled = false;
+        boolean force = forceCommit;
+        forceCommit = false;
+        // 惯性滑动中不落地数据改动：等滑停（onScrollStateChanged 会再排一次）。
+        // 结构性刷新（refreshNow：快照重建/审批卡/回滚）必须立刻可见，不受此限。
+        if (listFlinging && !force) { commitDeferred = true; return; }
+        commitDeferred = false;
+        applyFilter();
+        adapter.notifyChanged();
+        if (atBottom && !userTouching) scrollToBottom();
+    }
+
+    /** 合并高频刷新（流式输出每 chunk 一次）：数据改动也一并推迟到这一帧。 */
+    private void scheduleRefresh() {
+        if (commitScheduled) return;
+        commitScheduled = true;
+        ui.postDelayed(commitTask, 60);
+    }
+
+    /**
+     * 合并高频刷新，避免流式输出时每 token 重绘。
+     * 注意：它只"排一次提交"，真正换数据发生在 {@link #commitData()} 里 —— 于是
+     * "数据改了但还没通知"的窗口从根上不存在（旧实现正是在这个窗口里崩的）。
+     */
+    public void refresh() { postOnUi(this::scheduleRefresh); }
 
     /** 像素级判断是否真的贴底：比 first+visible 更准，免得残留一行也算贴底。 */
     private boolean computeAtBottom() {
@@ -644,8 +714,17 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         return last.getBottom() <= list.getHeight() + Ui.dp(ctx, 4);
     }
 
+    /**
+     * 立刻提交（不等 60ms 合并窗口）：快照整体重建、审批/提问卡、回滚这类**结构性**变化
+     * 必须当场可见。同样走 {@link #commitData()} —— 换数据与 notify 依然不可分。
+     */
     public void refreshNow() {
-        adapter.notifyDataSetChanged();
+        postOnUi(() -> {
+            ui.removeCallbacks(commitTask);
+            commitScheduled = false;
+            forceCommit = true;
+            commitData();
+        });
     }
 
     /**
@@ -717,7 +796,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      */
     public void onConfigChanged() {
         adapter.refreshMetrics();
-        adapter.notifyDataSetChanged();
+        refreshNow();
         requestLayout();
         if (atBottom) scrollToBottom();
     }
@@ -762,7 +841,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
         setRunning(running, runningHint);   // 重画 ↑ / ■ 的底色与字色（同时保住运行态）
         setBanner(bannerText, bannerError, bannerActionable, bannerOnClick);   // 横幅按原语义重画
-        adapter.notifyDataSetChanged();
+        refreshNow();                       // 收口重算 + 通知（不再裸调 notifyDataSetChanged）
         requestLayout();
     }
 

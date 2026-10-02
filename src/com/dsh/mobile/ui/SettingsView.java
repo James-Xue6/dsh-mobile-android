@@ -105,7 +105,10 @@ public final class SettingsView extends LinearLayout {
         barLine.setBackgroundColor(Ui.SEP);
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
-        addView(barLine, Ui.fill());
+        // 必须用上面那条 1px 的 LayoutParams：Ui.fill() 是 WRAP_CONTENT，而普通 View 在
+        // AT_MOST 下会直接吃满剩余高度，这条发丝线就会撑掉整个设置页（整页只剩一块底色，
+        // 深色档看起来就是用户报的「一块黑」）。见 F01-settings-fixed 真机证据。
+        addView(barLine);
 
         ScrollView scroll = new ScrollView(ctx);
         scrollHost = scroll;

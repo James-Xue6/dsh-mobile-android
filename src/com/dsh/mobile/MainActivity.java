@@ -1599,10 +1599,56 @@ public final class MainActivity extends Activity implements
         else key = "tm:" + body.hashCode();
         if (byKey.containsKey(key)) return;
         ChatItem it = ChatItem.of(ChatItem.AGENT, key, body);
-        it.agentName = sender == null ? "" : sender;
+        String who = readableAgentName(sender);
+        // 拿不到可读名字就退成「子智能体 N」——**绝不**把 agent UUID 露到界面上。
+        // N 取"当前已建的 AGENT 卡片数 + 1"：同一条历史重放时事件顺序一致，编号也就稳定。
+        it.agentName = who.isEmpty() ? ("子智能体 " + (agentCardCount() + 1)) : who;
         it.time = t;
         byKey.put(key, it);
         items.add(it);
+    }
+
+    /** 列表里已经建好的子智能体/专家团回传卡片数（用来给没有名字的回传编号）。 */
+    private int agentCardCount() {
+        int n = 0;
+        for (ChatItem x : items) if (x != null && x.kind == ChatItem.AGENT) n++;
+        return n;
+    }
+
+    /**
+     * 子智能体/专家团回传卡片的发言人显示名。
+     *
+     * 真机截图里出现过「👥 c6b099af-…-f48c5b7cb812」这种裸 agent UUID：来源是
+     * {@link MessageSource#sender} 在拿不到 senderName 时退回 source.senderSessionId，
+     * 而那是内部会话 id，不是给人看的名字。
+     *
+     * 规则：能按 id 在会话列表里查到就显示它的可读标题；否则返回空串，
+     * 由调用方兜底成「子智能体 N」。**任何情况下都不返回裸 id。**
+     */
+    private String readableAgentName(String sender) {
+        String s = sender == null ? "" : sender.trim();
+        if (s.isEmpty()) return "";
+        if (!looksLikeOpaqueId(s)) return s;          // 人给的名字/代号：直接用
+        SessionInfo owner = findSession(s);           // 会话 id：换成它的可读标题
+        if (owner != null && owner.title != null && !owner.title.trim().isEmpty()
+                && !looksLikeOpaqueId(owner.title)) {
+            return owner.title.trim();
+        }
+        return "";
+    }
+
+    /** 标准 UUID（宿主会话 id 的形态）：这种字符串不该出现在界面上。 */
+    private static final java.util.regex.Pattern OPAQUE_ID =
+            java.util.regex.Pattern.compile(
+                    "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+
+    /** 是不是"内部 id"形态（UUID / 32 位十六进制串）。只认这两种，避免误伤人名。 */
+    private static boolean looksLikeOpaqueId(String s) {
+        if (s == null) return false;
+        String t = s.trim();
+        if (t.isEmpty()) return false;
+        if (OPAQUE_ID.matcher(t).matches()) return true;
+        return t.length() >= 16 && t.matches("(?i)[0-9a-f]+");
     }
 
     private void refreshPlan() {

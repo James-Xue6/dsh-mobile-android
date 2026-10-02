@@ -29,7 +29,14 @@ public final class ChatItem {
     public int kind;
     public String key = "";
     public String text = "";
-    /** AGENT 卡片的发言人（专家团成员名 / 子代理会话 id）。 */
+    /**
+     * AGENT 卡片的发言人：**只放可读名字**（专家团成员名 / 子智能体代号）。
+     *
+     * 绝不在这里放宿主会话 id / agent UUID —— 真机截图里出现过「👥 c6b099af-…-f48c5b7cb812」
+     * 这种裸 id，正是宿主在拿不到 senderName 时退回 source.senderSessionId 造成的。
+     * 换算与兜底（「子智能体 N」）见 MainActivity.readableAgentName，
+     * 渲染侧还有一道 ChatAdapter.agentLabel 兜底。
+     */
     public String agentName = "";
     public String reasoning = "";
     public String toolName = "";
