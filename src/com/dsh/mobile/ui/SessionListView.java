@@ -22,6 +22,8 @@ public final class SessionListView extends FrameLayout {
         void onOpenSession(SessionInfo s);
         void onNewChat();
         void onSettings();
+        /** 回「我的设备」启动页（抽屉头部的设备入口）。 */
+        void onDevices();
         void onRefresh();
         void onRename(SessionInfo s);
         void onArchive(SessionInfo s);
@@ -65,6 +67,13 @@ public final class SessionListView extends FrameLayout {
         refresh.setTextSize(19f);
         refresh.setOnClickListener(v -> host.onRefresh());
         top.addView(refresh);
+
+        // 「我的设备」入口：启动页是设备页，这里给对话页一个随时回去看在线状态的入口
+        TextView devices = Ui.circleButton(ctx, "🖥", 0x00000000, Ui.INK_SUB);
+        devices.setTextSize(17f);
+        devices.setContentDescription("我的设备");
+        devices.setOnClickListener(v -> host.onDevices());
+        top.addView(devices);
 
         TextView gear = Ui.circleButton(ctx, "⚙", 0x00000000, Ui.INK_SUB);
         gear.setTextSize(19f);

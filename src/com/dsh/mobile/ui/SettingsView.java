@@ -23,6 +23,8 @@ public final class SettingsView extends LinearLayout {
         void onPastePairing();
         void onDisconnect();
         void onSetDisplayMode(String mode);
+        /** 「允许截屏」开关（默认开）。关掉后本 App 内截图/录屏会变黑。 */
+        void onToggleAllowScreenshot(boolean on);
     }
 
     private final Context ctx;
@@ -43,6 +45,9 @@ public final class SettingsView extends LinearLayout {
     private final TextView diag;
     private TextView modeFull;
     private TextView modeCompact;
+    /** 「允许截屏」开关（复用设置页现有的 segment 开关样式，与「允许自签名证书」一致）。 */
+    private TextView shotBtn;
+    private boolean shotState = true;
 
     public SettingsView(Context ctx, Host host) {
         super(ctx);
@@ -159,6 +164,20 @@ public final class SettingsView extends LinearLayout {
         disp.addView(seg);
 
 
+        // ---- 隐私（高级项，默认折叠；与「允许自签名证书」同一套开关样式）
+        LinearLayout privacy = section(body, "隐私", false);
+        privacy.addView(hint("关掉「允许截屏」后，本 App 内的截图/录屏会变成黑屏，"
+                + "系统「最近任务」里的缩略图同样会变黑；打开（默认）则一切正常。"
+                + "无论开关如何，设备令牌都只显示末 4 位。"));
+        LinearLayout shotRow = Ui.row(ctx);
+        shotRow.setLayoutParams(Ui.fill());
+        shotRow.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        shotBtn = segment("允许截屏：已开启");
+        shotBtn.setOnClickListener(v -> host.onToggleAllowScreenshot(!shotState));
+        shotRow.addView(shotBtn, weight(1f, 0));
+        privacy.addView(shotRow);
+
+
         // ---- 关于（放在诊断之前，免得被又长又吵的日志埋掉）
         LinearLayout about = section(body, "关于", false);
         aboutText = Ui.text(ctx, "", 12.5f, Ui.INK_SUB, false);
@@ -256,6 +275,15 @@ public final class SettingsView extends LinearLayout {
         }
     }
 
+    /** 「允许截屏」开关状态（样式复用 styleSeg，与「允许自签名证书」完全一致）。 */
+    public void setAllowScreenshot(boolean on) {
+        shotState = on;
+        if (shotBtn != null) {
+            shotBtn.setText(on ? "允许截屏：已开启" : "允许截屏：已关闭");
+            styleSeg(shotBtn, on);
+        }
+    }
+
     public void setAbout(String text) {
         if (aboutText != null) aboutText.setText(text == null ? "" : text);
     }
@@ -345,9 +373,7 @@ public final class SettingsView extends LinearLayout {
     }
 
     private TextView label(String s) {
-        TextView t = Ui.text(ctx, s, 12.5f, Ui.INK_SUB, false);
-        t.setPadding(0, Ui.dp(ctx, 12), 0, Ui.dp(ctx, 4));
-        return t;
+        return Ui.fieldLabel(ctx, s);
     }
 
     private TextView hint(String s) {
@@ -356,14 +382,9 @@ public final class SettingsView extends LinearLayout {
         return t;
     }
 
+    /** 统一圆角输入框（样式在 Ui.field，手动添加表单共用同一套）。 */
     private EditText field(String hintText, boolean multiline) {
-        EditText e = new EditText(ctx);
-        e.setHint(hintText);
-        e.setTextSize(14f);
-        e.setHintTextColor(Ui.INK_FAINT);
-        e.setTextColor(Ui.INK);
-        e.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), 0xFFF7F8FC, Ui.dp(ctx, 0.8f), Ui.LINE));
-        e.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 10));
+        EditText e = Ui.field(ctx, hintText);
         e.setInputType(InputType.TYPE_CLASS_TEXT
                 | (multiline ? InputType.TYPE_TEXT_FLAG_MULTI_LINE : 0));
         if (!multiline) e.setSingleLine(false);
@@ -371,19 +392,11 @@ public final class SettingsView extends LinearLayout {
     }
 
     private TextView primary(String s) {
-        TextView t = Ui.text(ctx, s, 14.5f, 0xFFFFFFFF, true);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(0, Ui.dp(ctx, 12), 0, Ui.dp(ctx, 12));
-        t.setBackground(Ui.round(Ui.dp(ctx, 999), Ui.BRAND));
-        return t;
+        return Ui.primaryButton(ctx, s);
     }
 
     private TextView secondary(String s) {
-        TextView t = Ui.text(ctx, s, 14.5f, Ui.INK, false);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(0, Ui.dp(ctx, 12), 0, Ui.dp(ctx, 12));
-        t.setBackground(Ui.roundStroke(Ui.dp(ctx, 999), Ui.SURFACE, Ui.dp(ctx, 1f), Ui.LINE));
-        return t;
+        return Ui.secondaryButton(ctx, s);
     }
 
     private LinearLayout.LayoutParams weight(float w, int marginStartDp) {

@@ -15,7 +15,7 @@ import android.widget.FrameLayout;
  *                屏幕右侧露出的那一条就是它，被遮罩压暗 + 缩淡 = 用户要的
  *                「最右侧漏一点点的虚化对话窗口」；
  *   1 scrim   —— 全屏遮罩，alpha 跟手；完全关闭时 GONE，不吃掉内容层的触摸；
- *   2 drawer  —— 会话列表。宽度 = 屏宽 * widthFraction（默认 82%），
+ *   2 drawer  —— 会话列表。宽度 = 屏宽 * widthFraction（竖屏 82%，横屏 52%），
  *                关闭时整条平移到屏幕左缘之外，打开时滑回 x = 0。
  *
  * 手势（不用 Material/DrawerLayout，纯手搓）：
@@ -25,8 +25,14 @@ import android.widget.FrameLayout;
  */
 public final class DrawerHost extends FrameLayout {
 
-    /** 抽屉宽度占屏宽比例（用户要求 78%~85%）。 */
-    private static final float WIDTH_FRACTION = 0.82f;
+    /** 抽屉宽度占屏宽比例：竖屏（用户要求 78%~85%）。 */
+    private static final float WIDTH_FRACTION_PORTRAIT = 0.82f;
+    /**
+     * 横屏时的抽屉宽度比例：横屏屏宽是竖屏的 1.7 倍以上，沿用 82% 会让抽屉占掉
+     * 1920*0.82 = 1574px，内容层只剩 346px（连一个字都放不下）——所以收到 52%，
+     * 既够放会话卡片（约 1000px，比竖屏抽屉还宽），右侧也能看见内容层。
+     */
+    private static final float WIDTH_FRACTION_LANDSCAPE = 0.52f;
     /** 遮罩最深不透明度：右侧那条对话要"看得见但被压暗"。 */
     private static final float SCRIM_ALPHA = 0.45f;
     /** 开关动画时长。 */
@@ -103,19 +109,47 @@ public final class DrawerHost extends FrameLayout {
     @Override
     protected void onMeasure(int widthSpec, int heightSpec) {
         int w = MeasureSpec.getSize(widthSpec);
-        int dw = Math.max(1, Math.round(w * WIDTH_FRACTION));
+        int h = MeasureSpec.getSize(heightSpec);
+        int dw = Math.max(1, Math.round(w * fractionFor(w, h)));
         LayoutParams lp = (LayoutParams) drawer.getLayoutParams();
         if (lp.width != dw) lp.width = dw;
         drawerWidth = dw;
         super.onMeasure(widthSpec, heightSpec);
     }
 
+    /** 按**当前**尺寸选抽屉比例：宽 > 高 = 横屏，收窄（否则内容层被压成一条）。 */
+    private static float fractionFor(int w, int h) {
+        if (w > 0 && h > 0 && w > h) return WIDTH_FRACTION_LANDSCAPE;
+        return WIDTH_FRACTION_PORTRAIT;
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        drawerWidth = Math.max(1, Math.round(w * WIDTH_FRACTION));
-        // 旋转 / 分屏改变宽度后也要重新摆位；动画或手指拖动中不能抢位置
+        onConfigChanged();
+    }
+
+    /**
+     * 方向 / 窗口尺寸变化后按**新**尺寸重算抽屉宽度并重新摆位。
+     *
+     * 旋转时 Activity 不重建（清单声明了 configChanges），onSizeChanged 通常也会到，
+     * 但那条路依赖"父容器真的重新量了"；这里做成显式入口，由
+     * MainActivity.onConfigurationChanged → relayoutForConfig() 主动调用，绝不依赖时序。
+     * 动画或手指拖动中不抢位置。
+     */
+    public void onConfigChanged() {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;          // 还没量过：交给 onMeasure
+        int dw = Math.max(1, Math.round(w * fractionFor(w, h)));
+        LayoutParams lp = (LayoutParams) drawer.getLayoutParams();
+        boolean widthChanged = lp.width != dw;
+        if (widthChanged) {
+            lp.width = dw;
+            drawer.setLayoutParams(lp);
+        }
+        drawerWidth = dw;
         if (anim == null && !dragging) applyTx(open ? 0f : -drawerWidth);
+        if (widthChanged) requestLayout();
     }
 
     /** 平移抽屉并把遮罩 alpha 按同一进度跟手。 */

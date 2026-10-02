@@ -18,6 +18,13 @@ public final class ChatItem {
      * 但说话的不是用户，不能渲染成右侧蓝色用户气泡。
      */
     public static final int AGENT = 7;
+    /**
+     * 简洁模式下的「过程摘要」行：把同一段里的一串工具调用压成一句话
+     * （PC 端工作台同款，例如「执行了命令」「已读取文件，执行了命令」）。
+     * 这一行由 {@link com.dsh.mobile.ui.ConversationView} 在简洁模式里现算，
+     * 完整模式永远不会出现（完整模式仍然逐条显示工具参数）。
+     */
+    public static final int STEP = 8;
 
     public int kind;
     public String key = "";
@@ -29,6 +36,10 @@ public final class ChatItem {
     public String toolPreview = "";
     public boolean toolError;
     public boolean toolRunning;
+    /** STEP 摘要行：这一段里还有工具在跑（摘要行要显示「正在运行命令 · pwsh…」）。 */
+    public boolean stepRunning;
+    /** STEP 摘要行：这一段里有工具失败了（摘要行按错误配色显示，不能被简洁模式吞掉）。 */
+    public boolean stepError;
     public long time;
     public boolean streaming;
 

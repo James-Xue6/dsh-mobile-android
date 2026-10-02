@@ -16,6 +16,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 
 import com.dsh.mobile.model.ChatItem;
+import com.dsh.mobile.model.StepProcess;
 
 import org.json.JSONArray;
 
@@ -56,6 +57,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
     private boolean compact;
     private List<ChatItem> full = new ArrayList<>();
+    /** 顶部提要的原始文本（简洁模式要按模式重新压行，不能只存压好的结果）。 */
+    private String planText = "";
     private boolean atBottom = true;
     /**
      * 手指是否按在列表上。流式输出时内容每 60ms 刷新一次，
@@ -277,21 +280,60 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         banner.setOnClickListener(actionable && onClick != null ? v -> onClick.run() : null);
     }
 
-    /** 顶部提要：当前目标 + 任务清单（空则隐藏）。 */
+    /**
+     * 顶部提要：当前目标 + 任务清单（空则隐藏）。
+     * 简洁模式只留「目标」一行 + 任务完成进度（任务 3/7）—— 一列待办本身
+     * 也是用户报的「简洁了还显示一大堆」的一部分；完整模式照旧全铺。
+     */
     public void setPlan(String text) {
+        this.planText = text == null ? "" : text;
+        renderPlan();
+    }
+
+    private void renderPlan() {
         if (planView == null) return;
-        if (text == null || text.trim().isEmpty()) {
+        if (planText.trim().isEmpty()) {
             planView.setVisibility(GONE);
             return;
         }
-        planView.setText(text);
+        planView.setMaxLines(compact ? 1 : 8);
+        planView.setText(compact ? compactPlan(planText) : planText);
         planView.setVisibility(VISIBLE);
+    }
+
+    /** 把「目标 + 待办清单」压成一行：目标（截断）+「任务 已完成/总数」。 */
+    private static String compactPlan(String text) {
+        String[] lines = text.split("\n", -1);
+        String goal = "";
+        int done = 0;
+        int total = 0;
+        for (String raw : lines) {
+            String s = raw.trim();
+            if (s.isEmpty()) continue;
+            char c0 = s.charAt(0);
+            if (c0 == '\u2611' || c0 == '\u25D0' || c0 == '\u2610') {
+                total++;
+                if (c0 == '\u2611') done++;
+            } else if (goal.isEmpty()) {
+                goal = s;
+            }
+        }
+        if (goal.length() > 60) goal = goal.substring(0, 60) + "…";
+        StringBuilder sb = new StringBuilder(goal);
+        if (total > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append("任务 ").append(done).append('/').append(total);
+        }
+        return sb.length() == 0 ? text : sb.toString();
     }
 
     public void setRunning(boolean value, String hint) {
         this.running = value;
         this.runningHint = hint == null ? "" : hint;
         adapter.setRunningHint(this.runningHint);
+        // 简洁模式的摘要行文案取决于"还在不在跑"（正在运行命令… / 执行了命令），
+        // 所以运行状态一变必须重算一次；完整模式只是多一个提示，重算也无害。
+        applyFilter();
         action.setText(value ? "■" : "↑");
         action.setTextSize(value ? 16f : 20f);
         action.setBackground(Ui.pill(value ? 0xFFE5E9F5 : Ui.BRAND));
@@ -303,24 +345,121 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         applyFilter();
     }
 
-    /** 简洁模式：完成的命令不显示，只保留"正在运行"与失败的行；空响应气泡也不显示。 */
+    /** 简洁模式：每个回合只留一条 PC 端工作台同款的过程摘要（见 applyFilter）。 */
     public void setCompact(boolean value) {
         this.compact = value;
         adapter.setCompact(value);
+        renderPlan();
         applyFilter();
     }
 
+    /**
+     * 列表最终显示什么，取决于模式：
+     *
+     *  完整模式（compact=false）：逐条显示 —— 工具参数/输出、思考块都在。
+     *  简洁模式（compact=true）：目标是「和 PC 端工作台一致的摘要」——
+     *     · 用户气泡、助手正文、审批/提问/交付物/专家团回传卡：保留（这是内容与决策）；
+     *     · 一串工具调用（TOOL）与命令回显（SYSTEM）：压成**一条**摘要行，
+     *       文案与桌面端 `message.stepProcess.*` 对齐（StepProcess）；
+     *     · 思考块（助手气泡上的「▸ 思考过程」）：不显示（ChatAdapter 按 compact 判断）；
+     *     · 注入项（runtime-context / skill-catalog / tool-jobs…）：早就在
+     *       MainActivity.isInjectedContext 里丢掉了，两种模式都不会出现。
+     * 运行中必须有可见提示：这一段里还有工具在跑时摘要行会写「正在运行命令 · pwsh…」，
+     * 连工具都还没发出来（正在分析）时补一条「深度求索中…」，免得用户以为卡住。
+     */
     private void applyFilter() {
         List<ChatItem> view = new ArrayList<>();
+        if (!compact) {
+            for (ChatItem it : full) {
+                // 没有正文的助手气泡一律不显示（只有思考、或工具回合的空壳）
+                if (it.kind == ChatItem.ASSISTANT && it.text.trim().isEmpty() && !it.streaming) continue;
+                view.add(it);
+            }
+            adapter.setItems(view);
+            return;
+        }
+
+        List<ChatItem> run = new ArrayList<>();
         for (ChatItem it : full) {
-            // 没有正文的助手气泡一律不显示（只有思考、或工具回合的空壳）——两种模式都适用
-            if (it.kind == ChatItem.ASSISTANT && it.text.trim().isEmpty() && !it.streaming) continue;
-            // 简洁模式过滤掉"已完成"的工具行；但失败的行必须留下，
-            // 否则用户只看得到结果不对、看不到哪一步出错了（评审 P1-12）。
-            if (compact && it.kind == ChatItem.TOOL && !it.toolRunning && !it.toolError) continue;
-            view.add(it);
+            switch (it.kind) {
+                case ChatItem.TOOL:
+                case ChatItem.SYSTEM:
+                    // 过程项：先攒着，遇到"内容行"再把它们压成一条摘要
+                    run.add(it);
+                    break;
+                case ChatItem.ASSISTANT:
+                    if (it.text.trim().isEmpty() && !it.streaming) break;
+                    flushStep(run, view);
+                    view.add(it);
+                    break;
+                case ChatItem.USER:
+                case ChatItem.APPROVAL:
+                case ChatItem.QUESTION:
+                case ChatItem.FILES:
+                case ChatItem.AGENT:
+                    flushStep(run, view);
+                    view.add(it);
+                    break;
+                default:
+                    break;
+            }
+        }
+        flushStep(run, view);
+
+        // 回合在跑但尾行不是"正在运行…"（例如刚发出、工具还没调用）→ 补一条可见提示
+        if (running && (view.isEmpty() || view.get(view.size() - 1).kind != ChatItem.STEP
+                || !view.get(view.size() - 1).stepRunning)) {
+            ChatItem hint = ChatItem.of(ChatItem.STEP, "compact:running", "");
+            hint.text = runningHint == null || runningHint.trim().isEmpty() ? "深度求索中…" : runningHint;
+            hint.stepRunning = true;
+            view.add(hint);
         }
         adapter.setItems(view);
+    }
+
+    /**
+     * 把攒下的一段「过程项」压成一条摘要行并追加到 view；空段不产生行。
+     * 只有命令回显（SYSTEM）、没有任何工具调用时整段丢弃 —— 简洁模式要给的是
+     * 「做了什么」的一句话，不是每条斜杠命令的回显。
+     */
+    private void flushStep(List<ChatItem> run, List<ChatItem> view) {
+        if (run.isEmpty()) return;
+        List<String> kinds = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        ChatItem lastRunningTool = null;
+        boolean anyTool = false;
+        boolean anyError = false;
+        for (ChatItem it : run) {
+            if (it.kind != ChatItem.TOOL) continue;
+            anyTool = true;
+            kinds.add(StepProcess.activity(it.toolName));
+            names.add(it.toolName == null || it.toolName.isEmpty() ? "工具" : it.toolName);
+            if (it.toolError) anyError = true;
+            // toolRunning 可能因为历史窗口里没有 turn/end 而残留在 true：
+            // 只有整个回合确实还在跑时才算"正在运行"，否则按已完成处理。
+            if (running && it.toolRunning) lastRunningTool = it;
+        }
+        run.clear();
+        if (!anyTool) return;
+
+        ChatItem row = ChatItem.of(ChatItem.STEP, "compact:" + view.size() + ":" + kinds.size(), "");
+        StringBuilder sb = new StringBuilder();
+        if (lastRunningTool != null) {
+            sb.append(StepProcess.runningLabel(StepProcess.activity(lastRunningTool.toolName)))
+                    .append(" · ").append(lastRunningTool.toolName.isEmpty() ? "工具" : lastRunningTool.toolName)
+                    .append('…');
+            row.stepRunning = true;
+        } else {
+            sb.append(StepProcess.title(kinds));
+            // 只有一次调用时把工具名带上，让「一句话」本身就能读懂做了什么
+            if (names.size() == 1) sb.append(" · ").append(names.get(0));
+        }
+        if (anyError) sb.append("（有失败）");
+        row.text = sb.toString();
+        row.stepError = anyError;
+        // 错误必须看得见：简洁模式不能把失败整段吞掉
+        if (anyError) row.text = "⚠ " + row.text;
+        view.add(row);
     }
 
     /** 合并高频刷新，避免流式输出时每 token 重绘。 */
@@ -379,6 +518,19 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     public void onWindowInsetsChanged() {
         if (!atBottom) return;
         scrollToBottom();
+    }
+
+    /**
+     * 方向 / 窗口尺寸变化（由 MainActivity.onConfigurationChanged 调用）。
+     *
+     * 旋转时 Activity 不重建，而气泡最大宽度是按屏宽算的（ChatAdapter.maxBubble），
+     * 所以这里必须按**当前**宽度重算一次并整表重画，否则横屏后气泡仍是竖屏的窄宽度。
+     */
+    public void onConfigChanged() {
+        adapter.refreshMetrics();
+        adapter.notifyDataSetChanged();
+        requestLayout();
+        if (atBottom) scrollToBottom();
     }
 
     // ---- ChatAdapter.Host 转发

@@ -37,7 +37,14 @@ public final class ChatAdapter extends BaseAdapter {
 
     private final Context ctx;
     private final Host host;
-    private final int maxBubble;
+    /**
+     * 气泡最大宽度：按**当前**屏宽算，**不是**构造时的死值。
+     *
+     * 旧实现只在构造函数里算一次，而清单声明了 configChanges，旋转时 Activity 不重建 →
+     * 横屏后气泡仍然只按竖屏宽度排版（屏宽 1080→1920 时明显偏窄）。
+     * 现在由 {@link #refreshMetrics()} 现算，MainActivity.onConfigurationChanged 会再调一次。
+     */
+    private int maxBubble;
     private List<ChatItem> items = new ArrayList<>();
     private String runningHint;
     private boolean compact;
@@ -47,6 +54,14 @@ public final class ChatAdapter extends BaseAdapter {
     public ChatAdapter(Context ctx, Host host) {
         this.ctx = ctx;
         this.host = host;
+        refreshMetrics();
+    }
+
+    /**
+     * 按当前屏宽重算气泡/图片的最大宽度（宽度的 80%）。
+     * 尺寸**现取** getResources().getDisplayMetrics()，不缓存旧值。
+     */
+    public void refreshMetrics() {
         int w = ctx.getResources().getDisplayMetrics().widthPixels;
         this.maxBubble = (int) (w * 0.80f);
     }
@@ -59,7 +74,7 @@ public final class ChatAdapter extends BaseAdapter {
     @Override public Object getItem(int position) { return items.get(position); }
     @Override public long getItemId(int position) { return position; }
 
-    @Override public int getViewTypeCount() { return 8; }
+    @Override public int getViewTypeCount() { return 9; }
 
     @Override public int getItemViewType(int position) { return items.get(position).kind; }
 
@@ -74,6 +89,7 @@ public final class ChatAdapter extends BaseAdapter {
             case ChatItem.QUESTION:  return questionCard(it);
             case ChatItem.FILES:     return filesCard(it);
             case ChatItem.AGENT:     return agentCard(it);
+            case ChatItem.STEP:      return stepRow(it);
             default:                 return systemRow(it);
         }
     }
@@ -145,8 +161,9 @@ public final class ChatAdapter extends BaseAdapter {
         bubble.setLayoutParams(lp);
         wrap.addView(bubble);
 
-        // 思考过程折叠展示
-        if (it.reasoning != null && !it.reasoning.trim().isEmpty()) {
+        // 思考过程折叠展示：**完整模式专属**。简洁模式要的是"和 PC 端一致的一句话摘要"，
+        // 每个助手气泡后面再挂一条「▸ 思考过程」正是用户报的"显示了一大堆"。
+        if (!compact && it.reasoning != null && !it.reasoning.trim().isEmpty()) {
             TextView r = Ui.text(ctx, "▸ 思考过程", 12.5f, Ui.INK_FAINT, false);
             r.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 4), 0, 0);
             r.setTag(it.reasoning);
@@ -237,12 +254,38 @@ public final class ChatAdapter extends BaseAdapter {
             TextView p = Ui.text(ctx, it.toolPreview, 12f, Ui.INK_SUB, false);
             p.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 3), 0, 0);
             p.setMaxLines(4);
-            p.setMaxWidth((int) (ctx.getResources().getDisplayMetrics().widthPixels * 0.8f));
+            p.setMaxWidth(maxBubble);
             p.setEllipsize(android.text.TextUtils.TruncateAt.END);
             p.setTypeface(android.graphics.Typeface.MONOSPACE);
             card.addView(p);
         }
         wrap.addView(card);
+        return wrap;
+    }
+
+    // ------------------------------------------------------------ 简洁模式：过程摘要行
+
+    /**
+     * 「简洁」模式下每个回合只有这一行：PC 端工作台同款的过程摘要
+     * （例如「执行了命令 · pwsh」「已读取文件，执行了命令」）。
+     *
+     * 这里**只显示摘要文本**：不显示工具参数、不显示工具输出，也不显示思考块 ——
+     * 那正是用户报的「手机上显示了一大堆」。想看细节切回完整模式。
+     * 正在运行 / 失败仍然要看得出来，否则用户会以为卡住了。
+     */
+    private View stepRow(ChatItem it) {
+        LinearLayout wrap = Ui.row(ctx);
+        wrap.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4));
+
+        int color = it.stepError ? Ui.ERR : (it.stepRunning ? Ui.WARN : Ui.INK_SUB);
+        TextView dot = Ui.text(ctx, it.stepError ? "⚠" : (it.stepRunning ? "◐" : "·"),
+                11.5f, color, false);
+        wrap.addView(dot);
+
+        TextView line = Ui.text(ctx, it.text == null ? "" : it.text, 12.5f, color, false);
+        line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
+        line.setTextIsSelectable(true);
+        wrap.addView(line);
         return wrap;
     }
 

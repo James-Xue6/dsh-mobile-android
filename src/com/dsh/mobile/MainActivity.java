@@ -9,6 +9,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.dsh.mobile.model.ChatItem;
@@ -16,6 +18,7 @@ import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.ui.ConversationView;
+import com.dsh.mobile.ui.DeviceHubView;
 import com.dsh.mobile.ui.DrawerHost;
 import com.dsh.mobile.ui.QrScanActivity;
 import com.dsh.mobile.ui.SessionListView;
@@ -34,12 +37,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 单 Activity 架构：对话页 / 连接设置两屏；会话列表是对话页上滑出的左侧抽屉（豆包式）。 */
+/**
+ * 单 Activity 架构：我的设备（启动页）/ 对话页 / 连接设置三屏；
+ * 会话列表是对话页上滑出的左侧抽屉（豆包式）。
+ *
+ * 启动落位：「我的设备」页（先看见自己添加过的电脑，在线/离线写在卡片上），
+ * 点某台设备的「连接/进入」才进对话页。设置页作为高级入口保留在右上角齿轮里。
+ */
 public final class MainActivity extends Activity implements
         GatewayClient.Listener,
         SessionListView.Host,
         ConversationView.Host,
-        SettingsView.Host {
+        SettingsView.Host,
+        DeviceHubView.Host {
 
     private static final int REQ_QR = 1001;
     private static final int REQ_VOICE = 1002;
@@ -56,12 +66,12 @@ public final class MainActivity extends Activity implements
     private static final boolean ALLOW_TEST_PAIRING_INTENT = false;
 
     /**
-     * 现在只有两级：对话页 / 设置页。
+     * 三级屏：我的设备（启动页）/ 对话页 / 设置页。
      * 会话列表不再是独立的第三块全屏页 —— 它是对话页上从左侧滑出的抽屉（豆包式），
      * 所以没有 LIST 这个"屏"了（旧代码的 Screen.LIST 已去掉）。
      */
-    private enum Screen { CHAT, SETTINGS }
-    private Screen screen = Screen.CHAT;
+    private enum Screen { DEVICE, CHAT, SETTINGS }
+    private Screen screen = Screen.DEVICE;
 
     /** 进程级共享的网关客户端：Activity 重建不应打断连接。 */
     private static GatewayClient SHARED_GW;
@@ -77,6 +87,8 @@ public final class MainActivity extends Activity implements
     private SessionListView listScreen;
     private ConversationView convo;
     private SettingsView settingsView;
+    /** 「我的设备」启动页。 */
+    private DeviceHubView deviceHub;
     /** 冷启动只自动决定一次：进最近一条会话，或拉开抽屉提示"还没有对话"。 */
     private boolean autoEntered = false;
 
@@ -215,13 +227,12 @@ public final class MainActivity extends Activity implements
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        // 防截屏 / 防最近任务缩略图泄漏（安全评审 P1-10 必修项）：
-        // 这个界面会出现设备令牌（掩码后仍有末 4 位）、网关地址，以及全部聊天正文与工具输出。
-        // 不设这个标志时：任意 App 可截屏、系统「最近任务」缩略图会把聊天内容留在后台快照里。
-        // FLAG_SECURE 同时关掉两者，代价是用户自己也无法截屏（本 App 没有分享截图的需求）。
-        getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE,
-                android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        // 截屏策略改为**用户可关的开关**（Store.allowScreenshot，默认 true）：
+        //   - 默认不设 FLAG_SECURE：用户能截图/录屏，系统「最近任务」缩略图正常；
+        //   - 只有用户在设置页关掉「允许截屏」时才设上（此时本 App 内容截图变黑）。
+        // 令牌的掩码显示与这个开关无关：令牌仍只显示末 4 位，取消 FLAG_SECURE 不等于明文暴露它。
         store = new Store(this);
+        applyScreenshotPolicy();
         if (SHARED_GW == null) SHARED_GW = new GatewayClient(this);
         else SHARED_GW.setListener(this);
         gw = SHARED_GW;
@@ -273,10 +284,10 @@ public final class MainActivity extends Activity implements
         drawerHost.drawer().addView(listScreen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // 冷启动落在「我的设备」页：先看见自己添加过的电脑（在线/离线写在卡片上），
+        // 点某台的「连接/进入」才进对话页（用户要求：我的设备在对话页之前）。
+        showDevices();
         if (store.paired()) {
-            // 冷启动直接进对话页（豆包式：不再有"列表 ⇄ 对话"两级全屏切换）；
-            // 会话列表到达后由 maybeAutoEnter() 决定进最近一条会话、还是拉开抽屉。
-            showChat();
             GatewayClient.State st = gw.state();
             if (st == GatewayClient.State.READY || st == GatewayClient.State.CONNECTING
                     || st == GatewayClient.State.AUTHENTICATING) {
@@ -284,14 +295,13 @@ public final class MainActivity extends Activity implements
                 refreshListStatus();
             } else {
                 gw.setTrustAllCerts(store.insecureTls());
-        checkUpdate(false);   // 启动时后台查一次新版本（6 小时内不重复）
-        gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
+                checkUpdate(false);   // 启动时后台查一次新版本（6 小时内不重复）
+                gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
             }
-        } else {
-            showSettings();
         }
         refreshListStatus();
         registerNetworkCallback();
+        registerBackInvoked();
     }
 
     // ---- 网络变化感知（评审 P0-1 第三条）
@@ -386,29 +396,179 @@ public final class MainActivity extends Activity implements
         super.onDestroy();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从设置页 / 别处切回来时对齐一次截屏策略：用户在设置里一改就立即生效，不需要重启 App
+        applyScreenshotPolicy();
+    }
+
+    /**
+     * 截屏策略落地：默认（allowScreenshot=true）**不设** FLAG_SECURE，用户能截图/录屏；
+     * 只有用户关掉「允许截屏」时才设上（本 App 内截图/录屏变黑、最近任务缩略图变黑）。
+     *
+     * clearFlags / setFlags 是窗口级即时生效的，切换后**不需要重启 App**。
+     * 同时把策略同步进 Ui 的进程级镜像，让添加设备弹窗、手动添加表单这些独立 Dialog
+     * 窗口走同一条策略（见 Ui.applyScreenshotPolicy）。
+     */
+    private void applyScreenshotPolicy() {
+        if (store == null) return;
+        boolean allow = store.allowScreenshot();
+        Ui.setAllowScreenshot(allow);
+        Ui.applyScreenshotPolicy(getWindow());
+    }
+
+    /**
+     * 方向 / 窗口尺寸变化：清单里声明了
+     * {@code configChanges="orientation|screenSize|screenLayout|smallestScreenSize|...}"}，
+     * 所以旋转时 Activity **不会重建**（会话状态全在内存里，重建会丢掉正在跑的对话）。
+     *
+     * 代价是：手搓的 View 树会保留竖屏（旧尺寸）的测量结果 → 控件跑到屏幕外。
+     * 因此这里必须主动按**新**尺寸重新布置三个屏。尺寸一律现取
+     * （{@link #relayoutForConfig()} 内部用 getResources()/getWidth() 现算），绝不缓存旧值。
+     */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        relayoutForConfig();
+    }
+
+    /**
+     * 按当前（新）尺寸重新布置三屏 + 抽屉。
+     *
+     * 只做"重新测量/重挂"，不动任何会话状态（不发请求、不清 items、不重置分页）：
+     *   ① 根容器重新申请内边距（横竖屏的系统栏高度不同，导航栏可能从底部跑到侧边）；
+     *   ② 抽屉宽度按新屏宽重算（横屏收窄到 ~52%，见 DrawerHost.fractionFor）；
+     *   ③ 对话气泡最大宽度重算（ChatAdapter.maxBubble 原来是构造时算一次的死值）；
+     *   ④ 当前那一屏重挂/重画一次，强制用新尺寸重新测量（三个屏都是手搓 View 树）。
+     */
+    private void relayoutForConfig() {
+        if (root != null) {
+            root.requestApplyInsets();   // 系统栏/键盘内边距随方向变化
+            root.requestLayout();
+        }
+        if (drawerHost != null) drawerHost.onConfigChanged();
+        if (listScreen != null) listScreen.requestLayout();
+        if (convo != null) convo.onConfigChanged();
+        if (settingsView != null) settingsView.requestLayout();
+        if (deviceHub != null) deviceHub.requestLayout();
+        // 设置页不重挂：重挂会重新 setFields() 把用户正在输入的内容覆盖回 store 里的旧值。
+        // 对话页 / 设备页的内容全部由内存状态推导，重挂是安全且最彻底的"用新尺寸重新测量"。
+        if (screen == Screen.CHAT) showChat();
+        else if (screen == Screen.DEVICE) showDevices();
+    }
+
     private long lastBackAt = 0L;
+
+    /**
+     * 「我的设备」是不是盖在对话页上面打开的（抽屉里的 🖥 入口）。
+     *
+     * 冷启动时它是**根页**，再按返回就该退到后台；但从抽屉点进来时它只是
+     * 对话页上面的一层，按返回应当回对话页。两种情形屏号相同，只能靠这个标记区分。
+     */
+    private boolean deviceOverChat = false;
+
+    /**
+     * 抽屉是不是「被返回键按出来的」。
+     *
+     * 豆包式两级导航：对话页按返回 ⇒ 拉开左侧任务列表（抽屉 = 外层）。
+     * 用 ‹ 箭头手动拉开的抽屉不是"外层"，按返回只把它关掉。
+     */
+    private boolean drawerAsParent = false;
+
+    /**
+     * 「已经关过一次"由返回键按出来的抽屉"」的时刻。
+     *
+     * 关掉它之后的这一小段时间里再按返回 = 用户明确要退出（用户口径第 4 条
+     * 「抽屉在对话页已经是最外层 → 再按返回才退到后台」）；过了这段时间再按返回，
+     * 仍然按第 3 条重新拉开任务列表，不会把用户"锁"在必须退出的状态里。
+     */
+    private long backExitArmedAt = 0L;
+    /** 「再按一次返回即退到后台」的有效窗口。 */
+    private static final long BACK_EXIT_WINDOW_MS = 2500L;
 
     /**
      * 返回键处理。走两条路：
      *  - dispatchKeyEvent 兜住 KEYCODE_BACK（清单已关闭预测式返回，保证按键会送到这里）
      *  - onBackPressed 作为老版本回退
      * 两条路对同一次按键可能都触发，用时间窗去重。
+     *
+     * 返回栈（用户口径，逐级）：
+     *   ① 抽屉开着 → 关抽屉；
+     *   ② 设置页 / 从抽屉进的设备页 → 回对话页；
+     *   ③ 对话页 → 拉开任务列表抽屉（**不是**退回「我的设备」）；
+     *   ④ 抽屉在对话页已是最外层 → 再按返回退到系统后台（moveTaskToBack）。
+     * 「我的设备」不再是返回栈的一级 —— 它只是抽屉里的一个入口（见 onDevices）。
      */
     private void handleBackKey() {
         long now = System.currentTimeMillis();
         if (now - lastBackAt < 400L) return;
         lastBackAt = now;
-        // 抽屉开着时返回键只关抽屉，不退出 App（豆包式两级导航）
+
         if (drawerHost != null && drawerHost.isOpen()) {
+            // ①：抽屉开着，返回 = 关抽屉
+            boolean wasParent = drawerAsParent;
             closeDrawer();
+            drawerAsParent = false;
+            if (wasParent) backExitArmedAt = now;   // ④：刚从"任务列表"退回，再按一次就退出
             return;
         }
         if (screen == Screen.SETTINGS) {
-            showChat();
+            showChat();                             // ②：设置页 → 对话页
             return;
         }
-        // 对话页：不再有"回到列表页"这一级（列表已变成抽屉），走系统的退到后台
+        if (screen == Screen.CHAT) {
+            if (now - backExitArmedAt < BACK_EXIT_WINDOW_MS) {
+                moveTaskToBack(true);               // ④：抽屉已是最外层 → 退到后台
+                return;
+            }
+            openDrawerByBack();                     // ③：对话页 → 任务列表抽屉
+            return;
+        }
+        if (deviceOverChat) {
+            showChat();                             // ②：设备页（从抽屉进的）→ 对话页
+            return;
+        }
+        // 冷启动落在「我的设备」= 根页：再返回就退到系统后台
         moveTaskToBack(true);
+    }
+
+    /** 按 ‹ 箭头拉开抽屉：这是"看一眼任务列表"，返回键只负责关掉它。 */
+    private void openDrawer() {
+        drawerAsParent = false;
+        if (drawerHost == null) return;
+        if (listScreen != null) {
+            listScreen.setCurrentSession(currentSessionId);
+            listScreen.setRows(buildRows());
+        }
+        refreshListStatus();
+        drawerHost.openDrawer(true);
+    }
+
+    /** 返回键拉开抽屉：抽屉即"最外层"，再按返回退到后台。 */
+    private void openDrawerByBack() {
+        openDrawer();
+        drawerAsParent = true;
+    }
+
+    /**
+     * 系统侧滑 / 预测式返回（Android 13+）。
+     *
+     * 清单里是 `enableOnBackInvokedCallback="false"`：系统把**手势返回**也当成传统的
+     * KEYCODE_BACK 派发下来，由上面的 dispatchKeyEvent 接管 —— 两条路（按键 / 侧滑）
+     * 因此走的是同一个 handleBackKey()，返回栈完全一致。
+     *
+     * 这里再把 OnBackInvokedCallback 也注册上，作为"万一开关被打开"的兜底：
+     * 一旦有人把清单开关改成 true，手势返回仍然落在同一套逻辑里，
+     * 而不会退化成系统默认的"直接关掉 Activity"（那样又会绕过返回栈）。
+     */
+    private void registerBackInvoked() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        try {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    this::handleBackKey);
+        } catch (Throwable ignored) { /* 老系统 / 无 dispatcher：按键那条路依然在 */ }
     }
 
     @Override
@@ -447,26 +607,13 @@ public final class MainActivity extends Activity implements
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    /**
-     * 打开左侧任务列表抽屉（对话页左上角 ‹ 的行为）。
-     * 每次打开都刷新一遍行 + 当前会话高亮，保证"我在哪个任务里"在抽屉里看得见。
-     */
-    private void openDrawer() {
-        if (drawerHost == null) return;
-        if (listScreen != null) {
-            listScreen.setCurrentSession(currentSessionId);
-            listScreen.setRows(buildRows());
-        }
-        refreshListStatus();
-        drawerHost.openDrawer(true);
-    }
-
     private void closeDrawer() {
         if (drawerHost != null) drawerHost.closeDrawer(true);
     }
 
     private void showChat() {
         screen = Screen.CHAT;
+        deviceOverChat = false;   // 已经回到对话页，"设备页盖在对话上"这一层就没了
         if (convo == null) convo = new ConversationView(this, this);
         setContent(convo);
         convo.setCompact("compact".equals(store.displayMode()));
@@ -489,11 +636,85 @@ public final class MainActivity extends Activity implements
                 store.deviceName(), store.useWan());
         settingsView.setDisplayMode(store.displayMode());
         settingsView.setInsecureTls(store.insecureTls());
+        settingsView.setAllowScreenshot(store.allowScreenshot());
         refreshAbout();
         settingsView.setUpdateHint(lastUpdateHint);
         refreshFeedbackHint();
         settingsView.setStatus(lastStateText.isEmpty() ? "未连接" : lastStateText, false);
         refreshDiagnostics();
+    }
+
+    // ============================================================ 我的设备（启动页）
+
+    /** 进「我的设备」页并重画卡片（在线状态以当前 WebSocket 实况为准）。 */
+    private void showDevices() {
+        screen = Screen.DEVICE;
+        if (deviceHub == null) deviceHub = new DeviceHubView(this, this);
+        setContent(deviceHub);
+        refreshDevices();
+    }
+
+    /**
+     * 在线/离线的判定依据（**唯一**判据，不写死、不靠"配过对"就算在线）：
+     * App 与那台电脑的 WebSocket 是否真的握手成功并处于 READY
+     * （{@link GatewayClient.State#READY}）。断线 / 从未配对 / 电脑端网关被关掉 => 离线。
+     *
+     * 这里额外要求 canSend()（最近 30s 内收到过入站帧）：
+     * 半开链路（对端网卡关掉、隧道断掉）在 75s 假连接判定触发前 state 仍是 READY，
+     * 只看 state 会把"其实已经发不出帧"显示成在线 —— 那正是用户明确不要的假在线。
+     * 正常连接每 25s 一个 ping/pong（网关 lib/index.mjs:2896 收到 ping 回 pong），
+     * 30s 窗口稳得住。
+     */
+    private boolean isOnline() {
+        return gw != null && gw.state() == GatewayClient.State.READY && gw.canSend();
+    }
+
+    /** 重画设备卡片：设备表 + 当前生效的那台 + 实况在线状态。 */
+    private void refreshDevices() {
+        if (deviceHub == null) return;
+        java.util.List<Store.Device> list = store.devices();
+        Store.Device active = store.activeDevice();
+        boolean online = active != null && isOnline();
+        deviceHub.setDevices(list, active == null ? "" : active.id, online);
+        if (list.isEmpty()) {
+            deviceHub.setStatus("还没有设备 · 点下面的「＋ 添加设备」", false);
+            return;
+        }
+        if (online) {
+            deviceHub.setStatus("已连接 " + active.displayName()
+                    + (active.useWan ? " · 走公网" : " · 走内网"), false);
+        } else {
+            String detail = lastStateText.isEmpty() ? "还没连上" : lastStateText;
+            deviceHub.setStatus("离线 · " + detail, true);
+        }
+    }
+
+    /** 从设备卡片进对话页：让"冷启动自动落位"逻辑补跑一次（列表可能早就到了）。 */
+    private void enterChat() {
+        showChat();
+        autoEntered = false;
+        maybeAutoEnter();
+    }
+
+    /** 按当前生效设备（已镜像进 store 的旧字段）重开连接，并刷新设备卡片。 */
+    private void gatewayReconnect() {
+        String url = store.url();
+        String token = store.token();
+        if (url.isEmpty() || token.isEmpty()) {
+            Toast.makeText(this, "这台设备还没有地址或令牌，请重新扫码或手动添加", Toast.LENGTH_LONG).show();
+            refreshDevices();
+            return;
+        }
+        String problem = GatewayClient.cleartextProblem(url);
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            refreshDevices();
+            return;
+        }
+        failoverUsed = false;
+        gw.setTrustAllCerts(store.insecureTls());
+        gw.connect(url, token, store.deviceId(), store.deviceName());
+        refreshDevices();
     }
 
     private List<SessionInfo> visibleSessions() {
@@ -835,7 +1056,7 @@ public final class MainActivity extends Activity implements
             int visible = topLevelSessionCount();
             s = visible + " 个对话 · " + (store.gatewayName().isEmpty() ? hostOf(store.url()) : store.gatewayName());
         } else if (!store.paired()) {
-            s = "还没配对 · 点右上角齿轮设置";
+            s = "还没添加设备 · 回「我的设备」添加";
         } else {
             s = lastStateText.isEmpty() ? "连接中…" : lastStateText;
         }
@@ -917,6 +1138,9 @@ public final class MainActivity extends Activity implements
             refreshDiagnostics();
         }
         refreshListStatus();
+        // 设备卡片上的「在线/离线」必须跟着实况走：状态一变就重画（READY 时顺带记一次"上次在线"）
+        if (st == GatewayClient.State.READY) store.touchActiveSeen();
+        refreshDevices();
     }
 
     /**
@@ -935,15 +1159,20 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onHello(JSONObject hello) {
+        String gid = "", gname = "", dshVer = "";
         try {
-            String gid = hello.optString("gatewayId", "");
+            gid = hello.optString("gatewayId", "");
+            gname = hello.optString("gatewayName", "");
+            dshVer = hello.optString("dshVersion", "");
             if (!gid.isEmpty()) store.setGatewayId(gid);
-            String gname = hello.optString("gatewayName", "");
             if (!gname.isEmpty()) store.setGatewayName(gname);
             historyFormatVersion = hello.optInt("historyFormatVersion", 4);
         } catch (Throwable ignored) { }
+        // 网关告诉我们的身份/版本落进"当前这台设备"：离线时卡片也能显示名字与版本标签
+        store.updateActiveMeta(gid, gname, dshVer);
         gw.requestSessions();
         refreshListStatus();
+        refreshDevices();
     }
 
     @Override
@@ -964,6 +1193,7 @@ public final class MainActivity extends Activity implements
         pairTraceAdd("✓ 配对成功：已拿到设备令牌（" + token.length() + " 字符，不记内容）");
         if (settingsView != null) settingsView.setStatus("配对成功", false);
         refreshDiagnostics();
+        refreshDevices();   // 设备卡片上补上刚配好的名字/地址/令牌
         gw.requestSessions();
         showChat();
     }
@@ -1506,6 +1736,18 @@ public final class MainActivity extends Activity implements
             historyFormatVersion = 4;
             nextBeforeSeq = null;
             hasMore = false;
+            return;
+        }
+        // 「这个会话读不了」这类网关侧拒绝（典型：子会话在宿主侧必须带 durable parent
+        // address，而网关的 host-adapter 只发 {kind:'session'} → session/agent-busy）改成走
+        // 顶部内联横幅，不再弹一条英文错误 Toast。横幅里已经带了 code，而且会一直挂到真的
+        // 接上为止；用户报的「一直弹」里也包含这一条。
+        if ("session/agent-busy".equals(code)) {
+            if (sessionId == null || sessionId.isEmpty() || sessionId.equals(currentSessionId)) {
+                showStreamNotice(false,
+                        "这个会话暂时读不到内容（" + code + "），还在重试…",
+                        sessionId == null ? "" : sessionId);
+            }
             return;
         }
         String text = (message == null || message.isEmpty()) ? code : message;
@@ -2672,6 +2914,14 @@ public final class MainActivity extends Activity implements
         showSettings();
     }
 
+    /** 抽屉里的「我的设备」入口：收起抽屉，进设备页看在线状态；返回键回对话页（不是根页）。 */
+    @Override
+    public void onDevices() {
+        closeDrawer();
+        deviceOverChat = true;
+        showDevices();
+    }
+
     @Override
     public void onRefresh() {
         gw.requestSessions();
@@ -2717,7 +2967,7 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ ConversationView.Host
 
-    /** 设置页左上角 ‹：回对话页（会话列表已是抽屉，没有列表全屏页了）。 */
+    /** 设置页左上角 ‹：回对话页（设置页是从抽屉进来的，返回栈上一级是对话）。 */
     @Override
     public void onBack() {
         showChat();
@@ -2733,7 +2983,7 @@ public final class MainActivity extends Activity implements
     public void onSend(String text) {
         if (convo != null) convo.setBanner(null, false);
         if (gw.state() != GatewayClient.State.READY) {
-            Toast.makeText(this, "还没连上电脑端，请先在设置里配对/连接", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "还没连上电脑端，回「我的设备」点连接", Toast.LENGTH_LONG).show();
             return;
         }
         lastSentText = text == null ? "" : text;
@@ -2858,6 +3108,335 @@ public final class MainActivity extends Activity implements
         item.resolvedOutcome = "cancelled";
         if (convo != null) { convo.setItems(items); convo.refreshNow(); }
         armInteractionWatchdog(item);   // 等 question-response 回执，超时回滚
+    }
+
+    // ============================================================ DeviceHubView.Host（我的设备）
+
+    /** 「连接/进入」：切到这台设备（不是当前生效的那台就先切过去）并连上，然后进对话页。 */
+    @Override
+    public void onOpenDevice(Store.Device d) {
+        if (d == null) return;
+        if (!d.pairedReady()) {
+            Toast.makeText(this, "这台设备还没有地址或令牌，请重新扫码或手动添加",
+                    Toast.LENGTH_LONG).show();
+            refreshDevices();
+            return;
+        }
+        if (!d.id.equals(store.activeDeviceId())) store.setActiveDevice(d.id);
+        if (!isOnline()) gatewayReconnect();
+        enterChat();
+    }
+
+    /** 「修改名称」：改的是本机这张卡片的显示名，电脑端不受影响。 */
+    @Override
+    public void onRenameDevice(final Store.Device d) {
+        if (d == null) return;
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(d.displayName());
+        input.setSelection(input.getText().length());
+        input.setHint("给这台电脑起个名字");
+        int pad = Ui.dp(this, 18);
+        input.setPadding(pad, Ui.dp(this, 10), pad, Ui.dp(this, 10));
+        new AlertDialog.Builder(this)
+                .setTitle("修改名称")
+                .setView(input)
+                .setPositiveButton("保存", (dlg, w) -> {
+                    String v = input.getText().toString().trim();
+                    if (v.isEmpty()) {
+                        Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    store.renameDevice(d.id, v);
+                    refreshDevices();
+                    Toast.makeText(this, "已改名为「" + v + "」", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 「删除」= 清除这台设备的地址与令牌（电脑端不受影响，重新扫码即可再添加）。 */
+    @Override
+    public void onDeleteDevice(final Store.Device d) {
+        if (d == null) return;
+        new AlertDialog.Builder(this)
+                .setTitle("删除「" + d.displayName() + "」")
+                .setMessage("会清除这台设备在本机保存的地址与设备令牌。\n"
+                        + "电脑端不受影响，之后重新扫码就能再添加。")
+                .setPositiveButton("删除", (dlg, w) -> {
+                    boolean wasActive = d.id.equals(store.activeDeviceId());
+                    store.removeDevice(d.id);
+                    if (wasActive) {
+                        gw.disconnect();
+                        // 还有别的设备就切过去并重连（删掉的是正在用的那台时）
+                        Store.Device next = store.activeDevice();
+                        if (next != null && next.pairedReady()) gatewayReconnect();
+                    }
+                    refreshDevices();
+                    Toast.makeText(this, "已删除「" + d.displayName() + "」", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 「扫码添加」：复用现有扫码页（扫电脑面板的配对二维码）。 */
+    @Override
+    public void onScanAdd() {
+        onScanQr();
+    }
+
+    /** 「手动添加」：输入地址 + 令牌（等价于设置页那几个字段，但走设备卡片这条正常流程）。 */
+    @Override
+    public void onManualAdd() {
+        showManualAddDialog();
+    }
+
+    /** 右上角齿轮：原来的连接设置页（地址/令牌字段保留，作为高级入口）。 */
+    @Override
+    public void onOpenSettings() {
+        showSettings();
+    }
+
+    /**
+     * 手动添加设备：手搓底部圆角卡片（不用 AlertDialog 的系统默认外观，也不引入任何新依赖）。
+     * 字段 = 小号灰标签 + {@link Ui#field} 的统一圆角输入框；主按钮「保存并连接」用品牌色实心，
+     * 次按钮「取消」「扫码添加」用浅色描边——与设置页、设备卡片同一套样式。
+     * 校验失败时把原因内联显示在字段下方（不再只用 Toast），没填全时保存按钮置灰。
+     */
+    private void showManualAddDialog() {
+        final EditText lan = Ui.field(this, "ws://192.168.1.100:3091/ws/mobile");
+        final EditText wan = Ui.field(this, "wss://你的域名/ws/mobile");
+        final EditText tk = Ui.field(this, "电脑端配对后给出的那串");
+        // 令牌是长期凭证：和设置页一样始终掩码，不摆在任何一张截屏里
+        tk.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        final EditText alias = Ui.field(this, "给这台电脑起个名字（可留空）");
+
+        final LinearLayout card = Ui.sheetCard(this);
+
+        // 头部（小横条 + 标题 + 副标题）：高度不随字段区变化，用来算"还能留给字段区多少"
+        final LinearLayout head = Ui.col(this);
+        head.setLayoutParams(Ui.fill());
+        android.view.View bar = new android.view.View(this);
+        bar.setBackground(Ui.pill(Ui.LINE));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                Ui.dp(this, 40), Ui.dp(this, 4));
+        blp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        blp.bottomMargin = Ui.dp(this, 12);
+        bar.setLayoutParams(blp);
+        head.addView(bar);
+
+        head.addView(Ui.text(this, "手动添加设备", 17f, Ui.INK, true));
+        TextView sub = Ui.text(this, "电脑端 DSH 打开「移动设备」面板，照着那边的信息填过来",
+                12.5f, Ui.INK_SUB, false);
+        sub.setPadding(0, Ui.dp(this, 5), 0, Ui.dp(this, 2));
+        head.addView(sub);
+        card.addView(head);
+
+        // 字段区：统一「标签在上、输入框在下」的排版；错误提示内联在字段下方
+        LinearLayout form = Ui.col(this);
+        form.addView(Ui.fieldLabel(this, "内网地址"));
+        form.addView(lan);
+
+        form.addView(Ui.fieldLabel(this, "公网地址（可留空）"));
+        form.addView(wan);
+        form.addView(Ui.fieldHint(this, "在外面时用；隧道域名会变，失效后重新扫码更新。"));
+
+        form.addView(Ui.fieldLabel(this, "设备令牌"));
+        form.addView(tk);
+        form.addView(Ui.fieldHint(this, "电脑端配对后给出；只存在这台手机上。"));
+
+        form.addView(Ui.fieldLabel(this, "设备名称（可留空）"));
+        form.addView(alias);
+
+        final TextView err = Ui.text(this, "", 12f, Ui.ERR, false);
+        err.setPadding(Ui.dp(this, 2), Ui.dp(this, 10), Ui.dp(this, 2), 0);
+        err.setVisibility(android.view.View.GONE);
+        form.addView(err);
+
+        // 字段区可滚（限高），按钮区固定在卡片底部 → 键盘弹起也不会盖住「保存并连接」
+        final FieldScroll scroller = new FieldScroll(this, Ui.dp(this, 460));
+        scroller.setFillViewport(false);
+        scroller.addView(form, new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = Ui.dp(this, 4);
+        scroller.setLayoutParams(slp);
+        card.addView(scroller);
+
+        final android.app.Dialog dlg = new android.app.Dialog(this);
+
+        // 底部（按钮区）：也不参与滚动，永远贴在卡片底部
+        final LinearLayout foot = Ui.col(this);
+        foot.setLayoutParams(Ui.fill());
+
+        LinearLayout btns = Ui.row(this);
+        btns.setPadding(0, Ui.dp(this, 14), 0, 0);
+        TextView cancel = Ui.secondaryButton(this, "取消");
+        cancel.setOnClickListener(v -> dlg.dismiss());
+        btns.addView(cancel, manualWeight(1f, 0));
+        final TextView save = Ui.primaryButton(this, "保存并连接");
+        btns.addView(save, manualWeight(1.4f, 10));
+        foot.addView(btns);
+
+        TextView scan = Ui.secondaryButton(this, "扫码添加（电脑端有二维码时更快）");
+        scan.setLayoutParams(manualFull(10));
+        scan.setOnClickListener(v -> {
+            dlg.dismiss();
+            onScanAdd();
+        });
+        foot.addView(scan);
+        card.addView(foot);
+
+        // 按钮区高度固定，量一次就够：把它从"字段区可用高度"里扣掉，
+        // 输入法把窗口改矮时 FieldScroll 会在 onMeasure 里自己重算（不依赖布局回调）。
+        final Runnable reserve = () -> scroller.setReserved(
+                foot.getHeight() + card.getPaddingTop() + card.getPaddingBottom() + Ui.dp(this, 6));
+        foot.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> reserve.run());
+        foot.post(reserve);
+
+        // 置灰：内网/公网都空，或令牌没填 → 「保存并连接」不可点
+        final Runnable sync = () -> {
+            boolean ok = !(lan.getText().toString().trim().isEmpty()
+                    && wan.getText().toString().trim().isEmpty())
+                    && !tk.getText().toString().trim().isEmpty();
+            Ui.setButtonEnabled(save, ok);
+        };
+        android.text.TextWatcher watch = new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable s) {
+                err.setVisibility(android.view.View.GONE);   // 一改就撤掉上一次的内联错误
+                sync.run();
+            }
+        };
+        lan.addTextChangedListener(watch);
+        wan.addTextChangedListener(watch);
+        tk.addTextChangedListener(watch);
+        sync.run();
+
+        save.setOnClickListener(v -> {
+            String l = lan.getText().toString().trim();
+            String w = wan.getText().toString().trim();
+            String t = tk.getText().toString().trim();
+            if (l.isEmpty() && w.isEmpty()) {
+                inlineError(err, "请先填内网地址或公网地址——两个都空就连不上电脑。");
+                return;
+            }
+            if (t.isEmpty()) {
+                inlineError(err, "还差设备令牌：电脑端配对后会给出一串。");
+                return;
+            }
+            String problem = GatewayClient.cleartextProblem(l.isEmpty() ? w : l);
+            if (problem != null) {
+                inlineError(err, problem);
+                return;
+            }
+            dlg.dismiss();
+            addManualDevice(l, w, t, alias.getText().toString());
+        });
+
+        android.widget.FrameLayout host = new android.widget.FrameLayout(this);
+        host.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 12));
+        host.addView(card, new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM));
+        // 窗口占满屏：卡片贴底。刻意不做"点卡片外面就关掉"——真机上手抖点到空白处
+        // 会把已经填了一半的地址/令牌全丢掉；关闭只走「取消」按钮和返回键。
+        card.setClickable(true);
+
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        dlg.setContentView(host);
+        dlg.setCanceledOnTouchOutside(false);
+        android.view.Window win = dlg.getWindow();
+        if (win != null) {
+            win.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                    android.graphics.Color.TRANSPARENT));
+            win.setGravity(android.view.Gravity.BOTTOM);
+            // 窗口高度必须占满可用区：这样键盘压矮窗口时才能算准"还剩多少给字段区"，
+            // 否则 wrap_content 窗口会随卡片长高而"越长越高"，把底部按钮顶出屏幕
+            win.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+            // 同「粘贴配对串」：输入法弹起时缩内容，而不是把按钮盖在下面
+            win.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                    | android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED);
+            // 这个窗口里会出现设备令牌：按当前的「允许截屏」策略决定要不要设 FLAG_SECURE
+            // （默认允许截屏 → 不设；用户关掉开关 → 这个弹窗的截图同样变黑）
+            Ui.applyScreenshotPolicy(win);
+            win.setDimAmount(0.35f);
+            win.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        dlg.show();
+    }
+
+    /**
+     * 字段滚动区：高度上限 = 「父容器这次给的可用高度 − 底部按钮区高度」。
+     * 输入法把窗口改矮时，父容器给的可用高度会跟着变小，而 onMeasure 每次布局都会重跑，
+     * 所以「保存并连接」永远不会被键盘顶出屏幕——比挂布局回调可靠（真机上回调未必来）。
+     * 内容少时按内容高，最多长到 maxPx，卡片仍然是一张浮起来的小卡片而不是整屏。
+     */
+    private static final class FieldScroll extends android.widget.ScrollView {
+        private final int maxPx;
+        private int reservedPx;
+
+        FieldScroll(android.content.Context c, int maxPx) {
+            super(c);
+            this.maxPx = maxPx;
+        }
+
+        void setReserved(int px) {
+            if (px != reservedPx) {
+                reservedPx = px;
+                requestLayout();
+            }
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            int avail = android.view.View.MeasureSpec.getSize(heightSpec) - reservedPx;
+            int cap = Math.min(maxPx, Math.max(0, avail));
+            super.onMeasure(widthSpec, android.view.View.MeasureSpec.makeMeasureSpec(
+                    cap, android.view.View.MeasureSpec.AT_MOST));
+        }
+    }
+
+    /** 内联错误：显示在字段下方（不再只用 Toast，用户一眼能看出是哪一栏的问题）。 */
+    private void inlineError(TextView err, String msg) {
+        err.setText(msg);
+        err.setVisibility(android.view.View.VISIBLE);
+    }
+
+    private LinearLayout.LayoutParams manualWeight(float w, int marginStartDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, w);
+        lp.leftMargin = Ui.dp(this, marginStartDp);
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams manualFull(int marginTopDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dp(this, marginTopDp);
+        return lp;
+    }
+
+    /** 手动添加落地：新建一张设备卡片、设为当前生效并连接。 */
+    private void addManualDevice(String lan, String wan, String token, String alias) {
+        Store.Device d = new Store.Device();
+        d.id = store.newDeviceId();
+        d.lanUrl = lan;
+        d.wanUrl = wan;
+        d.useWan = lan.isEmpty() && !wan.isEmpty();
+        d.token = token;
+        d.name = alias == null ? "" : alias.trim();
+        store.upsertDevice(d, true);   // 顺带把地址/令牌镜像进旧字段
+        Toast.makeText(this, "已添加：" + d.displayName(), Toast.LENGTH_SHORT).show();
+        gatewayReconnect();
+        refreshDevices();
     }
 
     // ============================================================ SettingsView.Host
@@ -3524,6 +4103,21 @@ public final class MainActivity extends Activity implements
         }
     }
 
+    /**
+     * 「允许截屏」开关：写盘 + 立即重设窗口标志（不重启 App 就生效）。
+     *
+     * 关掉时本 App 的截图/录屏会变黑、最近任务缩略图也会变黑；
+     * 打开时恢复可截图。令牌仍然只显示末 4 位，与这个开关无关。
+     */
+    @Override
+    public void onToggleAllowScreenshot(boolean on) {
+        store.setAllowScreenshot(on);
+        applyScreenshotPolicy();
+        if (settingsView != null) settingsView.setAllowScreenshot(on);
+        Toast.makeText(this, on ? "已允许截屏" : "已禁止截屏：本 App 内截图/录屏会变黑",
+                Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     public void onSwitchEndpoint(String lan, String wan, boolean useWan) {
         if (useWan && wan.isEmpty()) {
@@ -3886,6 +4480,9 @@ public final class MainActivity extends Activity implements
 
         // ---- ③ 编排：这里的异常与"配对串内容"无关，绝不能报成"不是可用的配对码"
         try {
+            // 先决定这次配对写进哪台设备（同一台电脑重扫 = 更新它的地址，不会多出重复卡片），
+            // 再写地址/令牌，后续 setUrl/setLanUrl/setToken 才会落到这台设备上。
+            store.beginPairing(payload.optString("gatewayId", ""), payload.optString("gatewayName", ""));
             store.setUrl(pairCandidates.get(0));
             // 网关把可用地址都放在 endpoints：私有网段进「内网」，公网/隧道进「公网」。
             // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。

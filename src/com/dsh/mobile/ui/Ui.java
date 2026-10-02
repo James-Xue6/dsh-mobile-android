@@ -14,6 +14,7 @@ import android.text.style.TypefaceSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -37,6 +38,33 @@ public final class Ui {
     public static final int WARN        = 0xFFD97706;
 
     private Ui() { }
+
+    /**
+     * 「允许截屏」策略的进程级镜像（默认 true）。
+     *
+     * 主窗口的 FLAG_SECURE 由 MainActivity 设/清；但 Dialog（添加设备弹窗、手动添加表单）
+     * 是独立窗口，创建它们的地方拿不到 Store，于是统一读这里 —— 策略只有一份，不会两处不一致。
+     * Store 在构造和 setAllowScreenshot 时同步这里（见 Store）。
+     */
+    private static boolean allowScreenshot = true;
+
+    public static void setAllowScreenshot(boolean on) { allowScreenshot = on; }
+
+    public static boolean allowScreenshot() { return allowScreenshot; }
+
+    /**
+     * 按当前策略给一个窗口设/清 FLAG_SECURE（主窗口与 Dialog 共用这一条）。
+     * 允许截屏（默认）→ 清掉标志，截图/录屏/最近任务缩略图都正常；
+     * 用户关掉开关 → 加上标志，窗口内容截图变黑。
+     */
+    public static void applyScreenshotPolicy(android.view.Window w) {
+        if (w == null) return;
+        if (allowScreenshot) {
+            w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        }
+    }
 
     public static int dp(Context c, float v) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
@@ -129,6 +157,84 @@ public final class Ui {
         v.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 0.6f))));
         return v;
+    }
+
+    // ------------------------------------------------------------ 表单控件（全 App 一套样式）
+
+    /** 输入框底色：比卡片白略深一点，让 12dp 圆角描边看得出来。 */
+    public static final int FIELD_BG = 0xFFF7F8FC;
+
+    /** 字段上方的小号灰标签。 */
+    public static TextView fieldLabel(Context c, String s) {
+        TextView t = text(c, s, 12.5f, INK_SUB, false);
+        t.setPadding(0, dp(c, 12), 0, dp(c, 5));
+        return t;
+    }
+
+    /** 字段下方的说明 / 内联错误小字（错误时调用方把颜色改成 ERR 即可）。 */
+    public static TextView fieldHint(Context c, String s) {
+        TextView t = text(c, s, 11.5f, INK_FAINT, false);
+        t.setPadding(dp(c, 2), dp(c, 6), dp(c, 2), 0);
+        return t;
+    }
+
+    /**
+     * 统一的圆角输入框：系统默认的下划线输入框跟卡片风格不搭，
+     * 这里统一成「浅底 + 12dp 圆角 + 0.8dp 描边 + 12dp 内边距」。
+     * 设置页、手动添加等所有表单都用这一个，别各自再画一套。
+     */
+    public static EditText field(Context c, String hint) {
+        EditText e = new EditText(c);
+        e.setHint(hint);
+        e.setTextSize(14f);
+        e.setHintTextColor(INK_FAINT);
+        e.setTextColor(INK);
+        e.setBackground(roundStroke(dp(c, 12), FIELD_BG, dp(c, 0.8f), LINE));
+        e.setPadding(dp(c, 12), dp(c, 11), dp(c, 12), dp(c, 11));
+        e.setSingleLine(true);
+        return e;
+    }
+
+    /** 主按钮：品牌色实心圆角（保存 / 连接这类正向操作）。 */
+    public static TextView primaryButton(Context c, String s) {
+        TextView t = text(c, s, 14.5f, 0xFFFFFFFF, true);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, dp(c, 12), 0, dp(c, 12));
+        t.setBackground(round(dp(c, 999), BRAND));
+        t.setClickable(true);
+        return t;
+    }
+
+    /** 次按钮：白底浅描边圆角（取消 / 扫码这类辅助操作）。 */
+    public static TextView secondaryButton(Context c, String s) {
+        TextView t = text(c, s, 14.5f, INK, false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, dp(c, 12), 0, dp(c, 12));
+        t.setBackground(roundStroke(dp(c, 999), SURFACE, dp(c, 1f), LINE));
+        t.setClickable(true);
+        return t;
+    }
+
+    /** 按钮置灰：字段没填全时主按钮不可点（半透明 + 不吃点击）。 */
+    public static void setButtonEnabled(TextView t, boolean on) {
+        if (t == null) return;
+        t.setEnabled(on);
+        t.setClickable(on);
+        t.setAlpha(on ? 1f : 0.45f);
+    }
+
+    /**
+     * 手搓底部弹窗的上圆角白卡片（不引入 Material BottomSheet 依赖）。
+     * 半径 / 内边距与「添加设备」弹窗、设置页卡片保持一致。
+     */
+    public static LinearLayout sheetCard(Context c) {
+        LinearLayout box = col(c);
+        GradientDrawable bg = round(0, SURFACE);
+        int r = dp(c, 20);
+        bg.setCornerRadii(new float[] { r, r, r, r, 0f, 0f, 0f, 0f });
+        box.setBackground(bg);
+        box.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 16));
+        return box;
     }
 
     // ------------------------------------------------------------ 轻量 Markdown
