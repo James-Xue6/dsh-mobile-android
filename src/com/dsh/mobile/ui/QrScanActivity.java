@@ -45,6 +45,20 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
     private Camera camera;
     private SurfaceView surface;
     private TextView errorView;
+    /** 用来算"居中裁剪"尺寸：SurfaceView 的父容器，同时也是裁剪边界。 */
+    private FrameLayout root;
+
+    /**
+     * 相机预览在竖屏下显示的宽高比（宽/高）。
+     *
+     * 相机给的 previewSize 是横向的（如 1280x720），而 setDisplayOrientation(90) 之后
+     * 它在竖屏上显示为 720x1280，所以竖屏宽高比 = previewSize.height / previewSize.width。
+     * <p>
+     * 真机实测（问题 4）：SurfaceView 直接 MATCH_PARENT 时会被拉成屏幕比例（约 9:20），
+     * 和预览的 9:16 不一致，画面就被纵向拉长/横向压扁 —— 二维码仍能扫上，但看着是变形的。
+     * 0 表示还不知道预览尺寸，此时保持原来的 MATCH_PARENT 行为。
+     */
+    private float previewAspect = 0f;
 
     private volatile boolean hasSurface;
     private volatile boolean previewing;
@@ -62,6 +76,7 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         surface.getHolder().addCallback(this);
         root.addView(surface, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        this.root = root;
 
         TextView tip = new TextView(this);
         tip.setText("把电脑端「移动设备」里的配对二维码放进框内");
@@ -103,6 +118,8 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         root.addView(cancel);
 
         setContentView(root);
+        // 屏幕尺寸 / 旋转 / 分屏变化后重新按预览比例摆放（问题 4：不变形的全屏取景）
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> applyPreviewAspect());
 
         Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
         hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
@@ -186,6 +203,16 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
             try { p.setPreviewFormat(ImageFormat.NV21); } catch (Throwable ignored) { }
             camera.setParameters(p);
 
+            // 记录"实际生效"的预览尺寸（上面 setPreviewSize 可能被厂商忽略），
+            // 供 applyPreviewAspect() 把 SurfaceView 摆成同样的比例。
+            try {
+                Camera.Size applied = camera.getParameters().getPreviewSize();
+                if (applied != null && applied.width > 0) {
+                    previewAspect = (float) applied.height / (float) applied.width;
+                }
+            } catch (Throwable ignored) { }
+            applyPreviewAspect();
+
             camera.setErrorCallback((error, cam) -> showError("相机报错 (code " + error
                     + ")。\n\n可以用「粘贴配对串」代替扫码。"));
 
@@ -201,6 +228,33 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
         } finally {
             opening = false;
         }
+    }
+
+    /**
+     * 按相机预览的真实宽高比摆放预览控件，消除拉伸变形（问题 4）。
+     *
+     * 做法是"居中裁剪"而不是"留黑边"：把 SurfaceView 按预览比例放大到刚好盖满整个
+     * 取景区域（取宽、高两个缩放系数里较大的那个），再居中放置；超出屏幕的部分由
+     * root 这个 FrameLayout 剪掉（FrameLayout 默认 clipChildren=true）。
+     * 这样取景框是全屏的、居中的，而且没有非等比缩放 —— 画面不变形。
+     *
+     * 尺寸没变化时直接返回，避免在 layout 回调里反复 setLayoutParams 触发死循环。
+     */
+    private void applyPreviewAspect() {
+        if (surface == null || root == null || previewAspect <= 0f) return;
+        int rw = root.getWidth(), rh = root.getHeight();
+        if (rw <= 0 || rh <= 0) return;
+        int w = Math.round(rh * previewAspect);
+        int h = rh;
+        if (w < rw) {           // 预览比屏幕"窄"：改成按宽度铺满，高度溢出后裁掉
+            w = rw;
+            h = Math.round(rw / previewAspect);
+        }
+        ViewGroup.LayoutParams lp = surface.getLayoutParams();
+        if (lp instanceof FrameLayout.LayoutParams && lp.width == w && lp.height == h) return;
+        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(w, h);
+        flp.gravity = Gravity.CENTER;
+        surface.setLayoutParams(flp);
     }
 
     private void startPreview() {

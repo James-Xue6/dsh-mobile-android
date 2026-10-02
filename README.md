@@ -27,14 +27,15 @@ pwsh -File .\pc-plugin\install.ps1
 
 脚本会把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、并在 profile 里登记好依赖。
 
-**② 重启一次 DSH 桌面版**，然后打开 `设置 → 通用 → 「手机接入」`。
+**② 重启一次 DSH 桌面版**，然后点左侧边栏底部的 **「移动设备」** 按钮 ——
+PC 端只有这一个入口，抽屉最下方的「手机接入」区块（默认收起，点「展开」）里是接入编排界面。
 
-**③ 手机装 App**：在面板的「手机 App 安装包」卡片上，**手机连同一个 WiFi 扫码即下载安装** ——
+**③ 手机装 App**：在「手机接入」→「手机 App 安装包」卡片上，**手机连同一个 WiFi 扫码即下载安装** ——
 安装包由插件从你这台电脑直接发出（局域网 8099 端口），不经过任何第三方网盘或 CDN。
 
 > 也可以不用面板：直接从公开地址下载 APK —— CDN `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.1/dist/dsh-mobile.apk`，或 GitHub `https://github.com/James-Xue6/dsh-mobile-android/raw/v0.1/dist/dsh-mobile.apk`（国内 CDN 更快）。
 
-**④ 扫码配对**：装好后回到面板点「生成配对二维码」，用 App 扫它 ——
+**④ 扫码配对**：装好后回到「手机接入」区块点「生成配对二维码」，用 App 扫它 ——
 **内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
 
 > 电脑端需要已装 `dsh-plugin-mobile-gateway`（协议层依赖，安装脚本会自动登记；未装则从 DSH 插件市场装一次）。
@@ -369,7 +370,14 @@ DSH Host 0.2.0-rc.2
 | 设备列表 | `GET /dsh-mobile-access/devices` | ✅ 返回设备数组 |
 | 撤销设备 | `POST /dsh-mobile-access/devices/<id>/revoke` | ✅ 清掉 28 个调试设备，仅保留手机 |
 
-面板入口（设置 → 通用 →「手机接入」）已确认正常出现。
+面板入口：**PC 端只有一个入口 —— 左侧边栏底部的「移动设备」抽屉**。
+「手机接入」的完整功能已内嵌为该抽屉最下方的可展开区块；
+`设置 → 通用 →「手机接入」`这一行保留但只做跳转（按钮会把抽屉打开），不再渲染第二份功能。
+
+这一步要改第三方网关包的 `lib/client.js`（升级会被覆盖），所以走
+`pc-plugin/patches/` 下的**打补丁 + 可重放脚本**：
+`pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1`
+（脚本校验网关版本为 `0.9.0`，不符即报错退出，绝不降级插件；覆盖后还会自检两个修复标记。）
 
 ### 附带成果
 

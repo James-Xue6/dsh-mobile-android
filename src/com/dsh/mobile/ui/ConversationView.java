@@ -349,6 +349,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
     }
 
+    /**
+     * 系统窗口内边距变化（典型场景：输入法弹起/收起，MainActivity 的
+     * OnApplyWindowInsetsListener 会把键盘高度加到根容器底部）。
+     *
+     * 可视区一变矮，ListView 不会自己保持"贴底"，最后几条消息会被顶出屏幕；
+     * 这里在"原本就贴底"时补一次滚动。用户手动翻看历史（atBottom=false）时不打扰。
+     */
+    public void onWindowInsetsChanged() {
+        if (!atBottom) return;
+        scrollToBottom();
+    }
+
     // ---- ChatAdapter.Host 转发
     @Override public void onDownloadFile(ChatItem item, String path) { host.onDownloadFile(item, path); }
     @Override public void onCopyPath(String path) { host.onCopyPath(path); }

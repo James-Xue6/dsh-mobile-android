@@ -15,6 +15,23 @@ pwsh -File .\pc-plugin\install.ps1
 在 profile 的 `package.json` 登记依赖与 bundles、补一段 `mobile-gateway` 配置（lanPort 3091）。
 **改完重启一次 DSH 生效。**
 
+## 面板在哪
+
+**PC 端只有一个入口：左侧边栏底部的「移动设备」按钮**，点开就是抽屉面板。
+
+本插件的主面板（下面这张表里的全部功能）现在**内嵌在「移动设备」抽屉最下方**的
+「手机接入」区块里（默认收起，点「展开」即见）。这样做是因为原来它单独挂在
+`设置 → 通用 →「手机接入」`，与「移动设备」是两个入口、用起来要来回找。
+
+实现方式：本插件 `client.js` 在 apply 时把主面板组件挂到 `window.__DSH_MOBILE_ACCESS__`
+并广播 `dsh-mobile-access-ready`；网关面板（由 `pc-plugin/patches/restore-gateway-panel-fix.ps1`
+叠加，见下）直接渲染它。`设置 → 通用 →「手机接入」`那一行保留但**只做跳转**
+（按钮会调 `window.__DSH_MOBILE_GATEWAY__.open()` 把抽屉打开），不重复渲染功能。
+
+> 网关是第三方包，升级会被覆盖，所以那半边改动走**打补丁 + 可重放脚本**：
+> `pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1`
+> （脚本会校验网关版本为 `0.9.0`，不符就报错退出，不会把插件降级。）
+
 ## 面板能做什么
 
 | 区块 | 作用 |

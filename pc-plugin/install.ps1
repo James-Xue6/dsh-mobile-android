@@ -128,8 +128,25 @@ Write-Host "`n=== 安装完成 ===" -ForegroundColor Cyan
 Write-Host @"
 下一步：
   1. 重启 DSH 桌面版（panel/宿主代码都是启动时加载的）
-  2. 打开 设置 → 通用 → 「手机接入」
-       · 「手机 App 安装包」卡片：手机连同一个 WiFi 扫码即可下载安装 APK
-       · 「生成配对二维码」：装好 App 后扫它完成配对
+  2. 点左侧边栏底部的「移动设备」按钮 —— PC 端只有这一个入口
+       · 抽屉最下方「手机接入」区块（默认收起，点「展开」）：
+         「手机 App 安装包」手机连同一 WiFi 扫码即可下载安装 APK
+         「生成配对二维码」装好 App 后扫它完成配对
+       · 设置 → 通用 →「手机接入」现在只做跳转，不再重复一份功能
   3. 若面板提示网关不可用，确认 dsh-plugin-mobile-gateway 已装且已重启
 "@
+
+# ---------------------------------------------------------------- 附：网关面板补丁
+# 「手机接入」并入「移动设备」这一步要改第三方网关包的 lib/client.js（升级会被覆盖），
+# 所以走 pc-plugin\patches\ 下的「打补丁 + 可重放脚本」。脚本自带版本校验（0.9.0），
+# 版本不符会报错退出而不是把插件降级 —— 这里只在文件已就位时顺手跑一次。
+$gwClient = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib\client.js'
+$patchScript = Join-Path $PSScriptRoot 'patches\restore-gateway-panel-fix.ps1'
+if (Test-Path $gwClient) {
+  Write-Host "`n[附] 叠加网关面板补丁（下拉实底 + 手机接入并入移动设备）" -ForegroundColor Cyan
+  if (Test-Path $patchScript) {
+    try { & $patchScript } catch { Warn "补丁未应用：$($_.Exception.Message)" }
+  } else { Warn "找不到 $patchScript" }
+} else {
+  Warn "网关插件还没落盘（$gwClient 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动跑一次 pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1"
+}

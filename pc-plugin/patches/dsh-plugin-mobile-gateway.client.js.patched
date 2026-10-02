@@ -120,8 +120,50 @@ window.__ModuleLoader__.load({
       return { detected, local, remote }
     }
 
-    function DeviceRow({ device, onRevoke, revoking }) {
-      const triggerRevoke = (event) => {
+    /**
+     * 「手机接入」主面板（由 dsh-mobile-access 插件提供）的跨 bundle 宿主。
+     *
+     * 为什么这么做：手机接入的编排界面原来挂在 设置 → 通用 →「手机接入」，
+     * 与本面板是两个入口，用起来要来回找。dsh-mobile-access 的 client.js 现在会把
+     * 自己的主面板组件挂到 window.__DSH_MOBILE_ACCESS__ 上并广播
+     * 'dsh-mobile-access-ready'，这里直接把它渲染进「移动设备」抽屉，
+     * 用户就只需要一个入口。
+     *
+     * 两个 bundle 各自 require('react')，拿到的其实是同一个 React 实例，
+     * 所以可以直接 React.createElement(api.Row)。若那个插件没装/没加载，
+     * 这里明确提示，而不是静默少一块。
+     */
+    function MobileAccessHost() {
+      const [api, setApi] = React.useState(() => (typeof window === 'undefined' ? null : window.__DSH_MOBILE_ACCESS__ || null))
+      React.useEffect(() => {
+        if (api && typeof api.Row === 'function') return undefined
+        const pick = () => {
+          const next = (typeof window === 'undefined') ? null : window.__DSH_MOBILE_ACCESS__ || null
+          if (next && typeof next.Row === 'function') setApi(next)
+        }
+        // 事件广播为主（插件 apply 时会发一次），短轮询为兜底
+        // （覆盖「本面板先挂载、插件后 apply」的顺序）。
+        window.addEventListener('dsh-mobile-access-ready', pick)
+        let tries = 0
+        const timer = window.setInterval(() => {
+          tries += 1
+          pick()
+          if (tries >= 20) window.clearInterval(timer)
+        }, 250)
+        return () => {
+          window.removeEventListener('dsh-mobile-access-ready', pick)
+          window.clearInterval(timer)
+        }
+      }, [api])
+      if (!api || typeof api.Row !== 'function') {
+        return React.createElement('p', { style: styles.muted },
+          '没有加载到「手机接入」面板组件。请确认 dsh-mobile-access 插件已安装、并已重启过 DSH；'
+          + '也可以在「设置 → 通用 → 手机接入」里点跳转按钮重试。')
+      }
+      return React.createElement(api.Row)
+    }
+
+    function DeviceRow({ device, onRevoke, revoking }) {      const triggerRevoke = (event) => {
         event.preventDefault()
         event.stopPropagation()
         if (!revoking) onRevoke(device)
@@ -164,6 +206,9 @@ window.__ModuleLoader__.load({
       const [pairingRoute, setPairingRoute] = React.useState('auto')
       const [connectionHelpOpen, setConnectionHelpOpen] = React.useState(false)
       const [toolsOpen, setToolsOpen] = React.useState(false)
+      // 「手机接入」区块默认收起：它内部有与上面「网关运行模式」重复的开关，
+      // 展开着会让同一个抽屉里出现两份同样的控件。标题里写清里面有什么，点一下就能展开。
+      const [accessOpen, setAccessOpen] = React.useState(false)
       const [toolBusy, setToolBusy] = React.useState(false)
       const [toolNotice, setToolNotice] = React.useState('')
       const stoppedRef = React.useRef(false)
@@ -708,6 +753,23 @@ window.__ModuleLoader__.load({
                     onRevoke: revoke,
                     revoking: revokingIds.has(device.id),
                   }))),
+          // 「手机接入」（dsh-mobile-access）的全部功能并入本抽屉，
+          // 这样 PC 端只有一个入口：侧边栏底部的「移动设备」。
+          React.createElement('section', { style: styles.card },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' } },
+              React.createElement('div', { style: { minWidth: 0 } },
+                React.createElement('strong', null, '手机接入'),
+                React.createElement('div', { style: { ...styles.muted, marginTop: 4 } },
+                  '安装包二维码 · 公网一键隧道 · 配对编排与设备撤销（原「设置 → 通用 → 手机接入」）')),
+              React.createElement('button', {
+                type: 'button',
+                style: { ...styles.button, flexShrink: 0, minWidth: 60 },
+                'aria-expanded': accessOpen,
+                onClick: () => setAccessOpen((value) => !value),
+              }, accessOpen ? '收起' : '展开')),
+            accessOpen
+              ? React.createElement('div', { style: { marginTop: 4 } }, React.createElement(MobileAccessHost))
+              : null),
           status && status.version
             ? React.createElement('div', { style: styles.version, 'aria-label': `插件版本 ${status.version}` }, `v${status.version}`)
             : null))
@@ -768,6 +830,16 @@ window.__ModuleLoader__.load({
 
     const inject = ['slots']
     function apply(ctx) {
+      // 让 dsh-mobile-access 的「设置 → 通用 → 手机接入」跳转行能打开本面板
+      // （两个入口合并成一个；见 pc-plugin/dsh-mobile-access/client.js）。
+      try {
+        window.__DSH_MOBILE_GATEWAY__ = {
+          version: 1,
+          open: () => setOpen(true),
+          close: () => setOpen(false),
+          isOpen: getOpen,
+        }
+      } catch (error) { /* 非浏览器环境：忽略 */ }
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
         { name: 'sidebar.footer.action', id: 'mobile-gateway-devices', order: 80, label: '移动设备' },
         (props) => React.createElement(FooterButton, props),

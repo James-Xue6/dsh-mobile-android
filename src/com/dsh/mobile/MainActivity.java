@@ -5,7 +5,6 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
-import android.util.Base64;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -104,6 +103,11 @@ public final class MainActivity extends Activity implements
     private static final long FAILOVER_RESET_MS = 60_000L;
     /** 非空表示正在配对；失败会换成下一个候选地址重试。 */
     private String pendingPairCode = null;
+    /**
+     * 最近一次扫码/粘贴内容的脱敏描述（问题 2-d），显示在设置页诊断区。
+     * 只放在内存里：它是给"这次连不上"现场定位用的，不落盘、不进任何被跟踪的文件。
+     */
+    private String lastPairDebug = "";
     private java.util.List<String> pairCandidates = new java.util.ArrayList<>();
     private int pairIndex = 0;
 
@@ -141,14 +145,26 @@ public final class MainActivity extends Activity implements
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int top, bottom;
             if (Build.VERSION.SDK_INT >= 30) {
+                // 键盘（IME）也必须算进来：targetSdk 35+ 强制 edge-to-edge，系统不会替我们
+                // 缩小窗口，而 systemBars() 只给导航栏高度。真机实测（华为 PGT-AN10 /
+                // 手势导航 + 中文输入法）：只消费 systemBars() 时输入条被键盘整个盖住，
+                // 用户看不到自己在输入什么（问题 1）。
+                // 底部留白取 max(导航栏, 键盘)：键盘弹起时跟着上移，收起时退回导航栏高度。
                 android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
+                android.graphics.Insets ime = insets.getInsets(android.view.WindowInsets.Type.ime());
                 top = bars.top;
-                bottom = bars.bottom;
+                bottom = Math.max(bars.bottom, ime.bottom);
             } else {
+                // API < 30：ADJUST_RESIZE 会真的缩窗口，这里拿到的 bottom 已经是键盘高度
                 top = insets.getSystemWindowInsetTop();
                 bottom = insets.getSystemWindowInsetBottom();
             }
-            v.setPadding(0, top, 0, bottom);
+            if (v.getPaddingTop() != top || v.getPaddingBottom() != bottom) {
+                v.setPadding(0, top, 0, bottom);
+                // 可视区变矮（键盘弹起）时，原本贴底的会话要重新贴底，
+                // 否则最后几条消息会被顶出可视区，看起来像"内容被键盘盖住了"。
+                if (screen == Screen.CHAT && convo != null) convo.onWindowInsetsChanged();
+            }
             return insets;
         });
         setContentView(root);
@@ -366,7 +382,7 @@ public final class MainActivity extends Activity implements
         settingsView.setUpdateHint(lastUpdateHint);
         refreshFeedbackHint();
         settingsView.setStatus(lastStateText.isEmpty() ? "未连接" : lastStateText, false);
-        settingsView.setDiagnostics(gw.debugState() + "\n" + gw.traceText());
+        refreshDiagnostics();
     }
 
     private List<SessionInfo> visibleSessions() {
@@ -635,7 +651,7 @@ public final class MainActivity extends Activity implements
         }
         if (screen == Screen.SETTINGS && settingsView != null) {
             settingsView.setStatus(detail, err);
-            settingsView.setDiagnostics(gw.debugState() + "\n" + gw.traceText());
+            refreshDiagnostics();
         }
         refreshListStatus();
     }
@@ -3030,17 +3046,27 @@ public final class MainActivity extends Activity implements
     }
 
     private void startPairing(String raw) {
-        if (raw == null || raw.trim().isEmpty()) return;
-        // 面板里有两张二维码：安装包下载链接、配对码。扫错的时候要讲清楚。
-        String scanned = raw.trim();
-        if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
+        // 问题 2-a：扫码/粘贴进来的字符串先做健壮化预处理（BOM、零宽字符、换行、
+        // 首尾引号、外部包裹的协议前缀），再交给解析器。相机扫码与 adb intent 的差别
+        // 往往就在这几个不可见字符上：肉眼一样，字节不一样，一个能配一个报错。
+        final String scanned = PairingText.sanitize(raw);
+        // 问题 2-d：把"到底扫到了什么"记进设置页诊断区（脱敏，见 describeScanned）。
+        lastPairDebug = PairingText.describe(scanned);
+        refreshDiagnostics();
+        if (scanned.isEmpty()) {
+            Toast.makeText(this, "扫到的内容是空的，请重新对准二维码。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        // 问题 2-b：面板里有两张二维码 —— ① 安装包下载链接 ② 配对码。
+        // 扫到 ① 时绝不能笼统报"配对失败"，要直接说清它是什么、该扫哪一张。
+        if (PairingText.looksLikeHttpUrl(scanned)) {
             Toast.makeText(this, "这是「安装包下载链接」，不是配对码。\n"
                     + "请用手机浏览器打开它下载安装 App；\n"
                     + "配对请扫电脑面板里「生成配对二维码」那一张。", Toast.LENGTH_LONG).show();
             return;
         }
         try {
-            JSONObject payload = decodePairing(raw.trim());
+            JSONObject payload = PairingText.decode(scanned);
             int version = payload.optInt("version", 0);
             if (version != 2) {
                 Toast.makeText(this, "配对信息版本不支持：" + version, Toast.LENGTH_LONG).show();
@@ -3062,7 +3088,9 @@ public final class MainActivity extends Activity implements
             // 这里排成候选列表逐个试：私有网段优先（在家最快），不行再走公网。
             pairCandidates = buildPairCandidates(payload, url);
             if (pairCandidates.isEmpty()) {
-                Toast.makeText(this, "配对码里只有电脑本机地址（127.0.0.1 / localhost），手机连不上。\n"
+                // 问题 2-c：说清"扫到的确实是配对码，问题出在里面的地址"。
+                Toast.makeText(this, "扫到了配对码，但里面的地址手机连不上"
+                        + "（只有 127.0.0.1 / localhost 这类电脑本机地址）。\n"
                         + "请在电脑面板重新点「生成配对二维码」，"
                         + "并把「配对连接方式」选成「自动选择 · 优先外网」；\n"
                         + "或者在 App 设置里手动填「公网地址」。", Toast.LENGTH_LONG).show();
@@ -3091,19 +3119,25 @@ public final class MainActivity extends Activity implements
               pairIndex = 0;
               pairWithNextCandidate();
         } catch (Throwable t) {
-            Toast.makeText(this, "配对串无法解析：" + t.getMessage(), Toast.LENGTH_LONG).show();
+            String why = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+            // 问题 2-c：别只说"无法解析"，要讲清是"扫到了东西但不像配对码"。
+            Toast.makeText(this, "扫到了内容，但它不是可用的配对码：" + why
+                    + "\n\n请确认扫的是电脑面板里「生成配对二维码」那一张；"
+                    + "设置页底部的「扫码诊断」会记下最近一次扫到的内容特征。",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
-    /** 严格 Base64URL（无 padding）解码，内容为 {version, publicUrl, pairingCode, expiresAt}。 */
-    private static JSONObject decodePairing(String raw) throws Exception {
-        String s = raw.trim();
-        if (s.startsWith("{")) return new JSONObject(s);
-        s = s.replace("\n", "").replace("\r", "").replace(" ", "");
-        if (s.indexOf('+') >= 0 || s.indexOf('/') >= 0 || s.indexOf('=') >= 0) {
-            throw new IllegalArgumentException("不是合法的 Base64URL 配对串");
-        }
-        byte[] bytes = Base64.decode(s, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
-        return new JSONObject(new String(bytes, "UTF-8"));
+    // ============================================================ 配对串健壮化 / 诊断
+    // 解析规则本身在 com.dsh.mobile.PairingText 里（纯字符串处理，可脱离真机跑 JVM 断言：
+    // harness/src/PairingTextTest.java）。这里只留一个刷新诊断区的小工具。
+
+    /** 刷新设置页诊断区（状态 / 轨迹 / 最近一次扫码特征）。 */
+    private void refreshDiagnostics() {
+        if (settingsView == null) return;
+        StringBuilder sb = new StringBuilder();
+        if (gw != null) sb.append(gw.debugState()).append('\n').append(gw.traceText());
+        if (!lastPairDebug.isEmpty()) sb.append("\n\n[扫码诊断] ").append(lastPairDebug);
+        settingsView.setDiagnostics(sb.toString());
     }
 }

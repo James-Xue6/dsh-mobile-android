@@ -509,6 +509,41 @@ window.__ModuleLoader__.load({
         return React.createElement('div', { className: 'dsma-root' }, children)
     }
 
+    // ------------------------------------------------------------------ 设置页的跳转入口
+    /**
+     * 「手机接入」原来的完整面板已经并入侧边栏的「移动设备」抽屉（见下方 apply 里的
+     * 跨 bundle 桥 + pc-plugin/patches/restore-gateway-panel-fix.ps1）。
+     * 设置页里保留的这条只做跳转，不再渲染第二份功能，避免同一件事有两个入口。
+     */
+    function MobileAccessRedirect() {
+      var tipState = React.useState('')
+      var tip = tipState[0]
+      var setTip = tipState[1]
+
+      function openPanel() {
+        var bridge = (typeof window === 'undefined') ? null : window.__DSH_MOBILE_GATEWAY__
+        if (bridge && typeof bridge.open === 'function') {
+          setTip('')
+          bridge.open()
+          return
+        }
+        setTip('没找到「移动设备」面板：请确认 dsh-plugin-mobile-gateway 已安装、'
+          + '并已重启过 DSH；也可以直接点左侧边栏底部的手机图标打开。')
+      }
+
+      return React.createElement('div', { className: 'dsma-root' },
+        React.createElement('div', { className: 'dsma-title' }, '手机接入'),
+        React.createElement('div', { className: 'dsma-desc' },
+          '手机接入的全部功能（网关开关、公网隧道、配对二维码、安装包二维码、已配对设备）'
+          + '都已并入侧边栏的「移动设备」面板，这里不再重复一份。'),
+        React.createElement('div', { className: 'dsma-row' },
+          React.createElement('button', {
+            type: 'button', className: 'dsma-btn dsma-btn-primary', onClick: openPanel,
+          }, '打开「移动设备」面板')),
+        tip ? React.createElement('div', { className: 'dsma-error' }, tip) : null,
+      )
+    }
+
     // ------------------------------------------------------------------ 插件体
     function apply(ctx) {
       try {
@@ -517,6 +552,21 @@ window.__ModuleLoader__.load({
           return function () { styles.remove() }
         }, NAME + ': styles')
 
+        // 跨 bundle 桥：「移动设备」面板（第三方网关插件，由补丁脚本叠加）会渲染
+        // 本插件的主面板组件，于是两个入口合成一个。
+        // 两个 bundle 都 require('react')，拿到同一个 React 实例，组件可以直接传。
+        // 网关面板是用户点击后才挂载的，那时本插件早已 apply；这里再补一个事件广播，
+        // 覆盖「面板先挂载、插件后 apply」的极端顺序（对方还会做兜底轮询）。
+        try {
+          window.__DSH_MOBILE_ACCESS__ = {
+            version: 1,
+            Row: MobileAccessRow,
+            Redirect: MobileAccessRedirect,
+          }
+          window.dispatchEvent(new Event('dsh-mobile-access-ready'))
+        } catch (e) { /* 非浏览器环境：忽略 */ }
+
+        // 设置里的入口改成「跳转」，真正的面板在「移动设备」里。
         ctx.slots.inject('settings.general.item', function () {
           return ctx.slots.register(
             {
@@ -526,7 +576,7 @@ window.__ModuleLoader__.load({
               label: '手机接入',
               inject: function () { return {} },
             },
-            MobileAccessRow,
+            MobileAccessRedirect,
           )
         })
       } catch (error) {
@@ -538,6 +588,7 @@ window.__ModuleLoader__.load({
     exports.inject = ['slots']
     exports.apply = apply
     exports.MobileAccessRow = MobileAccessRow
+    exports.MobileAccessRedirect = MobileAccessRedirect
     exports.__test = { API: API, SETTINGS_ID: SETTINGS_ID, fmtTime: fmtTime }
     return module.exports
   },
