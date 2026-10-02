@@ -22,9 +22,9 @@ if "%HOST%"=="" set "HOST=10.0.2.2"
 
 set "NODE="
 for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"
-if not defined NODE if exist "C:\Users\Administrator\AppData\Local\hermes\node\node.exe" set "NODE=C:\Users\Administrator\AppData\Local\hermes\node\node.exe"
+if not defined NODE if exist "%LOCALAPPDATA%\hermes\node\node.exe" set "NODE=%LOCALAPPDATA%\hermes\node\node.exe"
 if not defined NODE (
-  echo [错误] 找不到 node.exe。请装 Node 18+，或让 hermes 的 node 位于上面那个路径。
+  echo [错误] 找不到 node.exe。请装 Node 18+ 并加入 PATH。
   pause
   exit /b 1
 )
