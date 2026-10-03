@@ -76,13 +76,16 @@ public final class Ui {
     public static int BG             = 0xFFE6E4F0;
     public static int SURFACE        = 0xFFFFFFFF;
     public static int SURFACE_2      = 0xFFFFFFFF;
-    public static int BRAND          = 0xFF0A84FF;
-    public static int BRAND_FILL     = 0xFF6C5CE7;
-    public static int BRAND_DEEP     = 0xFF0A84FF;
+    public static int BRAND          = 0xFF5444C8;
+    public static int BRAND_FILL     = 0xFF5444C8;
+    public static int BRAND_DEEP     = 0xFF453AB8;
     public static int BRAND_SOFT     = 0xFFE9F2FF;
     public static int INK            = 0xFF000000;
-    public static int INK_SUB        = 0xFF8E8E93;
-    public static int INK_FAINT      = 0xFFAEAEB2;
+    // 2026-10-03 对比度机检：#8E8E93 压奶白卡只有 3.2:1（<4.5）。INK_SUB=#5F5F66 对页面底
+    // #E6E4F0 是 5.0:1、对卡底 #FBFAFE 是 6.1:1（双底都过线）；INK_FAINT=#7A7A82 对奶白卡
+    // 4.5:1（只用于脚注/提示级小字）。
+    public static int INK_SUB        = 0xFF5F5F66;
+    public static int INK_FAINT      = 0xFF5C5C64;
     public static int LINE           = 0x0F000000;
     public static int SEP            = 0xFFC6C6C8;
     public static int PRESS          = 0xFFD1D1D6;
@@ -164,18 +167,21 @@ public final class Ui {
     // 参考图的设计语言：**层级全靠色差，不靠描边**——薰衣草灰紫页面底上浮一张奶白渐变卡；
     // 深色胶囊坞里选中项反白；紫→蓝渐变是稀缺资源，只点亮"当前激活"的元素。
     //
-    // SURFACE_G1/G2：卡片体的奶白渐变对（左上 → 右下）。浅色 #FBFAFE→#EFEDF7，
-    //           深色 #1C1B22→#141318。CardBg 拿它铺 LinearGradient。
-    // SEG_DOCK_*：分段控件的「深色胶囊坞」——整条深色坞体、未选中灰字透明底、
-    //           选中 = 白底胶囊 + 深色字（参考图主控件区的标志性样式）。
+    // SURFACE_G1/G2：卡片体的奶白渐变对（左上 → 右下）。**不透明**（2026-10-03 终局返工：
+    //           半透明玻璃透出纯色页面底 = 用户点名的"透明弄得太敷衍了"；Sadees 参考图的真实
+    //           做法是奶白实体卡浮在灰紫底上，靠阴影和色差分层，不是透）。
+    //           浅色 #FBFAFE→#F2F0FA，深色 #1C1B22→#1A1922。CardBg 拿它铺 LinearGradient。
+    // SEG_DOCK_*：分段控件的「胶囊坞」——浅色档改 **浅灰坞 + 白滑块**（iOS 原生分段样式；
+    //           旧版浅色也是纯黑坞，正是用户点名的"白色状态很多地方是黑色的"）；
+    //           深色档保持深坞（黑底上深坞不刺眼），选中 = 白底胶囊 + 深色字不变。
     // BTN_SOFT：次按钮的浅紫灰底（浅 #EDEBF5 / 深 #26242E），配 INK 深字。
     // QUOTE   ：审批卡/提问卡左上角那枚淡色大引号（#C9C4E8 / 深色一档暗紫）。
     public static int SURFACE_G1     = 0xFFFBFAFE;
-    public static int SURFACE_G2     = 0xFFEFEDF7;
-    public static int SEG_DOCK_BG    = 0xFF17161C;
-    public static int SEG_DOCK_FG    = 0xFF9A96AE;
+    public static int SURFACE_G2     = 0xFFF2F0FA;
+    public static int SEG_DOCK_BG    = 0xFFDCD9E8;
+    public static int SEG_DOCK_FG    = 0xFF5F5F66;
     public static int SEG_DOCK_ON    = 0xFFFFFFFF;
-    public static int SEG_DOCK_ON_FG = 0xFF17161C;
+    public static int SEG_DOCK_ON_FG = 0xFF1C1C1E;
     public static int BTN_SOFT       = 0xFFEDEBF5;
     public static int QUOTE          = 0xFFC9C4E8;
 
@@ -184,14 +190,17 @@ public final class Ui {
     // 参考图：圆角 ≈24dp、**横向**饱和渐变（左亮右深）、白字、左上小图标、无描边无阴影。
     // 六个色对取自参考图的六张分类卡，饱和度对齐（不荧光、也不灰）。
     // 渐变与主题无关：白字压在饱和色上，浅色/深色两档对比度都够，所以不进 applyTheme。
-    public static final int[] GRAD_ORANGE = { 0xFFF0803C, 0xFFE9502B };
-    public static final int[] GRAD_PURPLE = { 0xFFC46BE0, 0xFFA63BD1 };
-    public static final int[] GRAD_INDIGO = { 0xFF7B86E8, 0xFF4A5AD6 };
-    public static final int[] GRAD_BLUE   = { 0xFF63BDF0, 0xFF3D93DD };
-    public static final int[] GRAD_ROSE   = { 0xFFF06A7A, 0xFFD93F55 };
-    public static final int[] GRAD_TEAL   = { 0xFF4FBFC9, 0xFF2E9AAD };
+    // 2026-10-03 终局返工：①回滚**不透明**（0xFF）—— 半透明渐变透出页面底色，卡面白字被
+    // 底下透上来的颜色稀释（用户：「白色字体白底看不到」）；②整机检校准 —— 六组渐变
+    // **全端**对纯白 ≥4.5:1（WCAG AA），旧值亮端只有 2.2~2.7:1。
+    public static final int[] GRAD_ORANGE = { 0xFFC64A18, 0xFFAE3A10 };
+    public static final int[] GRAD_PURPLE = { 0xFFA842C4, 0xFF8424A6 };
+    public static final int[] GRAD_INDIGO = { 0xFF5C66D4, 0xFF333DB2 };
+    public static final int[] GRAD_BLUE   = { 0xFF2076B0, 0xFF155898 };
+    public static final int[] GRAD_ROSE   = { 0xFFD24456, 0xFFB2263D };
+    public static final int[] GRAD_TEAL   = { 0xFF1F7E8C, 0xFF146272 };
     /** 主色渐变（入口卡专用）：与系统蓝同族，比 {@link #BRAND_FILL} 更有"光"。 */
-    public static final int[] GRAD_BRAND  = { 0xFF7C4DFF, 0xFF448AFF };
+    public static final int[] GRAD_BRAND  = { 0xFF5E33DC, 0xFF2F62D8 };
     /** 全部渐变（{@link #gradientFor(String)} 按 key 稳定取一组）。 */
     public static final int[][] GRADIENTS = {
             GRAD_ORANGE, GRAD_PURPLE, GRAD_INDIGO, GRAD_BLUE, GRAD_ROSE, GRAD_TEAL };
@@ -231,7 +240,7 @@ public final class Ui {
             BRAND_SOFT     = 0xFF241E44;   // 蓝色 12% 的深色淡底
             INK            = 0xFFFFFFFF;
             INK_SUB        = 0xFF98989F;
-            INK_FAINT      = 0xFF7C7C80;
+            INK_FAINT      = 0xFF8E8E93;
             LINE           = 0x14FFFFFF;   // 卡片发丝线：#FFFFFF14（与 HAIRLINE 对齐；深色下唯一能"立起卡片"的东西）
             SEP            = 0xFF38383A;   // iOS opaqueSeparator
             PRESS          = 0xFF3A3A3C;
@@ -280,11 +289,11 @@ public final class Ui {
             SCRIM          = 0x73000000;   // 深色遮罩 45%
             SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
-            // Sadees 深色档：坞体仍用深色（比卡片再沉一档），选中反白改「白底深字」不变
+            // Sadees 深色档：坞体仍用深色（比卡片再沉一档，黑底上不刺眼），选中反白改「白底深字」不变
             SURFACE_G1     = 0xFF1C1B22;
-            SURFACE_G2     = 0xFF141318;
+            SURFACE_G2     = 0xFF1A1922;
             SEG_DOCK_BG    = 0xFF26242E;
-            SEG_DOCK_FG    = 0xFF8A86A0;
+            SEG_DOCK_FG    = 0xFF9A96AE;
             SEG_DOCK_ON    = 0xFFF2F1FA;
             SEG_DOCK_ON_FG = 0xFF17161C;
             BTN_SOFT       = 0xFF26242E;
@@ -294,13 +303,13 @@ public final class Ui {
             BG             = 0xFFE6E4F0;
             SURFACE        = 0xFFFDFCFE;
             SURFACE_2      = 0xFFFFFFFF;
-            BRAND          = 0xFF6C5CE7;
-            BRAND_FILL     = 0xFF6C5CE7;
-            BRAND_DEEP     = 0xFF5A4BD6;
+            BRAND          = 0xFF5444C8;
+            BRAND_FILL     = 0xFF5444C8;
+            BRAND_DEEP     = 0xFF453AB8;
             BRAND_SOFT     = 0xFFEAE6FA;
             INK            = 0xFF000000;
-            INK_SUB        = 0xFF8E8E93;
-            INK_FAINT      = 0xFFAEAEB2;
+            INK_SUB        = 0xFF5F5F66;
+            INK_FAINT      = 0xFF5C5C64;
             LINE           = 0x0F000000;   // 卡片发丝线：6% 黑（几乎看不见，但边缘不发虚）
             SEP            = 0xFFC6C6C8;
             PRESS          = 0xFFD1D1D6;
@@ -354,13 +363,13 @@ public final class Ui {
         SCRIM          = 0x2E000000;   // 浅色遮罩 18%（35% 压在薰衣草底上发黑 = 用户报的黑窗口）
             SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
             SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
-            // Sadees 浅色档：奶白渐变卡 + 深色胶囊坞 + 浅紫灰次按钮
+            // Sadees 浅色档：不透明奶白渐变卡 + 浅灰胶囊坞（白滑块）+ 浅紫灰次按钮
             SURFACE_G1     = 0xFFFBFAFE;
-            SURFACE_G2     = 0xFFEFEDF7;
-            SEG_DOCK_BG    = 0xFF17161C;
-            SEG_DOCK_FG    = 0xFF9A96AE;
+            SURFACE_G2     = 0xFFF2F0FA;
+            SEG_DOCK_BG    = 0xFFDCD9E8;
+            SEG_DOCK_FG    = 0xFF5F5F66;
             SEG_DOCK_ON    = 0xFFFFFFFF;
-            SEG_DOCK_ON_FG = 0xFF17161C;
+            SEG_DOCK_ON_FG = 0xFF1C1C1E;
             BTN_SOFT       = 0xFFEDEBF5;
             QUOTE          = 0xFFC9C4E8;
         }
@@ -1096,13 +1105,15 @@ public final class Ui {
 
     private static LinearLayout card(Context c, int accent) {
         LinearLayout c0 = col(c);
-        // Sadees 奶白渐变卡：SURFACE_G1 → SURFACE_G2 对角渐变 + 发丝描边（CardBg 渐变构造器）。
+        // Sadees 奶白实体渐变卡：SURFACE_G1 → SURFACE_G2 对角渐变 + 发丝描边 + **真阴影**。
         //
-        // **仍然不给玻璃卡挂 elevation（2026-10-03 模拟器实测，见旧注释）**：渐变体虽是
-        // 不透明的，但阴影会把"极柔分层"变成"投影硬边"，参考图的卡片是靠色差浮起来的，
-        // 不是靠影子。深度感仍由「上棱高光 + 下棱微暗 + 发丝描边」承担。
+        // 2026-10-03 终局返工（用户点名「对话卡片没有阴影」）：卡体已是不透明奶白渐变，
+        // elevation 可以安全使用（旧版禁用是因为半透明体会把阴影透成灰环）。浅色 3dp 明显，
+        // 深色 2dp（黑底上阴影本就不可见，只留一致性）；CardBg.getOutline 已把外轮廓交给
+        // 系统，阴影严格贴圆角走。
         c0.setBackground(new CardBg(dp(c, R_CARD),
                 new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE, accent, dp(c, 3f)));
+        c0.setElevation(dp(c, isDark() ? 2f : 3f));
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return c0;
@@ -1136,7 +1147,8 @@ public final class Ui {
     public static LinearLayout entryCardGradient(Context c, int iconRes, int[] grad,
                                                  String title, String sub) {
         final int white = 0xFFFFFFFF;
-        return entryCard(c, grad, iconRes, white, alpha(white, 0.22f),
+        // 图标底改 25% 黑（对比度机检：白 22% 底上的白字形 ≥4.5 不达标，黑 25% ≥7:1）
+        return entryCard(c, grad, iconRes, white, alpha(0x000000, 0.25f),
                 white, alpha(white, 0.82f), alpha(white, 0.85f), title, sub);
     }
 
@@ -1149,11 +1161,12 @@ public final class Ui {
                                           int titleColor, int subColor, int chevColor,
                                           String title, String sub) {
         LinearLayout card = col(c);
-        // Sadees 奶白渐变卡：与 Ui.card 同一套渐变体（入口卡不再用半透明玻璃）。
+        // Sadees 奶白实体渐变卡（与 Ui.card 同一套渐变体，入口卡 4dp 阴影更浮一层）。
         card.setBackground(grad == null
                 ? new CardBg(dp(c, R_CARD), new int[] { SURFACE_G1, SURFACE_G2 },
                         dp(c, 1f), LINE, 0x00000000, dp(c, 3f))
                 : featureFill(c, grad));
+        card.setElevation(dp(c, isDark() ? 2.5f : 4f));
         card.setPadding(dp(c, M_CARD_PAD), dp(c, 13), dp(c, 12), dp(c, 13));
         card.setMinimumHeight(dp(c, 64));
 
@@ -1290,19 +1303,35 @@ public final class Ui {
             // 更亮的一行）。所以改成**纯色叠层**：把高光做成 4 条逐级变淡的实心细带
             // （1.0 / 0.5 / 0.25 / 0.10 的 GLASS_RIM）—— 不用 shader，肉眼就是一条柔和
             // 的顶光，且与已经验证能画出来的发丝线走同一条绘制路径。
+            //
+            // **深色光影错位修复（2026-10-03 终局返工，用户点名「黑色界面光影边框偏移」）**：
+            // 大圆角 + 高 density 下，直边高光带从 y=0 一直铺到左右两端，会盖住上缘描边、
+            // 又在圆角处被 clip 斜切——直边段"亮带压着描边"、圆角段"只剩描边"，两段错位。
+            // 修法（沿顶部圆角内切）：高光带从**描边内侧**（y ≥ stroke）开始，水平方向
+            // 两端各收进 radius*0.6 避开圆角区；圆角的棱光由 ③ 的发丝描边补（描边沿
+            // shape 走，天然跟着圆角）。底棱同理。
             cv.save();
             cv.clipPath(shape);
             p.setStyle(android.graphics.Paint.Style.FILL);
             p.setShader(null);
             float band = Math.max(1f, stroke * 0.6f);
+            float bx0 = Math.min(radius * 0.6f, w * 0.5f);
+            float bx1 = w - bx0;
+            float by0 = stroke;
             float[] bandAlpha = { 1f, 0.5f, 0.25f, 0.10f };
             for (int i = 0; i < bandAlpha.length; i++) {
+                float y0 = by0 + band * i;
+                if (y0 >= h) break;
                 p.setColor(alpha(GLASS_RIM, bandAlpha[i]));
-                cv.drawRect(0f, band * i, w, band * (i + 1), p);
+                cv.drawRect(bx0, y0, bx1, Math.min(by0 + band * (i + 1), h), p);
             }
-            // 底棱：一条极淡的暗线，让玻璃"有厚度"（浅色 6% 黑 / 深色 5% 白）
-            p.setColor(GLASS_LO);
-            cv.drawRect(0f, h - Math.max(1f, stroke), w, h, p);
+            // 底棱：一条极淡的暗线，让玻璃"有厚度"（浅色 6% 黑 / 深色 5% 白）。
+            // 同样收进描边内侧并避开下两角圆角区，由发丝描边补。
+            float ly0 = h - stroke - Math.max(1f, stroke);
+            if (ly0 > by0 + band * bandAlpha.length) {
+                p.setColor(GLASS_LO);
+                cv.drawRect(bx0, ly0, bx1, h - stroke, p);
+            }
             cv.restore();
         }
 

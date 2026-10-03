@@ -59,6 +59,10 @@ public final class DeviceHubView extends LinearLayout {
     private LinearLayout head;
     /** 卡片区的滚动内容容器（主题切换时整块重建）。 */
     private LinearLayout body;
+    /** 大标题「我的设备」（applyTheme 重刷字色；见 applyTheme 注释）。 */
+    private TextView titleView;
+    /** 副标题「管理你的电脑…」（applyTheme 重刷字色）。 */
+    private TextView subTitle;
     /** 设备卡片容器（每次刷新整体重建，卡片数量很少）。 */
     private LinearLayout cards;
     /** 顶部状态行：当前这台到底连上没有。 */
@@ -88,7 +92,9 @@ public final class DeviceHubView extends LinearLayout {
         head.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 4));
 
         LinearLayout top = Ui.row(ctx);
-        TextView title = Ui.text(ctx, "我的设备", Ui.S_LARGE, Ui.INK, true);
+        // 大标题留引用：applyTheme() 要重刷字色（旧版漏了 → 切深色后标题仍是黑字压黑底）。
+        titleView = Ui.text(ctx, "我的设备", Ui.S_LARGE, Ui.INK, true);
+        TextView title = titleView;
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         title.setLayoutParams(tlp);
@@ -104,6 +110,7 @@ public final class DeviceHubView extends LinearLayout {
         TextView sub = Ui.text(ctx, "管理你的电脑 · 连接后进入对话", Ui.S_SUB, Ui.INK_SUB, false);
         sub.setPadding(0, Ui.dp(ctx, Ui.G_TITLE_SUB), 0, 0);
         head.addView(sub);
+        subTitle = sub;
 
         status = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_FAINT, false);
         status.setPadding(0, Ui.dp(ctx, Ui.G_SECTION), 0, 0);
@@ -183,6 +190,10 @@ public final class DeviceHubView extends LinearLayout {
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
         if (head != null) head.setBackgroundColor(Ui.BG);
+        // 大标题/副标题/状态行字色必须跟着刷（漏了就是深色黑标题 bug）
+        if (titleView != null) titleView.setTextColor(Ui.INK);
+        if (subTitle != null) subTitle.setTextColor(Ui.INK_SUB);
+        if (status != null) status.setTextColor(Ui.INK_FAINT);
         buildBody();
         requestLayout();
     }
@@ -235,12 +246,17 @@ public final class DeviceHubView extends LinearLayout {
      */
     private LinearLayout deviceCard(final Store.Device d, boolean isActive, boolean online) {
         final int white = 0xFFFFFFFF;
-        final int w78   = Ui.alpha(white, 0.78f);   // 次要文字
-        final int w88   = Ui.alpha(white, 0.88f);   // 状态/线路行
-        final int wOn   = Ui.alpha(white, 0.22f);   // 卡面上的"半透明白"底（图标底 / 标签底）
+        final int w78   = Ui.alpha(white, 0.92f);   // 次要文字：0.78 压橙底不足 4.5
+        final int w88   = 0xFFFFFFFF;                // 状态/线路行：机检后提到纯白（0.88 压橙底只有 4.1:1）
+        // 卡面上的半透明底（图标底 / 标签底 / 当前徽标）：**黑 25%** 而不是白 22% ——
+        // 2026-10-03 对比度机检：白 22% 压橙渐变后白字只剩 3.4:1（<4.5）；
+        // 黑 25% 压暗卡面后白字 ≥7:1，任何渐变色对都达标。
+        final int wOn   = Ui.alpha(0x000000, 0.25f);
 
         LinearLayout card = Ui.col(ctx);
         card.setBackground(Ui.featureFill(ctx, Ui.gradientFor(d.id == null ? d.displayName() : d.id)));
+        // 渐变卡也补 3dp 阴影：用户点名「对话卡片没有阴影」——不透明卡体后 elevation 安全
+        card.setElevation(Ui.dp(ctx, 3f));
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 15), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 15));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -350,12 +366,12 @@ public final class DeviceHubView extends LinearLayout {
         return "桌面端";
     }
 
-    /** 渐变卡上的小标签：**白字 + 22% 白底胶囊**（卡面是饱和色，彩底彩字都读不清）。 */
+    /** 渐变卡上的小标签：**白字 + 25% 黑底胶囊**（黑底压暗卡面，白字 ≥7:1；白底只有 3.4:1）。 */
     private TextView tag(String s) {
         TextView t = Ui.text(ctx, s, Ui.S_CAP1, 0xFFFFFFFF, false);
         t.setTypeface(Ui.medium());
         t.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
-        t.setBackground(Ui.pill(Ui.alpha(0xFFFFFFFF, 0.22f)));
+        t.setBackground(Ui.pill(Ui.alpha(0x000000, 0.25f)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = Ui.dp(ctx, 6);

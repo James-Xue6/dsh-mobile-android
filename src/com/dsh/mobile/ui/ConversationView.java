@@ -62,6 +62,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private final TextView subtitle;
     /** 顶栏的玻璃底（主题切换要换色，所以留引用）。 */
     private android.graphics.drawable.GradientDrawable barBg;
+    /** 输入条胶囊的 CardBg（主题切换要重建——旧版不刷导致深色下输入条还是浅白）。 */
+    private android.graphics.drawable.Drawable inputBarBg;
+    /** 输入条容器（主题切换要重刷底）。 */
+    private LinearLayout inputBarHost;
     /** 顶栏下沿的发丝线。 */
     private View barLine;
     private final TextView banner;
@@ -198,6 +202,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                 new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
+        planView.setElevation(Ui.dp(ctx, 2f));
         planView.setMaxLines(8);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         planView.setVisibility(GONE);
@@ -340,10 +345,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         //   · 底 = GLASS_BAR 半透明玻璃 + 棱光/顶部高光（CardBg 的圆角 999 = 高/2，真胶囊）；
         //   · 输入框自己的灰底撤掉（透明）—— 胶囊本身就是输入框的底，两层灰底会"脏"。
         LinearLayout inputBar = Ui.row(ctx);
-        inputBar.setBackground(new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
-                Ui.LINE, 0x00000000, 0f));
-        // **不给玻璃挂 elevation**（2026-10-03 模拟器实测）：半透明填充会把系统阴影从底下
-        // 透出来，在控件内部画出一圈灰环 + 一块白心。深色感改由棱光上边 + 下棱微暗承担。
+        inputBarHost = inputBar;
+        inputBarBg = new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
+                Ui.LINE, 0x00000000, 0f);
+        inputBar.setBackground(inputBarBg);
+        inputBar.setElevation(Ui.dp(ctx, 3f));   // 悬浮输入条也该有影子（不透明胶囊，安全）
         inputBar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6));
 
         input = new EditText(ctx);
@@ -860,8 +866,15 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                     new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                     Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
+            planView.setElevation(Ui.dp(ctx, 2f));
         }
         if (preInputRow != null) preInputRow.setBackground(Ui.glassBar());
+        if (inputBarBg != null) {
+            // 主题切换必须重建输入条胶囊（旧版漏了这条 → 深色下输入条还是浅白底）
+            inputBarBg = new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
+                    Ui.LINE, 0x00000000, 0f);
+            inputBarHost.setBackground(inputBarBg);
+        }
         if (subEntry != null) {
             subEntry.setTextColor(Ui.BRAND);
             subEntry.setBackground(Ui.pill(Ui.BRAND_SOFT));
@@ -873,7 +886,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             input.setHintTextColor(Ui.INK_FAINT);
             input.setBackground(Ui.round(Ui.dp(ctx, 19), 0x00000000));   // 透明：胶囊是唯一的底
         }
-        if (pick != null) Ui.setIcon(pick, com.dsh.mobile.R.drawable.ic_plus, Ui.INK_SUB);
+        if (pick != null) {
+            // 圆钮底色（IconBg）创建时烘死：只 setIcon 会留下深色档的黑底（实测 round2）
+            Ui.setIconBg(pick, com.dsh.mobile.R.drawable.ic_plus, Ui.INK_SUB, Ui.CHIP_BG, 34f, 18f);
+        }
         if (toBottom != null) Ui.setIconBg(toBottom, com.dsh.mobile.R.drawable.ic_arrow_down,
                 Ui.ON_BRAND, Ui.BRAND_FILL, 44f, 20f);
         setRunning(running, runningHint);   // 重画 ↑ / ■ 的底色与字色（同时保住运行态）

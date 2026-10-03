@@ -168,9 +168,19 @@ public final class SessionListView extends FrameLayout {
         setBackgroundColor(Ui.BG);
         if (header != null) header.setBackgroundColor(Ui.BG);
         if (headerTitle != null) headerTitle.setTextColor(Ui.INK);
-        if (refreshBtn != null) Ui.setIcon(refreshBtn, com.dsh.mobile.R.drawable.ic_refresh, Ui.INK_SUB);
-        if (devicesBtn != null) Ui.setIcon(devicesBtn, com.dsh.mobile.R.drawable.ic_monitor, Ui.INK_SUB);
-        if (gearBtn != null) Ui.setIcon(gearBtn, com.dsh.mobile.R.drawable.ic_sliders, Ui.INK_SUB);
+        // 圆形按钮的底色（IconBg）是创建时烘死的，主题切换必须连底一起重建
+        if (refreshBtn != null) {
+            refreshBtn.setBackground(new Ui.IconBg(ctx, com.dsh.mobile.R.drawable.ic_refresh,
+                    Ui.INK_SUB, Ui.CHIP_BG, 18f, Ui.I_TITLE));
+        }
+        if (devicesBtn != null) {
+            devicesBtn.setBackground(new Ui.IconBg(ctx, com.dsh.mobile.R.drawable.ic_monitor,
+                    Ui.INK_SUB, Ui.CHIP_BG, 18f, Ui.I_TITLE));
+        }
+        if (gearBtn != null) {
+            gearBtn.setBackground(new Ui.IconBg(ctx, com.dsh.mobile.R.drawable.ic_sliders,
+                    Ui.INK_SUB, Ui.CHIP_BG, 18f, Ui.I_TITLE));
+        }
         if (statusLine != null) statusLine.setTextColor(Ui.INK_FAINT);
         if (emptyView != null) {
             emptyView.setTextColor(Ui.INK_FAINT);
@@ -262,6 +272,9 @@ public final class SessionListView extends FrameLayout {
             int depth = Math.max(0, s.childDepth);
             LinearLayout card = Ui.row(ctx);
             card.setMinimumHeight(Ui.dp(ctx, 52));
+            // 抽屉会话卡也浮起来（用户点名「对话卡片没有阴影」）；top/bottom 分组卡只在
+            // 组边界挂影会闪，整行统一 1.5dp 柔影即可。
+            card.setElevation(Ui.dp(ctx, 1.5f));
             card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD) + Ui.dp(ctx, 18) * depth,
                     Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 10));
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(

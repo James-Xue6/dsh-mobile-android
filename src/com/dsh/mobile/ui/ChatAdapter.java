@@ -214,8 +214,12 @@ public final class ChatAdapter extends BaseAdapter {
         bubble.setIncludeFontPadding(false);
         bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
         bubble.setMaxWidth(maxBubble);
-        // iOS 助手气泡：浅灰实体（无描边），与左侧对齐；用户气泡才是蓝色
-        bubble.setBackground(Ui.round(Ui.dp(ctx, 18), Ui.CHIP_BG));
+        // 助手气泡：不透明奶白实体卡（SURFACE_G1→G2 渐变）+ 2dp 阴影。
+        // 2026-10-03 终局返工：旧版半透明玻璃透出纯色页面底 = 用户点名的"透明太敷衍"；
+        // 实体卡 + 影子才是 Sadees 参考图的真实层级（奶白卡浮在灰紫底上）。
+        android.graphics.drawable.GradientDrawable abg = Ui.round(Ui.dp(ctx, 18), Ui.SURFACE_G1);
+        bubble.setBackground(abg);
+        bubble.setElevation(Ui.dp(ctx, 2f));
         bubble.setTextIsSelectable(true);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -257,6 +261,7 @@ public final class ChatAdapter extends BaseAdapter {
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                 new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
+        card.setElevation(Ui.dp(ctx, 2f));
 
         TextView head = Ui.text(ctx, agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
         Ui.setLeadingIcon(head, com.dsh.mobile.R.drawable.ic_people, Ui.BRAND, 14f, 6f);
@@ -409,6 +414,7 @@ public final class ChatAdapter extends BaseAdapter {
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                 new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
+        card.setElevation(Ui.dp(ctx, 2f));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.quoteMark(ctx));
 
@@ -486,6 +492,7 @@ public final class ChatAdapter extends BaseAdapter {
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                 new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
+        card.setElevation(Ui.dp(ctx, 2f));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.quoteMark(ctx));
 
@@ -724,6 +731,7 @@ public final class ChatAdapter extends BaseAdapter {
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
                 new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
+        card.setElevation(Ui.dp(ctx, 2f));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));
 
