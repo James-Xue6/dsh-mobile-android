@@ -73,11 +73,11 @@ public final class Ui {
     //   扫码页（相机取景，两套主题下都保持深底，这是取景页的正确做法）
     //     SCAN_BG #000000 / SCAN_TIP_BG #99000000 / SCAN_PANEL_BG #E6101010
 
-    public static int BG             = 0xFFF2F2F7;
+    public static int BG             = 0xFFE6E4F0;
     public static int SURFACE        = 0xFFFFFFFF;
     public static int SURFACE_2      = 0xFFFFFFFF;
     public static int BRAND          = 0xFF0A84FF;
-    public static int BRAND_FILL     = 0xFF0A84FF;
+    public static int BRAND_FILL     = 0xFF6C5CE7;
     public static int BRAND_DEEP     = 0xFF0A84FF;
     public static int BRAND_SOFT     = 0xFFE9F2FF;
     public static int INK            = 0xFF000000;
@@ -91,7 +91,7 @@ public final class Ui {
     public static int WARN           = 0xFFFF9500;
     public static int ON_BRAND       = 0xFFFFFFFF;
     public static int ON_WARN        = 0xFFFFFFFF;
-    public static int FIELD_BG       = 0xFFF2F2F7;
+    public static int FIELD_BG       = 0xFFEDEBF5;
     public static int FIELD_ALT_BG   = 0xFFF2F2F7;
     public static int CHIP_BG        = 0xFFE9E9EB;
     public static int STOP_BG        = 0xFFE5E5EA;
@@ -129,8 +129,8 @@ public final class Ui {
     //           「系统默认控件」，一段极窄的同色系渐变就能把它从"土"里拉出来。
     public static int HAIRLINE       = 0x0F000000;
     public static int SHADOW         = 0x14000000;
-    public static int BRAND_G1       = 0xFF0A84FF;
-    public static int BRAND_G2       = 0xFF0071E3;
+    public static int BRAND_G1       = 0xFF7C4DFF;
+    public static int BRAND_G2       = 0xFF448AFF;
 
     // ---- 液态玻璃（Liquid Glass，2026-10-03）
     //
@@ -171,7 +171,7 @@ public final class Ui {
     public static final int[] GRAD_ROSE   = { 0xFFF06A7A, 0xFFD93F55 };
     public static final int[] GRAD_TEAL   = { 0xFF4FBFC9, 0xFF2E9AAD };
     /** 主色渐变（入口卡专用）：与系统蓝同族，比 {@link #BRAND_FILL} 更有"光"。 */
-    public static final int[] GRAD_BRAND  = { 0xFF4FA2FF, 0xFF0B6BE0 };
+    public static final int[] GRAD_BRAND  = { 0xFF7C4DFF, 0xFF448AFF };
     /** 全部渐变（{@link #gradientFor(String)} 按 key 稳定取一组）。 */
     public static final int[][] GRADIENTS = {
             GRAD_ORANGE, GRAD_PURPLE, GRAD_INDIGO, GRAD_BLUE, GRAD_ROSE, GRAD_TEAL };
@@ -202,13 +202,13 @@ public final class Ui {
         dark = useDark;
         if (useDark) {
             // ---- 深色：iOS systemGroupedBackground 纯黑 + #1C1C1E 卡片 + #0A84FF 主色
-            BG             = 0xFF000000;   // 分组背景：纯黑
-            SURFACE        = 0xFF1C1C1E;   // 卡片 / 顶部栏：比背景亮一档
-            SURFACE_2      = 0xFF2C2C2E;   // 组内嵌套卡片（更亮一层）
-            BRAND          = 0xFF4CA2FF;   // systemBlue 深色档：比浅色档提亮一档（深底上更通透）
-            BRAND_FILL     = 0xFF0A84FF;
-            BRAND_DEEP     = 0xFF6FB8FF;
-            BRAND_SOFT     = 0xFF0A2540;   // 蓝色 12% 的深色淡底
+            BG             = 0xFF0E0D12;   // 分组背景：近黑带紫
+            SURFACE        = 0xFF1C1B22;   // 卡片 / 顶部栏：比背景亮一档
+            SURFACE_2      = 0xFF282633;   // 组内嵌套卡片（更亮一层）
+            BRAND          = 0xFF9F8FFF;   // systemBlue 深色档：比浅色档提亮一档（深底上更通透）
+            BRAND_FILL     = 0xFF8B7CFF;
+            BRAND_DEEP     = 0xFFB3A6FF;
+            BRAND_SOFT     = 0xFF241E44;   // 蓝色 12% 的深色淡底
             INK            = 0xFFFFFFFF;
             INK_SUB        = 0xFF98989F;
             INK_FAINT      = 0xFF7C7C80;
@@ -220,13 +220,13 @@ public final class Ui {
             WARN           = 0xFFFF9F0A;
             ON_BRAND       = 0xFFFFFFFF;
             ON_WARN        = 0xFFFFFFFF;
-            FIELD_BG       = 0xFF2C2C2E;
-            FIELD_ALT_BG   = 0xFF2C2C2E;
-            CHIP_BG        = 0xFF2C2C2E;
-            STOP_BG        = 0xFF3A3A3C;
-            PLAN_BG        = 0xFF1C1C1E;
-            SEG_BG         = 0xFF2C2C2E;
-            SEG_THUMB      = 0xFF636366;
+            FIELD_BG       = 0xFF2A2835;
+            FIELD_ALT_BG   = 0xFF2A2835;
+            CHIP_BG        = 0xFF2A2835;
+            STOP_BG        = 0xFF383546;
+            PLAN_BG        = 0xFF1C1B22;
+            SEG_BG         = 0xFF2A2835;
+            SEG_THUMB      = 0xFF4A4680;
             SWITCH_OFF     = 0xFF39393D;
             SWITCH_ON      = 0xFF30D158;
             BANNER_WARN_BG = 0xFF3A2E12;
@@ -240,20 +240,20 @@ public final class Ui {
             LINE_OK        = 0xFF2F5A44;
             LINE_SELECTED  = 0xFF3D4E85;
             BADGE_OK_BG    = 0xFF16351F;
-            BADGE_OFF_BG   = 0xFF26282C;
+            BADGE_OFF_BG   = 0xFF2A2835;
             LINK_OK        = 0xFF30D158;
-            CODE_BG        = 0xFF2C2C2E;
+            CODE_BG        = 0xFF2A2835;
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
             HAIRLINE       = 0x14FFFFFF;   // 深色卡片发丝线：#FFFFFF14（用户指定的深色描边）
             SHADOW         = 0x33000000;   // 纯黑底上阴影不可见，留着只为代码一致
-            BRAND_G1       = 0xFF0A84FF;   // 渐变填充与白字对比度与浅色档一致，不随主题变
-            BRAND_G2       = 0xFF0071E3;
+            BRAND_G1       = 0xFF9D6BFF;
+            BRAND_G2       = 0xFF5C9DFF;
             // 液态玻璃（深色）：黑 45~60% 的玻璃体；纯黑底上白棱才看得见，所以深色档
             // 严格按规范的 15% 白（浅色档相反，见下）。
-            GLASS          = 0xE61C1C1E;   // #1C1C1E 90%（与 sheet 同档：深色档太透会把黑底"洗灰"）
-            GLASS_SHEET    = 0xF21C1C1E;   // 95%
+            GLASS          = 0xE61C1B22;   // #1C1C1E 90%（与 sheet 同档：深色档太透会把黑底"洗灰"）
+            GLASS_SHEET    = 0xF21C1B22;   // 95%
             GLASS_BAR      = 0x99000000;   // #000 60%
             GLASS_RIM      = 0x26FFFFFF;   // 白 15%
             GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
@@ -262,13 +262,13 @@ public final class Ui {
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
         } else {
             // ---- 浅色：iOS systemGroupedBackground #F2F2F7 + 纯白卡片 + #0A84FF 主色
-            BG             = 0xFFF2F2F7;
-            SURFACE        = 0xFFFFFFFF;
+            BG             = 0xFFE6E4F0;
+            SURFACE        = 0xFFFDFCFE;
             SURFACE_2      = 0xFFFFFFFF;
-            BRAND          = 0xFF0A84FF;
-            BRAND_FILL     = 0xFF0A84FF;
-            BRAND_DEEP     = 0xFF0A84FF;
-            BRAND_SOFT     = 0xFFE9F2FF;
+            BRAND          = 0xFF6C5CE7;
+            BRAND_FILL     = 0xFF6C5CE7;
+            BRAND_DEEP     = 0xFF5A4BD6;
+            BRAND_SOFT     = 0xFFEAE6FA;
             INK            = 0xFF000000;
             INK_SUB        = 0xFF8E8E93;
             INK_FAINT      = 0xFFAEAEB2;
@@ -280,14 +280,14 @@ public final class Ui {
             WARN           = 0xFFFF9500;
             ON_BRAND       = 0xFFFFFFFF;
             ON_WARN        = 0xFFFFFFFF;
-            FIELD_BG       = 0xFFF2F2F7;
-            FIELD_ALT_BG   = 0xFFF2F2F7;
-            CHIP_BG        = 0xFFE9E9EB;
-            STOP_BG        = 0xFFE5E5EA;
-            PLAN_BG        = 0xFFF2F2F7;
-            SEG_BG         = 0xFFE9E9EB;
+            FIELD_BG       = 0xFFEDEBF5;
+            FIELD_ALT_BG   = 0xFFEDEBF5;
+            CHIP_BG        = 0xFFE0DDEB;
+            STOP_BG        = 0xFFDCD9EA;
+            PLAN_BG        = 0xFFEDEBF5;
+            SEG_BG         = 0xFFDBD8E8;
             SEG_THUMB      = 0xFFFFFFFF;
-            SWITCH_OFF     = 0xFFE9E9EA;
+            SWITCH_OFF     = 0xFFD9D6E6;
             SWITCH_ON      = 0xFF34C759;
             BANNER_WARN_BG = 0xFFFFF8E6;
             BANNER_WARN_FG = 0xFF8A5300;
@@ -302,14 +302,14 @@ public final class Ui {
             BADGE_OK_BG    = 0xFFE4F8E9;
             BADGE_OFF_BG   = 0xFFE9E9EB;
             LINK_OK        = 0xFF34C759;
-            CODE_BG        = 0xFFF2F2F7;
+            CODE_BG        = 0xFFE9E6F2;
             SCAN_BG        = 0xFF000000;
             SCAN_TIP_BG    = 0x99000000;
             SCAN_PANEL_BG  = 0xE6101010;
             HAIRLINE       = 0x0F000000;   // 浅色卡片发丝线：#0000000F
             SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
-            BRAND_G1       = 0xFF0A84FF;
-            BRAND_G2       = 0xFF0071E3;
+            BRAND_G1       = 0xFF7C4DFF;
+            BRAND_G2       = 0xFF448AFF;
             // 液态玻璃（浅色）：卡片体 88% 白 → 落在 #F2F2F7 上约 #FDFDFE，**和 iOS 的纯白卡片同档**。
             // 2026-10-03 从 60% 提到 88%：60% 落在 #F2F2F7 上只有 #FAFAFC，卡片和页面底只差 8 级，
             // 截图上看就是"一整块灰，没有卡片"——这正是"不是 iOS 26、太素"的直接原因。
@@ -350,14 +350,14 @@ public final class Ui {
     public static final float S_CAP2    = 10.5f; // Caption2（徽标）               改前 11
 
     /** iOS 分组卡片圆角。 */
-    public static final float R_CARD  = 20f;
+    public static final float R_CARD  = 28f;
     /**
      * 大圆角「特征卡」圆角（对齐 ref-ios-health-cards.png：那张彩色分类卡的圆角）。
      * 只给渐变卡/首屏主卡用 —— 普通信息卡仍是 {@link #R_CARD}，圆角档一共就 20/24/26 三档。
      */
-    public static final float R_CARD_BIG = 24f;
+    public static final float R_CARD_BIG = 30f;
     /** iOS 弹窗（bottom sheet）顶部圆角。 */
-    public static final float R_SHEET = 26f;
+    public static final float R_SHEET = 32f;
     /** 按钮圆角（胶囊）。 */
     public static final float R_PILL  = 999f;
     /** iOS 列表行最小高度。 */
