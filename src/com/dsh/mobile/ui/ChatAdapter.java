@@ -253,8 +253,9 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
-        // 左侧 3dp 主色强调条 + 发丝描边 + 极浅阴影（旧版是整卡一圈淡蓝框 = "土"元素）
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+        // 左侧 3dp 主色强调条 + 奶白渐变体 + 发丝描边（旧版是整卡一圈淡蓝框 = "土"元素）
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
 
         TextView head = Ui.text(ctx, agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
@@ -313,10 +314,11 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, 11), Ui.dp(ctx, 8), Ui.dp(ctx, 11), Ui.dp(ctx, 8));
-        // 工具行改成**中性玻璃卡 + 发丝线**（参考图的页面主体只有白/灰/黑）。
+        // 工具行改成**中性奶白渐变卡 + 发丝线**（Sadees：页面主体只有奶白/灰紫/黑）。
         // 旧版是淡蓝底 —— 一屏能有十几条工具行，每条都染蓝就是"到处都是彩色"，
         // 状态色（绿/橙/红圆点）反而被底色淹掉了。
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14), Ui.GLASS, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, 0x00000000, 0f));
         card.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -403,9 +405,12 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+        // Sadees 引用卡：奶白渐变体（Ui.card）+ 左上「"」淡色大引号装饰 + 橙色强调条
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
+        card.addView(Ui.quoteMark(ctx));
 
         TextView title = Ui.text(ctx, "需要你的批准", Ui.S_HEAD, Ui.INK, true);
         card.addView(title);
@@ -477,9 +482,12 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+        // Sadees 引用卡：奶白渐变体（Ui.card）+ 左上「"」淡色大引号装饰 + 紫色强调条
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
+        card.addView(Ui.quoteMark(ctx));
 
         card.addView(Ui.text(ctx, "Agent 在等你的回答", Ui.S_HEAD, Ui.INK, true));
 
@@ -626,7 +634,8 @@ public final class ChatAdapter extends BaseAdapter {
             actions.addView(submit);
 
             TextView skip = actionButton("跳过", Ui.SURFACE, Ui.INK_SUB);
-            skip.setBackground(Ui.roundStroke(Ui.dp(ctx, 12), Ui.SURFACE, Ui.dp(ctx, 1.2f), Ui.LINE));
+            // Sadees 次操作 = 浅紫灰胶囊（无边框），不再是描边方块
+            skip.setBackground(Ui.pill(Ui.BTN_SOFT));
             skip.setOnClickListener(v -> host.onQuestionCancel(it));
             skip.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -712,7 +721,8 @@ public final class ChatAdapter extends BaseAdapter {
 
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));

@@ -159,6 +159,26 @@ public final class Ui {
     public static int SELECT_BG     = 0x0F000000;   // 浅色 6% 黑 / 深色 14% 白
     public static int SELECT_BG_HI  = 0x14000000;   // 更明确一档（按下 / 强调项）
 
+    // ---- Sadees 视觉（2026-10-03，对齐 ref-sadees/*.WEBP）
+    //
+    // 参考图的设计语言：**层级全靠色差，不靠描边**——薰衣草灰紫页面底上浮一张奶白渐变卡；
+    // 深色胶囊坞里选中项反白；紫→蓝渐变是稀缺资源，只点亮"当前激活"的元素。
+    //
+    // SURFACE_G1/G2：卡片体的奶白渐变对（左上 → 右下）。浅色 #FBFAFE→#EFEDF7，
+    //           深色 #1C1B22→#141318。CardBg 拿它铺 LinearGradient。
+    // SEG_DOCK_*：分段控件的「深色胶囊坞」——整条深色坞体、未选中灰字透明底、
+    //           选中 = 白底胶囊 + 深色字（参考图主控件区的标志性样式）。
+    // BTN_SOFT：次按钮的浅紫灰底（浅 #EDEBF5 / 深 #26242E），配 INK 深字。
+    // QUOTE   ：审批卡/提问卡左上角那枚淡色大引号（#C9C4E8 / 深色一档暗紫）。
+    public static int SURFACE_G1     = 0xFFFBFAFE;
+    public static int SURFACE_G2     = 0xFFEFEDF7;
+    public static int SEG_DOCK_BG    = 0xFF17161C;
+    public static int SEG_DOCK_FG    = 0xFF9A96AE;
+    public static int SEG_DOCK_ON    = 0xFFFFFFFF;
+    public static int SEG_DOCK_ON_FG = 0xFF17161C;
+    public static int BTN_SOFT       = 0xFFEDEBF5;
+    public static int QUOTE          = 0xFFC9C4E8;
+
     // ---- 大圆角渐变卡（对齐 ref-ios-health-cards.png 的「彩色分类卡」）
     //
     // 参考图：圆角 ≈24dp、**横向**饱和渐变（左亮右深）、白字、左上小图标、无描边无阴影。
@@ -260,6 +280,15 @@ public final class Ui {
             SCRIM          = 0x59000000;   // 遮罩不随主题变
             SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
+            // Sadees 深色档：坞体仍用深色（比卡片再沉一档），选中反白改「白底深字」不变
+            SURFACE_G1     = 0xFF1C1B22;
+            SURFACE_G2     = 0xFF141318;
+            SEG_DOCK_BG    = 0xFF26242E;
+            SEG_DOCK_FG    = 0xFF8A86A0;
+            SEG_DOCK_ON    = 0xFFF2F1FA;
+            SEG_DOCK_ON_FG = 0xFF17161C;
+            BTN_SOFT       = 0xFF26242E;
+            QUOTE          = 0xFF5A5478;
         } else {
             // ---- 浅色：iOS systemGroupedBackground #F2F2F7 + 纯白卡片 + #0A84FF 主色
             BG             = 0xFFE6E4F0;
@@ -325,6 +354,15 @@ public final class Ui {
             SCRIM          = 0x59000000;   // 遮罩不随主题变
             SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
             SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
+            // Sadees 浅色档：奶白渐变卡 + 深色胶囊坞 + 浅紫灰次按钮
+            SURFACE_G1     = 0xFFFBFAFE;
+            SURFACE_G2     = 0xFFEFEDF7;
+            SEG_DOCK_BG    = 0xFF17161C;
+            SEG_DOCK_FG    = 0xFF9A96AE;
+            SEG_DOCK_ON    = 0xFFFFFFFF;
+            SEG_DOCK_ON_FG = 0xFF17161C;
+            BTN_SOFT       = 0xFFEDEBF5;
+            QUOTE          = 0xFFC9C4E8;
         }
     }
 
@@ -985,32 +1023,38 @@ public final class Ui {
 
     // ------------------------------------------------------------ iOS 分段控件 / 列表结构
 
-    /** 分段控件的底槽（圆角灰底，内衬 2dp）。往里加 {@link #segmentItem}。 */
+    /**
+     * 分段控件的底槽（Sadees「深色胶囊坞」：整条 #17161C 深色胶囊，内衬 3dp）。
+     * 往里加 {@link #segmentItem}；选中态用 {@link #paintSegment} —— 选中项 = 白底胶囊反色。
+     */
     public static LinearLayout segmentTrack(Context c) {
         LinearLayout l = row(c);
         l.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        l.setBackground(round(dp(c, 9), SEG_BG));
-        l.setPadding(dp(c, 2), dp(c, 2), dp(c, 2), dp(c, 2));
+        l.setBackground(pill(SEG_DOCK_BG));
+        l.setPadding(dp(c, 3), dp(c, 3), dp(c, 3), dp(c, 3));
         return l;
     }
 
     /** 分段控件的一项（默认未选中；选中态用 {@link #paintSegment}）。 */
     public static TextView segmentItem(Context c, String s) {
-        TextView t = text(c, s, S_FOOT, INK, false);
+        TextView t = text(c, s, S_FOOT, SEG_DOCK_FG, false);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(c, 4), dp(c, 6), dp(c, 4), dp(c, 6));
+        t.setPadding(dp(c, 4), dp(c, 7), dp(c, 4), dp(c, 7));
         t.setClickable(true);
         paintSegment(t, false);
         return t;
     }
 
-    /** 画分段项：选中 = 白滑块 + 深字，未选中 = 透明 + 灰字。 */
+    /**
+     * 画分段项（Sadees 胶囊坞选中态）：选中 = 白底胶囊 + 深色字，未选中 = 透明 + 灰字。
+     * 圆角 999 = 胶囊（参考图的选中项是一条白胶囊，不是小圆角方块）。
+     */
     public static void paintSegment(TextView t, boolean on) {
         if (t == null) return;
-        t.setTextColor(on ? INK : INK_SUB);
+        t.setTextColor(on ? SEG_DOCK_ON_FG : SEG_DOCK_FG);
         t.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        t.setBackground(on ? round(dp(t.getContext(), 7), SEG_THUMB) : round(0, 0x00000000));
+        t.setBackground(on ? pill(SEG_DOCK_ON) : round(0, 0x00000000));
     }
 
     /** 组标题：iOS 的 13sp 灰色小字（"分组列表"上方那一行）。 */
@@ -1052,15 +1096,13 @@ public final class Ui {
 
     private static LinearLayout card(Context c, int accent) {
         LinearLayout c0 = col(c);
-        // 玻璃卡：GLASS 半透明体 + 发丝描边 + 顶部棱光/高光（都在 CardBg 里）。
+        // Sadees 奶白渐变卡：SURFACE_G1 → SURFACE_G2 对角渐变 + 发丝描边（CardBg 渐变构造器）。
         //
-        // **不要再给玻璃卡 setElevation（2026-10-03 模拟器实测）**：卡片填充是半透明的，
-        // 系统的 elevation 阴影会从半透明体**下面透出来**，在卡内画出一圈灰环 + 中间一块
-        // 白心（模拟器截图 1080x1920 逐像素采样：卡内 18dp 一圈 = #E5E5E7，正中 = #FAFAFC，
-        // 看上去就是"灰卡里套了个白方框"——正是用户报的那个坏卡片）。
-        // 对照实验：同一次构建把填充换成不透明品红 → 环消失；只去掉 elevation → 环也消失。
-        // 结论：**半透明 = 不能挂 elevation**。深度感改由「上棱高光 + 下棱微暗 + 发丝描边」承担。
-        c0.setBackground(new CardBg(dp(c, R_CARD), GLASS, dp(c, 1f), LINE, accent, dp(c, 3f)));
+        // **仍然不给玻璃卡挂 elevation（2026-10-03 模拟器实测，见旧注释）**：渐变体虽是
+        // 不透明的，但阴影会把"极柔分层"变成"投影硬边"，参考图的卡片是靠色差浮起来的，
+        // 不是靠影子。深度感仍由「上棱高光 + 下棱微暗 + 发丝描边」承担。
+        c0.setBackground(new CardBg(dp(c, R_CARD),
+                new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE, accent, dp(c, 3f)));
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return c0;
@@ -1107,8 +1149,10 @@ public final class Ui {
                                           int titleColor, int subColor, int chevColor,
                                           String title, String sub) {
         LinearLayout card = col(c);
+        // Sadees 奶白渐变卡：与 Ui.card 同一套渐变体（入口卡不再用半透明玻璃）。
         card.setBackground(grad == null
-                ? new CardBg(dp(c, R_CARD), GLASS, dp(c, 1f), LINE, 0x00000000, dp(c, 3f))
+                ? new CardBg(dp(c, R_CARD), new int[] { SURFACE_G1, SURFACE_G2 },
+                        dp(c, 1f), LINE, 0x00000000, dp(c, 3f))
                 : featureFill(c, grad));
         card.setPadding(dp(c, M_CARD_PAD), dp(c, 13), dp(c, 12), dp(c, 13));
         card.setMinimumHeight(dp(c, 64));
@@ -1157,6 +1201,8 @@ public final class Ui {
         private final android.graphics.RectF rf = new android.graphics.RectF();
         private final float radius, stroke, barW;
         private final int fill, line, accent;
+        /** 非空 = 用「左上 → 右下」奶白渐变当卡体（Sadees），fill 只作为兜底色。 */
+        private final int[] grad;
         /** true = 只圆上两角（底部弹窗那种"贴着屏幕下缘"的玻璃）。 */
         private boolean topOnly;
         /** 顶部高光带的像素高（1.5dp），由构造时的 density 决定。 */
@@ -1165,6 +1211,23 @@ public final class Ui {
         public CardBg(float radius, int fill, float stroke, int line, int accent, float barW) {
             this.radius = radius;
             this.fill = fill;
+            this.grad = null;
+            this.stroke = Math.max(1f, stroke);
+            this.line = line;
+            this.accent = accent;
+            this.barW = barW;
+            this.hiH = Math.max(1f, stroke * 1.5f);
+        }
+
+        /**
+         * 渐变卡体（Sadees 奶白卡）：{@code gradColors} 左上 → 右下对角渐变。
+         * 为什么不用 GLASS 半透明体：参考图的层级是"奶白卡浮在薰衣草底上"，靠色差分层；
+         * 半透明玻璃在纯色底上只会透出同一块底色，分不出层。
+         */
+        public CardBg(float radius, int[] gradColors, float stroke, int line, int accent, float barW) {
+            this.radius = radius;
+            this.fill = gradColors[0];
+            this.grad = gradColors;
             this.stroke = Math.max(1f, stroke);
             this.line = line;
             this.accent = accent;
@@ -1188,10 +1251,19 @@ public final class Ui {
                     : new float[] { radius, radius, radius, radius, radius, radius, radius, radius },
                     android.graphics.Path.Direction.CW);
 
-            // ① 玻璃体（半透明填充）
+            // ① 卡体：渐变版用「左上 → 右下」对角渐变（Sadees 奶白卡），玻璃版用半透明填充。
+            //    shader 不能常驻成员里——CardBg 在主题切换时是重建的，但同一实例会被
+            //    复用到不同尺寸的 View 上，Draw 的 bounds 每帧都可能变，必须按当帧 bounds 建。
             p.setStyle(android.graphics.Paint.Style.FILL);
-            p.setShader(null);
-            p.setColor(fill);
+            if (grad != null && w > 0f && h > 0f) {
+                p.setShader(new android.graphics.LinearGradient(
+                        0f, 0f, w, h,
+                        grad[0], grad[grad.length - 1],
+                        android.graphics.Shader.TileMode.CLAMP));
+            } else {
+                p.setShader(null);
+                p.setColor(fill);
+            }
             cv.drawPath(shape, p);
 
             // ② 左侧 3dp 强调条（被卡片圆角裁掉才不露方角）
@@ -1342,7 +1414,14 @@ public final class Ui {
             this.fill = fill;
             this.radiusDp = radiusDp;
             this.iconDp = iconDp;
-            box = round(dp(c, radiusDp), fill);
+            // Sadees：主色实心圆钮（fill == BRAND_FILL，即发送↑ / FAB / 回到底部这类
+            // "当前激活"的圆钮）铺「紫 → 蓝」纵向渐变（BRAND_G1 → BRAND_G2）——
+            // 渐变只点亮激活元素，其余底色照旧纯色。
+            if (fill == BRAND_FILL) {
+                box = brandGradient(radiusDp);
+            } else {
+                box = round(dp(c, radiusDp), fill);
+            }
             glyph = iconDrawable(c, resId, iconDp, color);
         }
 
@@ -1617,16 +1696,16 @@ public final class Ui {
     }
 
     /**
-     * 次按钮：iOS 的"灰底蓝字"（取消 / 扫码这类辅助操作），**无边框**胶囊，带按压反馈。
+     * 次按钮（Sadees）：**浅紫灰底 + 深字**（浅 #EDEBF5 / 深 #26242E），无边框胶囊，带按压反馈。
      * 尺寸与 {@link #primaryButton} 完全一致（同一排并排时不能一高一矮）。
      */
     public static TextView secondaryButton(Context c, String s) {
-        TextView t = text(c, s, S_HEAD, BRAND, false);
+        TextView t = text(c, s, S_HEAD, INK, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
         t.setMinHeight(dp(c, B_BTN_TOUCH));
         t.setPadding(dp(c, 16), dp(c, 9), dp(c, 16), dp(c, 9));
-        t.setBackground(insetV(c, pill(CHIP_BG), (B_BTN_TOUCH - B_BTN_H) / 2f));
+        t.setBackground(insetV(c, pill(BTN_SOFT), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
         return t;
@@ -1716,7 +1795,10 @@ public final class Ui {
      */
     public static LinearLayout sheetCard(Context c) {
         LinearLayout box = col(c);
-        box.setBackground(new CardBg(dp(c, R_SHEET), GLASS_SHEET, dp(c, 1f), LINE,
+        // Sadees：弹窗体 = 奶白渐变（浅 #FBFAFE→#EFEDF7 / 深 #1C1B22→#141318）+ 32dp 上圆角。
+        // 每次打开弹窗都会重新调本方法，读到的就是当前主题的 token，不需要 applyTheme。
+        box.setBackground(new CardBg(dp(c, R_SHEET),
+                new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE,
                 0x00000000, 0f).topOnly(true));
         box.setPadding(dp(c, M_CARD_PAD), dp(c, 8), dp(c, M_CARD_PAD), dp(c, 14));
         return box;
@@ -1734,6 +1816,27 @@ public final class Ui {
         lp.bottomMargin = dp(c, 10);
         v.setLayoutParams(lp);
         return v;
+    }
+
+    // ------------------------------------------------------------ Sadees：引用卡的引号装饰
+
+    /**
+     * 引用卡（审批卡/提问卡）左上角的「"」淡色大引号装饰 —— Sadees 引用卡的标志性元素。
+     * 一个 TextView 即可：36sp 的衬线引号，色 {@link #QUOTE}，负下边距把正文拉上来。
+     * 纯排版装饰：不可点、不给无障碍读出来。
+     */
+    public static TextView quoteMark(Context c) {
+        TextView t = new TextView(c);
+        t.setText("\u201C");
+        t.setTextSize(36f);
+        t.setTextColor(QUOTE);
+        t.setIncludeFontPadding(false);
+        t.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(c, 2);
+        t.setLayoutParams(lp);
+        return t;
     }
 
     // ------------------------------------------------------------ 轻量 Markdown

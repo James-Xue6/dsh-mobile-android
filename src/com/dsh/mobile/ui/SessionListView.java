@@ -254,8 +254,9 @@ public final class SessionListView extends FrameLayout {
             // 整组共用一张卡：只有组内第一行圆上角、最后一行圆下角（iOS 内嵌列表）
             boolean top = cardTop(position);
             boolean bottom = cardBottom(position);
-            // 选中 = 浅灰圆角胶囊（SELECT_BG），**不是**蓝底白字 —— 蓝色只留给行尾那一枚对勾
-            int fill = current ? Ui.SELECT_BG : Ui.GLASS;
+            // 选中 = 浅灰圆角胶囊（SELECT_BG），**不是**蓝底白字 —— 蓝色只留给行尾那一枚对勾。
+            // 未选中 = 奶白渐变卡的近似纯色（SURFACE_G1）：会话卡浮在薰衣草底上（Sadees 分层）。
+            int fill = current ? Ui.SELECT_BG : Ui.SURFACE_G1;
             android.graphics.drawable.GradientDrawable bg = Ui.rowBg(ctx, fill, top, bottom);
 
             int depth = Math.max(0, s.childDepth);
@@ -315,10 +316,12 @@ public final class SessionListView extends FrameLayout {
             }
             card.addView(texts);
 
-            // 折叠开关：父会话名下挂着子智能体/专家团会话时给一个可点的入口（默认折叠）
+            // 折叠开关：父会话名下挂着子智能体/专家团会话时给一个可点的入口（默认折叠）。
+            // Sadees 数字感：数值（子会话数）用大一号的细体（light），标签「子会话」正常字重。
             if (s.childCount > 0) {
-                TextView tog = Ui.text(ctx, (s.expanded ? "▾ " : "▸ ") + s.childCount + " 子会话",
-                        Ui.S_CAP1, Ui.BRAND, true);
+                TextView tog = Ui.text(ctx, s.childCount + " 子会话" + (s.expanded ? " ▾" : " ▸"),
+                        Ui.S_CALLOUT + 1.5f, Ui.BRAND, false);
+                tog.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
                 tog.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 4), Ui.dp(ctx, 9), Ui.dp(ctx, 4));
                 tog.setBackground(Ui.pill(Ui.BRAND_SOFT));
                 LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(

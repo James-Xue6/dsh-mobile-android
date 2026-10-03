@@ -147,12 +147,13 @@ public final class DeviceHubView extends LinearLayout {
         emptyIcon.setLayoutParams(new LinearLayout.LayoutParams(
                 Ui.dp(ctx, 72), Ui.dp(ctx, 72)));
         empty.addView(emptyIcon);
-        TextView emptyText = Ui.text(ctx, "还没有添加设备", Ui.S_BODY, Ui.INK_SUB, false);
+        // Sadees 数字感：空态正文用小号灰字（S_FOOT），说明更小（S_CAP1）——层级靠字号对比
+        TextView emptyText = Ui.text(ctx, "还没有添加设备", Ui.S_FOOT, Ui.INK_SUB, false);
         emptyText.setGravity(Gravity.CENTER);
         emptyText.setPadding(0, Ui.dp(ctx, 10), 0, 0);
         empty.addView(emptyText);
         TextView emptyHint = Ui.text(ctx, "电脑端 DSH 打开「移动设备」面板，扫码即可添加",
-                Ui.S_FOOT, Ui.INK_FAINT, false);
+                Ui.S_CAP1, Ui.INK_FAINT, false);
         emptyHint.setGravity(Gravity.CENTER);
         emptyHint.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 4), Ui.dp(ctx, 16), 0);
         emptyHint.setLineSpacing(Ui.dp(ctx, 3), 1.15f);

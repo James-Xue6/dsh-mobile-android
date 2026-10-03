@@ -187,11 +187,8 @@ public final class SettingsView extends LinearLayout {
 
         LinearLayout row1 = Ui.row(ctx);
         row1.setPadding(0, Ui.dp(ctx, 14), 0, 0);
-        TextView scan = primary("扫码配对");
-        scan.setOnClickListener(v -> host.onScanQr());
-        row1.addView(scan, weight(1f, 8));
-
-        TextView save = secondary("保存并连接");
+        // Sadees：「保存并连接」是本页主操作 = 紫蓝渐变主按钮；「扫码配对」退为次按钮
+        TextView save = primary("保存并连接");
         save.setOnClickListener(v -> host.onConnect(
                 lanField.getText().toString().trim(),
                 wanField.getText().toString().trim(),
@@ -199,6 +196,10 @@ public final class SettingsView extends LinearLayout {
                 tokenField.getText().toString().trim(),
                 nameField.getText().toString().trim()));
         row1.addView(save, weight(1f, 0));
+
+        TextView scan = secondary("扫码配对");
+        scan.setOnClickListener(v -> host.onScanQr());
+        row1.addView(scan, weight(1f, 8));
         card.addView(row1);
 
         LinearLayout row2 = Ui.row(ctx);

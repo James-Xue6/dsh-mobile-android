@@ -195,7 +195,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 旧版浅色档用 PLAN_BG(#F2F2F7) 铺在 BG(#F2F2F7) 上，等于没有背景，提要像是浮在页面上。
         planView = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
         planView.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
-        planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+        planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         planView.setMaxLines(8);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -854,9 +855,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (subtitle != null) subtitle.setTextColor(Ui.INK_FAINT);
         if (planView != null) {
             planView.setTextColor(Ui.INK_SUB);
-            // 必须与构造函数里那一份**逐参一致**（圆角 R_CARD + GLASS）：
+            // 必须与构造函数里那一份**逐参一致**（圆角 R_CARD + 奶白渐变体）：
             // 旧版这里写的是 12dp + SURFACE，切一次主题提要卡就悄悄变小、还从玻璃变成实心。
-            planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD), Ui.GLASS, Ui.dp(ctx, 1f),
+            planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
+                    new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
                     Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
         }
         if (preInputRow != null) preInputRow.setBackground(Ui.glassBar());
