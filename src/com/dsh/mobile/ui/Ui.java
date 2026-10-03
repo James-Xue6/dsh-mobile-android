@@ -1111,12 +1111,32 @@ public final class Ui {
         // elevation 可以安全使用（旧版禁用是因为半透明体会把阴影透成灰环）。浅色 3dp 明显，
         // 深色 2dp（黑底上阴影本就不可见，只留一致性）；CardBg.getOutline 已把外轮廓交给
         // 系统，阴影严格贴圆角走。
-        c0.setBackground(new CardBg(dp(c, R_CARD),
-                new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE, accent, dp(c, 3f)));
-        c0.setElevation(dp(c, isDark() ? 2f : 3f));
+        //
+        // **真机 bug（2026-10-03 晚，用户手机实拍）**：设置页折叠卡也是 card()——渐变体
+        // 扫过大面积展开区时，内嵌的 FIELD_BG（#EDEBF5）说明块与渐变端色（#F2F0FA）几乎
+        // 同亮度，整块内容看着"卡里套了个脏灰框、文字贴在灰底上"。修法：card() 分两种——
+        // **大面积可展开容器用 flatCard（纯色白）**，独立信息卡才用渐变体。
+        if (accent == 0x00000000) {
+            // 折叠卡/大面积容器：纯色白卡 + 发丝描边 + 阴影（无渐变无高光棱）。
+            // 内嵌 FIELD_BG 元素与白底对比清晰，层级立刻回来。
+            c0.setBackground(new CardBg(dp(c, R_CARD), SURFACE, dp(c, 1f), LINE, 0, dp(c, 3f)));
+            c0.setElevation(dp(c, isDark() ? 2f : 3f));
+        } else {
+            c0.setBackground(new CardBg(dp(c, R_CARD),
+                    new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE, accent, dp(c, 3f)));
+            c0.setElevation(dp(c, isDark() ? 2f : 3f));
+        }
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return c0;
+    }
+
+    /**
+     * 纯色大卡（无渐变无高光棱）：给「面积大、内嵌表单/说明块」的容器用——
+     * 渐变体扫过大面积时会和内嵌 FIELD_BG 同亮度混成一片灰（真机实拍 bug）。
+     */
+    public static LinearLayout flatCard(Context c) {
+        return card(c, 0x00000000);
     }
 
     /**
