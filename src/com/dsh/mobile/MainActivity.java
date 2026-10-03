@@ -4129,6 +4129,15 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没连上电脑端，回「我的设备」点重连", Toast.LENGTH_LONG).show();
             return;
         }
+        // 半开链路防护（评审 P1-12 同族）：TCP 还活着但网关侧早已关闭时，state 仍是 READY、
+        // isOnline() 也过（pong 只是 75s 判死窗口内没跑满），此时 sendMessage 的帧会进黑洞
+        // ——用户看到输入框清空就以为发出去了，实际消息丢失（模拟器实测复现：网关日志里
+        // 没有对应 prompt 记录）。canSend() 要求 30s 内收到过入站帧，能挡住这一类。
+        if (!gw.canSend()) {
+            Toast.makeText(this, "连接不稳定，这条没有发出去；正在重连，稍后重发即可", Toast.LENGTH_LONG).show();
+            gw.retryNow();
+            return;
+        }
         lastSentText = text == null ? "" : text;
         if (currentSessionId.isEmpty()) {
             // 新会话：先本地回显，等 sent 回来拿 sessionId
