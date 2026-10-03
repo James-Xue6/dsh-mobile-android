@@ -116,6 +116,8 @@ public final class SettingsView extends LinearLayout {
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         scroll.setVerticalScrollBarEnabled(false);
+        // iOS 没有 overscroll 光晕；Android 默认那圈紫蓝光在浅底上很扎眼（用户报"滑动变色"）
+        scroll.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
         LinearLayout body = Ui.col(ctx);
         // iOS 分组列表：左右外边距 16dp，卡片之间 14dp 留白
         body.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 24));

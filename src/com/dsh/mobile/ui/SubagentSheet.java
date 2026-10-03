@@ -223,7 +223,14 @@ public final class SubagentSheet {
      * 不封顶会让弹窗顶出屏幕、连「关闭」都点不到。上限取窗口高度的 55%。
      */
     private static final class MaxHeightScrollView extends ScrollView {
-        MaxHeightScrollView(Context c) { super(c); }
+        MaxHeightScrollView(Context c) {
+            super(c);
+            // **真机 bug（2026-10-04 用户报「滑动就会变色」）**：内容不满一屏时，任何滑动都
+            // 立刻越界，Android 默认会画一圈 **overscroll 光晕**（颜色取 colorPrimary，
+            // 本 App 是紫蓝）—— 看起来就是"一滑动弹窗就变色"。iOS 没有这种光晕，直接关掉。
+            setOverScrollMode(OVER_SCROLL_NEVER);
+            setVerticalScrollBarEnabled(false);
+        }
 
         @Override
         protected void onMeasure(int widthSpec, int heightSpec) {

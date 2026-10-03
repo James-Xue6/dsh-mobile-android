@@ -111,6 +111,7 @@ public final class SessionListView extends FrameLayout {
         list.setDividerHeight(0);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         list.setVerticalScrollBarEnabled(false);
+        list.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);   // 关掉紫蓝 overscroll 光晕
         // iOS 分组列表：左右外边距 16dp（全 App 统一 M_SIDE；组内条目自己画圆角与分隔线）
         list.setPadding(Ui.dp(ctx, Ui.M_SIDE), 0, Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 90));
         list.setClipToPadding(false);

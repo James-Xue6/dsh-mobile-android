@@ -237,6 +237,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 92));
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
+        // iOS 没有 overscroll 光晕（Android 默认会画一圈 colorPrimary 紫蓝光）：滑动时
+        // 那道光就是用户报的"一滑动就变色"的来源之一（弹窗里最明显，列表同理）。
+        list.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         list.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));

@@ -897,15 +897,29 @@ public final class Ui {
                 : (GradientDrawable) normal.getConstantState().newDrawable().mutate();
         pressed.setColor(pressFill);
         v.setBackground(normal);
+        // 安全网（2026-10-04 用户报「子智能体弹窗里一滑动就变色」）：手势被父容器
+        // （ScrollView / ListView）抢走时，子 View **不保证**收到 ACTION_CANCEL ——
+        // 那时按下态就永远停在灰底上，看起来像"滑动把行染色了"。这里挂一个延时还原，
+        // 无论走哪条路（UP / CANCEL / 被抢走），灰底最长只存活 RESTORE_MS。
+        final Runnable restore = new Runnable() {
+            @Override public void run() {
+                v.setBackground(normal);
+                if (v.getBackground() != normal) v.setBackground(normal);
+            }
+        };
         v.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View view, android.view.MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case android.view.MotionEvent.ACTION_DOWN:
                         view.setBackground(pressed);
+                        view.removeCallbacks(restore);
+                        view.postDelayed(restore, PRESS_RESTORE_MS);
                         break;
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
+                    case android.view.MotionEvent.ACTION_OUTSIDE:
+                        view.removeCallbacks(restore);
                         view.setBackground(normal);
                         break;
                     default:
@@ -915,6 +929,9 @@ public final class Ui {
             }
         });
     }
+
+    /** {@link #tapRow} 按下态的最长存活时间：手势被父容器抢走时的兜底还原。 */
+    private static final long PRESS_RESTORE_MS = 500L;
 
     // ------------------------------------------------------------ iOS 开关（自绘，无依赖）
 
