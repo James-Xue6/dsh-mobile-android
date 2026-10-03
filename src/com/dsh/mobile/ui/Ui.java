@@ -147,7 +147,7 @@ public final class Ui {
     public static int GLASS_RIM    = 0xFFFFFFFF;   // 棱光顶部（浅色纯白 1px，深色 15% 白）
     public static int GLASS_LO     = 0x0F000000;   // 棱光底部（浅色 6% 黑，深色 5% 白）
     /** 抽屉遮罩：不要死黑，25~35% 才"柔和"。 */
-    public static int SCRIM        = 0x59000000;   // #000 35%
+    public static int SCRIM        = 0x2E000000;   // #000 18%（浅色默认；深色档在 applyTheme 里改 45%）
 
     // ---- 浅灰选中胶囊（2026-10-03 对齐 iOS 健康页参考图 ref-ios-health-cards.png）
     //
@@ -277,7 +277,7 @@ public final class Ui {
             GLASS_BAR      = 0x99000000;   // #000 60%
             GLASS_RIM      = 0x26FFFFFF;   // 白 15%
             GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
-            SCRIM          = 0x59000000;   // 遮罩不随主题变
+            SCRIM          = 0x73000000;   // 深色遮罩 45%
             SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
             // Sadees 深色档：坞体仍用深色（比卡片再沉一档），选中反白改「白底深字」不变
@@ -351,7 +351,7 @@ public final class Ui {
             GLASS_BAR      = 0xCCFFFFFF;   // 白 80%
             GLASS_RIM      = 0xFFFFFFFF;   // 纯白 1px
             GLASS_LO       = 0x0F000000;   // 黑 6%（下棱微暗）
-            SCRIM          = 0x59000000;   // 遮罩不随主题变
+        SCRIM          = 0x2E000000;   // 浅色遮罩 18%（35% 压在薰衣草底上发黑 = 用户报的黑窗口）
             SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
             SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
             // Sadees 浅色档：奶白渐变卡 + 深色胶囊坞 + 浅紫灰次按钮
