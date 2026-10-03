@@ -147,6 +147,10 @@ public final class Ui {
     public static int GLASS        = 0x99FFFFFF;   // 卡片体（浅色 60% 白 / 深色 56% 黑）
     public static int GLASS_SHEET  = 0xE0FFFFFF;   // 弹窗 / 抽屉体（88% / 90%）
     public static int GLASS_BAR    = 0xCCFFFFFF;   // 顶部栏 / 输入条（80% / 60%）
+    // GLASS_INPUT：**悬浮输入胶囊**专用（2026-10-04 用户要求"后面的字直接穿过去"）。
+    // 比 GLASS_BAR 更透：文字从胶囊下面滚过时要能隐约看见（原生没有真·背景模糊，
+    // RenderEffect 只能糊 View 自身，所以这里靠"更透 + 描边"表达悬浮感）。
+    public static int GLASS_INPUT  = 0xA8FFFFFF;   // 浅色白 66% / 深色紫黑 62%
     public static int GLASS_RIM    = 0xFFFFFFFF;   // 棱光顶部（浅色纯白 1px，深色 15% 白）
     public static int GLASS_LO     = 0x0F000000;   // 棱光底部（浅色 6% 黑，深色 5% 白）
     /** 抽屉遮罩：不要死黑，25~35% 才"柔和"。 */
@@ -284,6 +288,7 @@ public final class Ui {
             GLASS          = 0xE61C1B22;   // #1C1C1E 90%（与 sheet 同档：深色档太透会把黑底"洗灰"）
             GLASS_SHEET    = 0xF21C1B22;   // 95%
             GLASS_BAR      = 0x99000000;   // #000 60%
+            GLASS_INPUT    = 0x881C1B22;   // 紫黑 53%（深色输入胶囊：背后的字透出来）
             GLASS_RIM      = 0x26FFFFFF;   // 白 15%
             GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
             SCRIM          = 0x73000000;   // 深色遮罩 45%
@@ -358,6 +363,7 @@ public final class Ui {
             // 可读性优先 → 直接当"厚玻璃"用。这就是规范里"模糊不可用时的回退"。
             GLASS_SHEET    = 0xF2FFFFFF;   // 白 95%
             GLASS_BAR      = 0xCCFFFFFF;   // 白 80%
+            GLASS_INPUT    = 0xA8FFFFFF;   // 白 66%（浅色输入胶囊：背后的字隐约透出来）
             GLASS_RIM      = 0xFFFFFFFF;   // 纯白 1px
             GLASS_LO       = 0x0F000000;   // 黑 6%（下棱微暗）
         SCRIM          = 0x2E000000;   // 浅色遮罩 18%（35% 压在薰衣草底上发黑 = 用户报的黑窗口）
@@ -1466,8 +1472,13 @@ public final class Ui {
             // Sadees：主色实心圆钮（fill == BRAND_FILL，即发送↑ / FAB / 回到底部这类
             // "当前激活"的圆钮）铺「紫 → 蓝」纵向渐变（BRAND_G1 → BRAND_G2）——
             // 渐变只点亮激活元素，其余底色照旧纯色。
+            //
+            // **真机 bug（2026-10-04 用户实拍）**：这里原来写 `brandGradient(radiusDp)`，
+            // 而 brandGradient 的入参是**像素**（ChatAdapter 那条路传的是 dp(c,18)）。
+            // 于是圆钮的半径被当成 px 用 —— 420dpi 真机上 21dp 的半径只剩 8dp，
+            // 「↑ 发送键 / ↓ 回到底部 / FAB」全变成了**圆角方块**。这里补上 dp→px。
             if (fill == BRAND_FILL) {
-                box = brandGradient(radiusDp);
+                box = brandGradient(dp(c, radiusDp));
             } else {
                 box = round(dp(c, radiusDp), fill);
             }

@@ -137,12 +137,14 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         setBackgroundColor(Ui.BG);
 
         // ---- 顶部栏（iOS 导航栏：44dp、细箭头返回、标题 17sp 粗体、底部一条发丝线）
-        // 2026-10-03 液态玻璃：底色从纯 SURFACE 换成半透明 GLASS_BAR（浅色白 80% /
-        // 深色黑 60%），下沿的发丝线由 barLine 画（HAIRLINE，不再是明显的灰 SEP）。
+        // 2026-10-04 修用户手机实拍：GLASS_BAR（白 80%）在浅薰衣草底上渲染成"实心白条"，
+        // 和聊天区割裂。顶栏改回**透明 + 页面同底**，下沿只留一条发丝线（iOS 大标题页制式：
+        // 标题与内容同底）。preInput 同理。
         LinearLayout bar = Ui.row(ctx);
         barRow = bar;
         barBg = Ui.glassBar();
         bar.setBackground(barBg);
+        bar.setBackground(null);   // 透明：与页面同底，白色玻璃条在浅底上=白横带（bug）
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 5), Ui.dp(ctx, 8), Ui.dp(ctx, 5));
 
@@ -230,7 +232,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setDivider(null);
         list.setDividerHeight(0);
         list.setCacheColorHint(0);
-        list.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8));
+        // 底部多留 92dp：输入区现在是**悬浮层**（盖在列表上），没有这段内边距时
+        // 最后一条消息会被胶囊永久压住读不全（clipToPadding=false 让它仍能滚上去）。
+        list.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 92));
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
         list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
@@ -282,8 +286,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
         // 套一层 FrameLayout，用来悬浮「回到底部」按钮
         FrameLayout listWrap = new FrameLayout(ctx);
-        listWrap.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        listWrap.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         listWrap.addView(list);
 
         toBottom = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_arrow_down,
@@ -292,7 +296,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(Ui.dp(ctx, 44), Ui.dp(ctx, 44));
         flp.gravity = Gravity.BOTTOM | Gravity.END;
         flp.rightMargin = Ui.dp(ctx, 14);
-        flp.bottomMargin = Ui.dp(ctx, 12);
+        // 2026-10-04 悬浮输入条：按钮要浮在输入胶囊**之上**，所以下边距让开输入区高度
+        flp.bottomMargin = Ui.dp(ctx, 92);
         toBottom.setLayoutParams(flp);
         toBottom.setVisibility(GONE);
         toBottom.setOnClickListener(v -> {
@@ -302,7 +307,26 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             toBottom.setVisibility(GONE);
         });
         listWrap.addView(toBottom);
-        addView(listWrap);
+
+        // ---- 悬浮舞台（2026-10-04 用户要求：输入条做成悬浮，文字从它后面穿过去）
+        //
+        // 旧结构是垂直 LinearLayout：列表 → 输入区，两者**不重叠**，于是列表底部被一条
+        // 硬边截断（用户看到的"一块同色的挡住了字"）。现在改成 FrameLayout：
+        //   · 列表铺满整个舞台（一直画到屏幕底部）；
+        //   · 输入区（子智能体入口 + 输入胶囊）作为**悬浮层**贴在舞台底部；
+        //   · 列表加 92dp 底部内边距，最后一条消息仍能滚到胶囊上方读全。
+        FrameLayout stage = new FrameLayout(ctx);
+        stage.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        stage.addView(listWrap);
+        addView(stage);
+
+        // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap 之后，绘在上层
+        LinearLayout bottomStack = Ui.col(ctx);
+        FrameLayout.LayoutParams bsLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        bsLp.gravity = Gravity.BOTTOM;
+        stage.addView(bottomStack, bsLp);
 
         // ---- 输入框上方：子智能体入口 + 只读说明
         //
@@ -310,7 +334,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 避免噪音），点开是底部弹窗列出这条会话的全部子会话，点一项即切过去。
         LinearLayout preInput = Ui.col(ctx);
         preInputRow = preInput;
-        preInput.setBackground(Ui.glassBar());
+        preInput.setBackground(null);   // 透明：与页面同底（白玻璃条 bug，同顶栏）
 
         subEntry = Ui.text(ctx, "", Ui.S_FOOT, Ui.BRAND, true);
         subEntry.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 9), Ui.dp(ctx, 16), Ui.dp(ctx, 9));
@@ -336,17 +360,20 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
         // 两个子 View 都是 GONE 时这层高度为 0：不需要额外开关（避免"父层被藏住、
         // 子 View 以为自己是显示状态"这种自查不出来的形态）。
-        addView(preInput, Ui.fill());
+        bottomStack.addView(preInput, Ui.fill());
 
         // ---- 输入条（iOS iMessage 制式：灰底胶囊输入框 + 圆形发送键）
         //
         // 2026-10-03 液态玻璃：整条从"贴着屏幕底的白色通栏"改成**悬浮玻璃胶囊**——
         //   · 外层 12dp 左右边距 + 12dp 下边距，与内容之间留出呼吸（规范要 12~16dp）；
-        //   · 底 = GLASS_BAR 半透明玻璃 + 棱光/顶部高光（CardBg 的圆角 999 = 高/2，真胶囊）；
+        //   · 底 = GLASS_INPUT 半透明玻璃 + 棱光/顶部高光（CardBg 的圆角 999 = 高/2，真胶囊）；
+        //     用 GLASS_INPUT（比 GLASS_BAR 更透）：文字从胶囊下面滚过时能隐约看见 ——
+        //     这就是用户要的"悬浮、后面的字直接穿过去"。原生没有真·背景模糊
+        //     （RenderEffect 只能糊 View 自身），所以靠"更透 + 描边"表达悬浮。
         //   · 输入框自己的灰底撤掉（透明）—— 胶囊本身就是输入框的底，两层灰底会"脏"。
         LinearLayout inputBar = Ui.row(ctx);
         inputBarHost = inputBar;
-        inputBarBg = new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
+        inputBarBg = new Ui.CardBg(999f, Ui.GLASS_INPUT, Ui.dp(ctx, 1f),
                 Ui.LINE, 0x00000000, 0f);
         inputBar.setBackground(inputBarBg);
         inputBar.setElevation(Ui.dp(ctx, 3f));   // 悬浮输入条也该有影子（不透明胶囊，安全）
@@ -398,7 +425,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         ibLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
         ibLp.topMargin = Ui.dp(ctx, 6);
         ibLp.bottomMargin = Ui.dp(ctx, 12);
-        addView(inputBar, ibLp);
+        bottomStack.addView(inputBar, ibLp);   // 加在悬浮层里（不再是根布局的兄弟节点）
     }
 
     public String draftText() { return input.getText().toString(); }
@@ -854,7 +881,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      */
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
-        if (barRow != null) barBg = Ui.topBarGlass(barRow, barLine);
+        // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
+        if (barRow != null) barRow.setBackground(null);
+        if (barLine != null) barLine.setBackgroundColor(Ui.HAIRLINE);
         if (backBtn != null) Ui.setIcon(backBtn, com.dsh.mobile.R.drawable.ic_chevron_left, Ui.BRAND);
         if (menuBtn != null) Ui.setIcon(menuBtn, com.dsh.mobile.R.drawable.ic_more, Ui.INK_SUB);
         if (title != null) title.setTextColor(Ui.INK);
@@ -868,10 +897,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                     Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
             planView.setElevation(Ui.dp(ctx, 2f));
         }
-        if (preInputRow != null) preInputRow.setBackground(Ui.glassBar());
+        if (preInputRow != null) preInputRow.setBackground(null);   // 透明（同顶栏修复）
         if (inputBarBg != null) {
             // 主题切换必须重建输入条胶囊（旧版漏了这条 → 深色下输入条还是浅白底）
-            inputBarBg = new Ui.CardBg(999f, Ui.GLASS_BAR, Ui.dp(ctx, 1f),
+            inputBarBg = new Ui.CardBg(999f, Ui.GLASS_INPUT, Ui.dp(ctx, 1f),
                     Ui.LINE, 0x00000000, 0f);
             inputBarHost.setBackground(inputBarBg);
         }
