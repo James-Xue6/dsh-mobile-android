@@ -1,9 +1,9 @@
 {
-  "versionCode": 9,
-  "versionName": "0.81",
-  "notes": "底部 chip 行(项目/模型/思考/用量/任务) + 运行中排队发送(可立即插入/修改/删除) + 事件流诊断；修排队内容乱码、修改无反应、键盘挡按钮、模型名不更新、↓按钮被挡、弹窗滑动变色",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.81/dist/dsh-mobile.apk",
+  "versionCode": 10,
+  "versionName": "0.82",
+  "notes": "带图片的消息不再显示成一大串（助手卡片补渲染图片 + 助手回合补收集附件）；修排队修改点了没反应（补半开连接门禁）、编辑弹窗被键盘挡住、排队内容显示 JSON 原文；新增 control 通道/队列操作诊断",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.82/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.82/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
