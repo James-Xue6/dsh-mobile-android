@@ -1,9 +1,9 @@
 {
-  "versionCode": 18,
-  "versionName": "0.86.1",
-  "notes": "修：打字时被周期重连刷掉输入、回答提问被丢弃（改为只在 App 非前台时才重连：前台稳定、后台重连拿全局重放推通知栏）；修重连后历史翻页失效（保留分页状态）；修目标卡点不开/灰底黑框/无卡时误渐隐/换行后压住首行；修带图消息文字竖排；修排队修改与立即插入无反馈",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.1/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.1/dist/dsh-mobile.apk",
+  "versionCode": 19,
+  "versionName": "0.86.2",
+  "notes": "紧急止血：彻底关闭周期重连（它会把连接搞成收不到本会话内容的状态：手机上卡片收不到、消息发不出去）。通知等网关插件侧广播方案落地再开",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.2/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.2/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

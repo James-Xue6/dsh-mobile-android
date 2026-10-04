@@ -214,11 +214,10 @@ public final class MainActivity extends Activity implements
             //  - 他在用 App（前台）：不重连 -> 输入/回答稳定，不会被重建冲掉；
             //  - 他离开 App（后台/别的应用/熄屏）：重连拿"连接建立时的全量不限会话重放"
             //    -> 跨会话提问/审批进通知栏（这是他真正要的提醒）。
-            boolean typing = convo != null && convo.hasDraft();
-            if (!typing && !com.dsh.mobile.notify.Notifier.isForeground()
-                    && gw != null && gw.wantsGlobalLane()) {
-                gw.retryNow();
-            }
+            // **重连彻底关闭（止血版）**：实测它会把连接搞成"收不到本会话内容"的状态 ——
+            // 表现：手机上卡片收不到、消息发不出去（用户被迫在电脑端中断对话）。
+            // 通知功能等"网关插件侧广播"方案落地后再开（见 NEXT-UPDATE.md）。
+            if (false && gw != null && gw.wantsGlobalLane()) gw.retryNow();
             globalLaneHandler.postDelayed(this, 30_000L);
         }
     };
