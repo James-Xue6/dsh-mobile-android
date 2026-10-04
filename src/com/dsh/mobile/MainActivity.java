@@ -196,6 +196,37 @@ public final class MainActivity extends Activity implements
     private String lastEffort = "";
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
     private org.json.JSONArray lastTodos = null;
+    /**
+     * 最近收到的事件（环形，最多 40 条）——**显示在「设置 → 当前状态」里**。
+     *
+     * <p>为什么不用 logcat：本机荣耀手机的 logcat 是 (HKS)…(HKE) 加密块，
+     * 第三方 tag 过滤读不出明文（实测）。所以诊断必须走 App 内部可见的通道：
+     * 这样用户不用连电脑，我也能用 uiautomator 直接读到。
+     */
+    private final java.util.ArrayDeque<String> evtLog = new java.util.ArrayDeque<>();
+    private void evtLogAdd(String line) {
+        try {
+            String ts = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            evtLog.addLast(ts + " " + line);
+            while (evtLog.size() > 40) evtLog.removeFirst();
+        } catch (Throwable ignored) { }
+    }
+
+    /** 会话 id 的短写（诊断用；不含内容明文）。 */
+    private static String shortSid(String sid) {
+        if (sid == null || sid.isEmpty()) return "(空)";
+        String s = sid.startsWith("session-") ? sid.substring(8) : sid;
+        return s.length() > 8 ? s.substring(0, 8) : s;
+    }
+
+    /** 文本首段（诊断用；截断到 24 字，避免把长内容写进诊断区）。 */
+    private static String head(String s) {
+        if (s == null) return "";
+        String x = s.replace('\n', ' ').trim();
+        return x.length() > 24 ? x.substring(0, 24) + "…" : x;
+    }
+
     /** 各会话的待处理队列（来自网关 session-queues / session-queue；权威值）。 */
     private final java.util.Map<String, org.json.JSONArray> queueBySession = new java.util.HashMap<>();
 
@@ -2383,8 +2414,12 @@ public final class MainActivity extends Activity implements
     public void onEvent(String sessionId, JSONObject event, Object seq, Object time) {
         // 事件探针：电脑端发的消息为什么手机上不出现，靠这行日志定位
         // （adb logcat -s DSH-Evt）。type/sessionId 是否对得上、还是被别的分支吞掉。
-        if (event != null) android.util.Log.i("DSH-Evt", "recv type=" + event.optString("type", "")
-                + " sid=" + sessionId + (sessionId != null && sessionId.equals(currentSessionId) ? " (当前会话)" : " (非当前会话→丢弃)"));
+        if (event != null) {
+            boolean cur = sessionId != null && sessionId.equals(currentSessionId);
+            evtLogAdd("evt " + event.optString("type", "?")
+                    + " " + shortSid(sessionId) + (cur ? "" : " 非当前会话→丢弃"));
+            refreshDiagnostics();
+        }
         if (!sessionId.equals(currentSessionId) || event == null) return;
         cancelSendWatchdog();   // 该会话有动静 = 这次发送有着落
         applyEvent(event.optString("type", ""), event, seq, time, false);
@@ -3554,7 +3589,7 @@ public final class MainActivity extends Activity implements
             case "user/message": {
                 String text = textOfMessage(payload);
                 if (isInjectedContext(payload, text)) {
-                    android.util.Log.i("DSH-Evt", "user/message 被 isInjectedContext 丢弃: " + text);
+                    evtLogAdd("user/message 被「注入上下文」过滤: " + head(text));
                     return;
                 }
                 // 专家团成员 / 子代理回传也是 user/message（source.kind = team-message /
@@ -3573,10 +3608,10 @@ public final class MainActivity extends Activity implements
                 String key = seqNum != null ? "u:" + seqNum : "u:" + t + ":" + text.hashCode();
                 if (byKey.containsKey(key)) return;
                 if (seqNum != null && !seenSeq.add(seqNum)) {
-                    android.util.Log.i("DSH-Evt", "user/message 去重丢弃 seq=" + seqNum);
+                    evtLogAdd("user/message 去重丢弃 seq=" + seqNum);
                     return;
                 }
-                android.util.Log.i("DSH-Evt", "user/message 上屏 seq=" + seqNum + " 文本=" + text);
+                evtLogAdd("user/message 上屏 seq=" + seqNum + " 「" + head(text) + "」");
                 ChatItem it = ChatItem.of(ChatItem.USER, key, text);
                 it.time = t;
                 collectAttachmentIds(payload, it);
@@ -6433,6 +6468,11 @@ public final class MainActivity extends Activity implements
         if (!pairTrace.isEmpty()) {
             sb.append("\n\n[配对诊断] 本次配对的每一步（不含配对码/令牌明文）：");
             for (String line : pairTrace) sb.append('\n').append("  ").append(line);
+        }
+        if (!evtLog.isEmpty()) {
+            sb.append("\n\n[事件流] 最近 ").append(evtLog.size())
+                    .append(" 条（时间 类型 会话；空 = 一条都没收到）：");
+            for (String line : evtLog) sb.append('\n').append("  ").append(line);
         }
         if (!streamResetLog.isEmpty()) {
             // 目的：下次再遇到「一直在抖」时，一眼看出是偶发（零散几条）还是持续（同一 code 连续刷屏）。
