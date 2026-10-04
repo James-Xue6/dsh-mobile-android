@@ -267,6 +267,24 @@ public final class ChatAdapter extends BaseAdapter {
         Ui.setLeadingIcon(head, com.dsh.mobile.R.drawable.ic_people, Ui.BRAND, 14f, 6f);
         card.addView(head);
 
+        // 图片（2026-10-04 用户报「带图片的文字显示成一大串」）：
+        // 旧版只有**用户气泡**画图（见 userBubble），助手/子智能体卡片把图片整块丢掉，
+        // 于是就剩下一串文字，看着又长又糊。这里补上，位置在标题之下、正文之上。
+        if (it.images != null && !it.images.isEmpty()) {
+            for (android.graphics.Bitmap bmp : it.images) {
+                android.widget.ImageView iv = new android.widget.ImageView(ctx);
+                iv.setImageBitmap(bmp);
+                iv.setAdjustViewBounds(true);
+                iv.setMaxWidth(maxBubble);
+                iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+                LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                ilp.topMargin = Ui.dp(ctx, 6);
+                iv.setLayoutParams(ilp);
+                card.addView(iv);
+            }
+        }
+
         String body = it.text == null ? "" : it.text;
         if (body.trim().isEmpty()) body = "(空回传)";
         TextView bubble = Ui.text(ctx, body, Ui.S_SUB, Ui.INK, false);

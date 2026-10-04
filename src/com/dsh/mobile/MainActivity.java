@@ -3684,6 +3684,16 @@ public final class MainActivity extends Activity implements
                     if (!reasoning.isEmpty()) it.reasoning = reasoning;
                     it.streaming = false;
                     it.time = t;
+                    // **助手消息里的图片**（2026-10-04 用户报「带图片的文字显示成一大串」）：
+                    // 旧版只给 user/message 收集附件 id，助手回合里的图片永远拿不到 ——
+                    // 卡片就只剩一串文字。这里补上与用户消息同样的收集 + 逐张拉取。
+                    int attBefore = it.attachmentIds.size();
+                    collectAttachmentIds(payload, it);
+                    if (it.attachmentIds.size() > attBefore && !currentSessionId.isEmpty()) {
+                        for (int ai = attBefore; ai < it.attachmentIds.size(); ai++) {
+                            gw.requestAttachment(currentSessionId, it.attachmentIds.get(ai));
+                        }
+                    }
                 }
                 // 持久消息接管后清掉同 turn 的临时流
                 if (streamAttemptKey != null) {
