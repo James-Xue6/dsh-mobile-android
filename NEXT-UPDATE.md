@@ -59,3 +59,33 @@
 - **未验证透不发版**：不往仓库/CDN 发；改为"构建好贴到对话里给用户点下载"
 - 真机验证优先：能用 App 内诊断（`[事件流]` / `[全局视图]` / `[最近一次队列操作]`）就不要猜
 - 荣耀手机 logcat 加密，诊断必须做进 App 再用 uiautomator 读取
+
+---
+
+## 下一轮优化（2026-10-04 收口后新增）
+
+### 1. 通知（本机荣耀的顽固点）
+- **渠道降级**：App 申请的 `IMPORTANCE_HIGH` 被 ROM 降为 DEFAULT（`mOriginalImp=4` → `mImportance=3`，`mUserLockedFields=0`）。
+  换新渠道 id 只能拿一次初始值，**换台荣耀/华为会重演** → 自查行要给出"点这里 → 找到需要处理 → 打开横幅与响铃"的可执行步骤；
+  并降低对系统横幅的依赖：App 内常驻待处理栏/角标（已有 `pendingBanner` / `pendingJumpTarget`）。
+- **不建议 `setFullScreenIntent`**：Android 14+ 默认只授通话/闹钟类，且只在锁屏/息屏全屏，覆盖不了"正在用手机但没看该会话"的主场景。
+
+### 2. 仍缺真机验证的两项（需能造出"进程活着但无界面"）
+- V2：界面被系统回收后，M1 钩子路径是否仍弹通知。本机 `always_finish_activities` 不销毁 Activity。
+  可选：临时调试包提供"主动 finish()"入口（发布包必须保持不可达），或找 ROM 上只杀 Activity 不杀进程的办法。
+- V3 手机侧：断网/重连后 pending 提醒是否重新出现（网关侧已验证会补发）。
+
+### 3. 网关插件补丁的工程化（重要）
+- 跨会话广播 + 放宽门两处改动**只活在 `node_modules`**，网关一升级即静默失效。
+- 按既有样式固化：`pc-plugin/patches/` 下加幂等 `patch-gateway-crosssession.ps1`（字符串锚点、可 `--revert`），并让 `install.ps1` 调用它。
+- 建议补日志：`interaction replay` 打印 `session=`；门未通过时打印 `skipped (no mobile client)`。
+
+### 4. 产品功能（用户已点名）
+- **底部「生成物」按钮**：列本次会话产出文件 + 直接打开/下载；**只允许下载生成物，其他不下**。
+  协议已具备：`file-list` / `file-download-open` / `file-download-read`；打开走 `FileProvider` + `ACTION_VIEW`。
+- 助手消息里的 **markdown 表格**未渲染（当前按纯文本显示）。
+
+### 5. 性能与杂项
+- 网关日志里 `query ok: models` 每秒数十次 → 排查客户端是否在轮询模型列表。
+- 任务项渲染仍缺真实数据：宿主对移动端的 `tasks` 查询返回 `todos:null`（网关 `projection forwarded: key=todos` 在推事件）。
+- 版本命名倒挂：`v0.87`(code 17) 比 `v0.86.1/2/3/4`(18/19/20/21) 旧 → 统一走 `release.ps1`（versionCode 只增不减）。

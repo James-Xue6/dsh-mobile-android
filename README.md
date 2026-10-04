@@ -141,6 +141,32 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ## 更新日志
 
+### v0.86.4
+
+**通知（本轮主线）**
+- 修 **跨会话/后台收不到通知**：网关插件新增 `hasAnyInteractionClient()`，放宽提问/审批的两道 waterfall 门
+  （原门按会话作用域过滤：手机订阅会话 A 时，会话 B 的提问**不建档、不生成帧、连日志都不打**）
+- 修 **前台服务断线即自杀**：`KeepAliveService.sync()` 去掉 `Notifier.isConnected()` 判据，断线期间保持常驻
+- 修 **无界面时帧被静默丢弃**：`GatewayClient` 新增进程级 `bgInteractionHook`，`listener==null` 时仍弹提醒
+- 通知渠道 `dsh_pending` → **`dsh_pending_v2`(HIGH)**；新增独立 `dsh_service` 渠道保护后台保活
+- 通知失败可诊断：`lastPostError`/`lastPostAt` + 设置页三行自查 + **渠道级深链**
+- 通知 id 槽位 200 → 4000；`approvalKey/questionKey` 收成唯一实现（去重与深链一致）
+
+**卡片与输入**
+- 修 **卡片灰框**：`Ui.CardBg` 自绘渐变在长卡片上整片压暗约 26%（设计色只在最外侧露 ~8px）
+  → 提问/审批卡改用框架 `Ui.cardGrad()`（对角渐变 + 圆角 + 描边）
+- 修 **卡片底部按钮不可达**：按钮移出滚动区，常驻卡片底部
+- 修 **卡片内部滚动位置每次刷新归零**：`ChatItem.cardScrollY` 跨重绑保留
+- 修 **提问卡内输入框草稿丢失**：TextWatcher 边打边写回 `it.typed`
+- 修 **点输入框后卡片乱滚/输入框看不见**：内容区高度改固定值（不再跟随键盘），键盘弹起时**只最小幅度滚外层列表**
+- 新增 `MaxHeightEditText` / `MaxHeightScrollView` / `MaxHeightLinearLayout`
+- 底部渐隐改为跟随悬浮层实测高度（原固定 132dp）；顶部**无卡时不显示**
+
+**已知未验证 / 环境限制**
+- V2「界面被系统销毁后仍弹通知」、V3 手机侧「断网重连补发」：本机荣耀不销毁 Activity，造不出验证条件
+  （V3 网关侧已验证：`interaction replay … questions=1`）
+- V1 渠道：荣耀会把 App 申请的 HIGH 降为 DEFAULT，**需用户手动把「需要处理」设为横幅**
+
 ### v0.85（开发中，未发布）
 **新增**
 - 顶部「待处理交互」提示栏：别的会话有待回答的提问/审批时露出，点它切过去
@@ -154,6 +180,32 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 **已知未解决**
 - 第二条连接在**公网隧道**下握手无法完成（`[control 通道]` 停在"已发起连接（等握手）"，
   网关侧无第二条 `client connected`）→ 跨会话提醒在公网下仍不可用；需在**内网直连**下复验
+
+### v0.86.4
+
+**通知（本轮主线）**
+- 修 **跨会话/后台收不到通知**：网关插件新增 `hasAnyInteractionClient()`，放宽提问/审批的两道 waterfall 门
+  （原门按会话作用域过滤：手机订阅会话 A 时，会话 B 的提问**不建档、不生成帧、连日志都不打**）
+- 修 **前台服务断线即自杀**：`KeepAliveService.sync()` 去掉 `Notifier.isConnected()` 判据，断线期间保持常驻
+- 修 **无界面时帧被静默丢弃**：`GatewayClient` 新增进程级 `bgInteractionHook`，`listener==null` 时仍弹提醒
+- 通知渠道 `dsh_pending` → **`dsh_pending_v2`(HIGH)**；新增独立 `dsh_service` 渠道保护后台保活
+- 通知失败可诊断：`lastPostError`/`lastPostAt` + 设置页三行自查 + **渠道级深链**
+- 通知 id 槽位 200 → 4000；`approvalKey/questionKey` 收成唯一实现（去重与深链一致）
+
+**卡片与输入**
+- 修 **卡片灰框**：`Ui.CardBg` 自绘渐变在长卡片上整片压暗约 26%（设计色只在最外侧露 ~8px）
+  → 提问/审批卡改用框架 `Ui.cardGrad()`（对角渐变 + 圆角 + 描边）
+- 修 **卡片底部按钮不可达**：按钮移出滚动区，常驻卡片底部
+- 修 **卡片内部滚动位置每次刷新归零**：`ChatItem.cardScrollY` 跨重绑保留
+- 修 **提问卡内输入框草稿丢失**：TextWatcher 边打边写回 `it.typed`
+- 修 **点输入框后卡片乱滚/输入框看不见**：内容区高度改固定值（不再跟随键盘），键盘弹起时**只最小幅度滚外层列表**
+- 新增 `MaxHeightEditText` / `MaxHeightScrollView` / `MaxHeightLinearLayout`
+- 底部渐隐改为跟随悬浮层实测高度（原固定 132dp）；顶部**无卡时不显示**
+
+**已知未验证 / 环境限制**
+- V2「界面被系统销毁后仍弹通知」、V3 手机侧「断网重连补发」：本机荣耀不销毁 Activity，造不出验证条件
+  （V3 网关侧已验证：`interaction replay … questions=1`）
+- V1 渠道：荣耀会把 App 申请的 HIGH 降为 DEFAULT，**需用户手动把「需要处理」设为横幅**
 
 ### v0.85
 **修复**
