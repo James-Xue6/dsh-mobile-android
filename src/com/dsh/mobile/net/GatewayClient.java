@@ -792,6 +792,10 @@ public final class GatewayClient {
     public void requestHost() { sendRaw(base("host")); }
 
     public void subscribe(String sessionId) {
+        // **全局视图窗口内不重新订阅**：App 在对话页会频繁 subscribe，
+        // 那会把我刚打开的 unsubscribe 窗口立刻关掉 → 别的会话的提问/审批又收不到了
+        // （真机现象：停在对话页收不到提醒，停在设置页能收到）。窗口结束后补发。
+        if (inGlobalView()) { pendingResubscribe = sessionId; return; }
         try {
             JSONObject o = base("subscribe");
             o.put("sessionId", sessionId);
@@ -1402,11 +1406,14 @@ public final class GatewayClient {
         if (!wantConnected) return;
         try {
             sendRaw(base("unsubscribe"));
-            globalViewUntil = System.currentTimeMillis() + 2500L;
+            globalViewUntil = System.currentTimeMillis() + 9000L;
             new Thread(new Runnable() {
                 @Override public void run() {
-                    try { Thread.sleep(2500L); } catch (InterruptedException e) { return; }
-                    if (wantConnected && sessionId != null && !sessionId.isEmpty()) subscribe(sessionId);
+                    try { Thread.sleep(9000L); } catch (InterruptedException e) { return; }
+                    if (!wantConnected) return;
+                    String want = pendingResubscribe != null ? pendingResubscribe : sessionId;
+                    pendingResubscribe = null;
+                    if (want != null && !want.isEmpty()) subscribe(want);
                 }
             }, "global-view-resub").start();
         } catch (Throwable ignored) { }
@@ -1414,6 +1421,8 @@ public final class GatewayClient {
 
     /** 正在"全局视图"窗口内（unsubscribe 与 re-subscribe 之间）。 */
     private volatile long globalViewUntil = 0L;
+    /** 窗口期内被挡下的订阅请求，窗口结束后补发。 */
+    private volatile String pendingResubscribe = null;
     public boolean inGlobalView() { return System.currentTimeMillis() < globalViewUntil; }
 
     /** 是否需要全局通道（供宿主判断要不要继续打节拍）。 */

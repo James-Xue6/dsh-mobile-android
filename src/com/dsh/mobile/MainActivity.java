@@ -206,7 +206,7 @@ public final class MainActivity extends Activity implements
             if (gw != null && gw.wantsGlobalLane() && !currentSessionId.isEmpty()) {
                 gw.refreshGlobalView(currentSessionId);
             }
-            globalLaneHandler.postDelayed(this, 20_000L);
+            globalLaneHandler.postDelayed(this, 18_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
