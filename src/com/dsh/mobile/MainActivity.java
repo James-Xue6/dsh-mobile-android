@@ -210,8 +210,11 @@ public final class MainActivity extends Activity implements
             // 所以"重连拿全局重放"不再毁历史翻页 -> 跨会话提问/审批进通知栏
             // **正在输入就跳过这一轮**：重连会触发列表/视图重建，
             // 真机表现为"打几个字窗口一闪、输入的字消失"（用户实测）。
+            // **周期重连已关闭**（用户实测：它会把界面/交互反复重建 ——
+            // 打字被清空、回答提问被丢弃/答到旧的重放卡上，导致"我发的消息你收不到"）。
+            // 通知保留"自然重连（前后台切换/网络变化）时"的全局重放那一路。
             boolean typing = convo != null && convo.hasDraft();
-            if (!typing && gw != null && gw.wantsGlobalLane()) gw.retryNow();
+            if (false && !typing && gw != null && gw.wantsGlobalLane()) gw.retryNow();
             globalLaneHandler.postDelayed(this, 30_000L);
         }
     };

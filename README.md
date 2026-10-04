@@ -135,6 +135,10 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ---
 
+## 下一步计划
+
+见 [NEXT-UPDATE.md](NEXT-UPDATE.md)：底部「生成物」按钮（列产物 + 打开/下载）、交付物落点规则、排队 steer 反馈、跨会话提醒的最终方案等。
+
 ## 更新日志
 
 ### v0.85（开发中，未发布）
