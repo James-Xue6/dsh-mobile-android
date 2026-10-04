@@ -1,9 +1,9 @@
 {
-  "versionCode": 8,
-  "versionName": "0.8",
-  "notes": "反馈通道兜底：手机没装邮件 App 时（mailto 打不开）自动改用网页提交 GitHub Issue，内容同时已复制到剪贴板",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.8/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.8/dist/dsh-mobile.apk",
+  "versionCode": 9,
+  "versionName": "0.81",
+  "notes": "底部 chip 行(项目/模型/思考/用量/任务) + 运行中排队发送(可立即插入/修改/删除) + 事件流诊断；修排队内容乱码、修改无反应、键盘挡按钮、模型名不更新、↓按钮被挡、弹窗滑动变色",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.81/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

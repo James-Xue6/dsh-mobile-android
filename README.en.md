@@ -39,7 +39,7 @@ computer on LAN port 8099 — no cloud drive, no CDN).
 
 You can also download the APK directly:
 
-- CDN (usually faster in mainland China): `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.8/dist/dsh-mobile.apk`
+- CDN (usually faster in mainland China): `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk`
 - GitHub: `https://github.com/James-Xue6/dsh-mobile-android/raw/v0.8/dist/dsh-mobile.apk`
 
 ### 4. Pair by QR code

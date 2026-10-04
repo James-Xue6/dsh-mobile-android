@@ -36,7 +36,7 @@ pwsh -File .\pc-plugin\install.ps1
 
 不方便扫码也可以直接从公开地址下载：
 
-- CDN（国内通常更快）：`https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.8/dist/dsh-mobile.apk`
+- CDN（国内通常更快）：`https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk`
 - GitHub：`https://github.com/James-Xue6/dsh-mobile-android/raw/v0.8/dist/dsh-mobile.apk`
 
 ### ④ 扫码配对
@@ -134,6 +134,27 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 ```
 
 ---
+
+## 更新日志
+
+### v0.81
+**新增**
+- 底部可横滑 chip 行：**项目 / 模型 / 思考 / 用量 / 任务**
+  - 模型：列出全部模型及思考档位，选中即切换（对齐豆包）
+  - 思考：Off / Low / High / Max 可选
+  - 用量：上下文占用百分比，点开看 token 明细
+  - 任务：展开该会话的任务列表（只读）
+  - 项目：选工作区并直接在新工作区开对话
+- 回合运行中也能发送：排队，输入框上方显示「待发送」条；每条可**立即插入 / 修改 / 删除**
+- 设置页「当前状态」新增事件流诊断（便于自查连接与消息接收）
+
+**修复**
+- 修改排队内容时显示一堆 JSON 字符（content 是内容块数组，被当成原文显示）
+- 修改排队「点了保存没反应」：半开连接静默丢帧 → 现在明确提示并自动重连
+- 编辑弹窗被键盘挡住「保存 / 取消」按钮
+- 模型名显示不更新（进会话与回合结束都会重新拉取）
+- 「N 子智能体」入口遮挡「回到底部」按钮
+- 底部弹窗滑动后底色丢失（看起来像"一滑动就变色"）
 
 ## 许可
 
