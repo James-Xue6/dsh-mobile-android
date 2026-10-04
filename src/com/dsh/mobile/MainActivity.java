@@ -6354,6 +6354,10 @@ public final class MainActivity extends Activity implements
         final String notes = m.optString("notes", "");
         final String url = m.optString("url", "");
         final String mirror = m.optString("mirror", "");
+        // [应用内更新·2026-10-05] 清单新增 sha256（release.ps1 写 dist/version.json 时带上）；
+        // 缺失时不静默跳过 —— 见 startInAppUpdate 里的降级处理。
+        final String sha256 = m.optString("sha256", "");
+        final long size = m.optLong("size", 0L);
         // 顺手把作者配置的反馈通道存下来（离线也能用）
         JSONObject fb = m.optJSONObject("feedback");
         if (fb != null) store.setFeedbackCfg(fb.toString());
@@ -6371,19 +6375,9 @@ public final class MainActivity extends Activity implements
                 .setTitle("发现新版本 v" + name)
                 .setMessage((notes.isEmpty() ? "有新版本可用。" : notes)
                         + "\n\n当前版本 v" + myVersionName()
-                        + "\n下载后覆盖安装即可，无需卸载。")
-                .setPositiveButton("立即更新", (d, w) -> {
-                    String target = url.isEmpty() ? mirror : url;
-                    if (target.isEmpty()) {
-                        Toast.makeText(this, "清单里没有下载地址", Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target)));
-                    } catch (Throwable t) {
-                        Toast.makeText(this, "打不开下载页：" + t.getMessage(), Toast.LENGTH_LONG).show();
-                    }
-                })
+                        + "\n下载后覆盖安装即可，无需卸载。"
+                        + "\n（安装时系统还会弹一次确认框，这是 Android 的限制。）")
+                .setPositiveButton("立即更新", (d, w) -> startInAppUpdate(name, url, mirror, sha256, size))
                 .setNeutralButton("复制链接", (d, w) -> {
                     String target = url.isEmpty() ? mirror : url;
                     try {
@@ -6395,6 +6389,233 @@ public final class MainActivity extends Activity implements
                 })
                 .setNegativeButton("以后再说", (d, w) -> store.setSkipVersion(name))
                 .show();
+    }
+
+    // ============================================================ 应用内更新（下载 → 校验 → 拉起安装器）
+    //
+    // [2026-10-05 用户要求] 旧流程是 ACTION_VIEW 打开浏览器：用户还得在浏览器里下载、
+    // 再去文件管理里找安装包。改成 App 内下载（进度条）+ 下完自动拉起系统安装器。
+    // 说明：非设备管理员无法静默安装，系统确认框仍会出现一次（Android 限制）。
+
+    /** 下载中标志（防重入 / 取消）。 */
+    private volatile boolean updateDownloading = false;
+    private volatile boolean updateCancelled = false;
+
+    private void startInAppUpdate(final String versionName, final String url, final String mirror,
+                                  final String sha256, final long expectSize) {
+        if (updateDownloading) { Toast.makeText(this, "正在下载中…", Toast.LENGTH_SHORT).show(); return; }
+        final java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
+        final java.io.File out = new java.io.File(dir, "dsh-mobile-" + versionName + ".apk");
+
+        // 进度面板：不透明底 + 圆角（与项目其它自绘面板同一套安全配方，不用半透明叠层）
+        LinearLayout box = Ui.col(this);
+        box.setBackground(Ui.round(Ui.dp(this, Ui.R_CARD), Ui.SURFACE));
+        box.setPadding(Ui.dp(this, 20), Ui.dp(this, 18), Ui.dp(this, 20), Ui.dp(this, 16));
+        box.addView(Ui.text(this, "正在下载 v" + versionName, Ui.S_HEAD, Ui.INK, true));
+        final TextView stat = Ui.text(this, "准备中…", Ui.S_FOOT, Ui.INK_SUB, false);
+        stat.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        box.addView(stat);
+        final android.widget.ProgressBar bar =
+                new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(0);
+        box.addView(bar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 8)));
+
+        final android.app.AlertDialog dlg = Ui.dialog(this)
+                .setTitle("应用内更新")
+                .setView(box)
+                .setNegativeButton("取消", (d, w) -> updateCancelled = true)
+                .setCancelable(false)
+                .create();
+        dlg.show();
+
+        updateCancelled = false;
+        updateDownloading = true;
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        new Thread(() -> {
+            String err = null;
+            String[] candidates = new String[] { url, mirror };
+            java.io.File ok = null;
+            for (String cand : candidates) {
+                if (cand == null || cand.trim().isEmpty()) continue;
+                try {
+                    downloadApk(cand, out, ui, stat, bar, expectSize);
+                    ok = out;
+                    break;
+                } catch (Throwable t) {
+                    err = t.getClass().getSimpleName() + (t.getMessage() == null ? "" : (": " + t.getMessage()));
+                }
+            }
+            final java.io.File got = ok;
+            final String e = err;
+            ui.post(() -> {
+                updateDownloading = false;
+                if (updateCancelled) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.delete();
+                    dlg.dismiss();
+                    Toast.makeText(this, "已取消更新", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (got == null) {
+                    dlg.dismiss();
+                    new android.app.AlertDialog.Builder(this)
+                            .setTitle("下载失败")
+                            .setMessage("没能下载更新包" + (e == null ? "" : ("（" + e + "）"))
+                                    + "\n可以稍后重试，或用「复制链接」到浏览器下载。")
+                            .setPositiveButton("重试", (d, w) -> startInAppUpdate(versionName, url, mirror, sha256, expectSize))
+                            .setNegativeButton("关闭", null)
+                            .show();
+                    return;
+                }
+                dlg.dismiss();
+                verifyAndInstall(got, sha256, expectSize, versionName, url, mirror);
+            });
+        }, "in-app-update").start();
+    }
+
+    /** 单次下载（进度回主线程刷新）。抛出异常即视为该线路失败，交给上层的镜像重试。 */
+    private void downloadApk(String url, java.io.File out, android.os.Handler ui,
+                             TextView stat, android.widget.ProgressBar bar, long expectSize) throws Exception {
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setInstanceFollowRedirects(true);
+        c.connect();
+        int code = c.getResponseCode();
+        if (code < 200 || code >= 300) throw new java.io.IOException("HTTP " + code);
+        long total = c.getContentLength() > 0 ? c.getContentLength() : expectSize;
+        java.io.InputStream in = c.getInputStream();
+        java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
+        byte[] buf = new byte[64 * 1024];
+        long got = 0, t0 = System.currentTimeMillis(), lastUi = 0;
+        int n;
+        try {
+            while ((n = in.read(buf)) > 0) {
+                if (updateCancelled) throw new java.io.IOException("已取消");
+                fo.write(buf, 0, n);
+                got += n;
+                long now = System.currentTimeMillis();
+                if (now - lastUi > 200) {
+                    lastUi = now;
+                    final long g = got, tt = total;
+                    final long dt = Math.max(1, now - t0);
+                    final long speed = g * 1000 / dt;
+                    final int pct = tt > 0 ? (int) (g * 100 / tt) : -1;
+                    ui.post(() -> {
+                        if (pct >= 0) bar.setProgress(pct);
+                        stat.setText((pct >= 0 ? pct + "%" : "下载中")
+                                + " · " + humanSize(g) + (tt > 0 ? ("/" + humanSize(tt)) : "")
+                                + " · " + humanSize(speed) + "/s");
+                    });
+                }
+            }
+        } finally {
+            try { fo.flush(); } catch (Throwable ignored) { }
+            try { fo.close(); } catch (Throwable ignored) { }
+            try { in.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    private static String humanSize(long b) {
+        if (b < 1024) return b + "B";
+        if (b < 1024 * 1024) return String.format(java.util.Locale.US, "%.1fKB", b / 1024.0);
+        return String.format(java.util.Locale.US, "%.1fMB", b / 1048576.0);
+    }
+
+    private static String sha256Of(java.io.File f) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        try {
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+        } finally {
+            try { in.close(); } catch (Throwable ignored) { }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (byte b : md.digest()) sb.append(String.format(java.util.Locale.US, "%02x", b));
+        return sb.toString();
+    }
+
+    /**
+     * 下载完成后的校验与安装。
+     *
+     * <p>安全：清单里的 sha256 与本地实算不一致 → **丢弃并提示**（防止 CDN/中间人给到坏包）；
+     * 清单没带 sha256 → **不静默跳过**：退化为"按大小核对 + 明确告诉用户没有校验值"，
+     * 让用户自己决定是否继续。
+     */
+    private void verifyAndInstall(final java.io.File apk, final String sha256, final long expectSize,
+                                  final String versionName, final String url, final String mirror) {
+        String actual = null;
+        try {
+            actual = sha256Of(apk);
+        } catch (Throwable ignored) { }
+        final String act = actual;
+        if (sha256 != null && !sha256.trim().isEmpty()) {
+            if (act != null && act.equalsIgnoreCase(sha256.trim())) {
+                installDownloadedApk(apk);
+            } else {
+                //noinspection ResultOfMethodCallIgnored
+                apk.delete();
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("更新包校验失败")
+                        .setMessage("下载到的安装包与官方校验值不一致，已丢弃。\n\n"
+                                + "期望：" + sha256.trim().substring(0, Math.min(16, sha256.trim().length())) + "…\n"
+                                + "实际：" + (act == null ? "计算失败" : act.substring(0, Math.min(16, act.length()))) + "…\n\n"
+                                + "请稍后重试，或用「复制链接」到浏览器下载。")
+                        .setPositiveButton("重试", (d, w) -> startInAppUpdate(versionName, url, mirror, sha256, expectSize))
+                        .setNegativeButton("关闭", null)
+                        .show();
+            }
+            return;
+        }
+        // 没有 sha256：按大小核对 + 明确告知，不静默安装
+        boolean sizeOk = expectSize <= 0 || apk.length() == expectSize;
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("安装更新 v" + versionName)
+                .setMessage("清单里没有提供 sha256 校验值，只能按大小核对"
+                        + (expectSize > 0 ? ("（期望 " + humanSize(expectSize) + "，实际 " + humanSize(apk.length())
+                        + (sizeOk ? " ✓）" : " ✗）")) : "（清单也没给大小）")
+                        + (sizeOk ? "\n\n是否继续安装？" : "\n\n大小不一致，建议不要安装。"))
+                .setPositiveButton("继续安装", (d, w) -> installDownloadedApk(apk))
+                .setNegativeButton("取消", (d, w) -> {
+                    //noinspection ResultOfMethodCallIgnored
+                    apk.delete();
+                })
+                .show();
+    }
+
+    /** 拉起系统安装器；没有「安装未知应用」权限时先引导去系统设置页。 */
+    private void installDownloadedApk(final java.io.File apk) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                Ui.dialog(this)
+                        .setTitle("还差一步：允许安装应用")
+                        .setMessage("系统要求先授权本应用「安装未知应用」，否则安装界面打不开。\n"
+                                + "点「去设置」→ 打开「允许来自此来源的应用」→ 回来再点更新即可。")
+                        .setPositiveButton("去设置", (d, w) -> {
+                            try {
+                                startActivity(new Intent(
+                                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        android.net.Uri.parse("package:" + getPackageName())));
+                            } catch (Throwable t) {
+                                Toast.makeText(this, "打不开系统设置页：" + t.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+                return;
+            }
+            android.net.Uri u = com.dsh.mobile.net.ApkFileProvider.uriFor(apk);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(u, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Throwable t) {
+            Toast.makeText(this, "拉起安装器失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void refreshFeedbackHint() {

@@ -80,6 +80,10 @@ $manifestJson = [ordered]@{
   notes       = $Notes
   url         = "https://cdn.jsdelivr.net/gh/$slug@v$Version/dist/dsh-mobile.apk"
   mirror      = "https://github.com/$slug/raw/v$Version/dist/dsh-mobile.apk"
+  # [应用内更新·2026-10-05] 给 App 内下载做完整性校验用：App 下完 APK 会实算 sha256 比对，
+  # 不一致就丢弃并提示（防 CDN/中间人给到坏包）。size 用于"清单缺 sha256"时的降级核对。
+  sha256      = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
+  size        = (Get-Item -LiteralPath $apk).Length
 }
 if (-not $keep.page) { $keep.page = "https://github.com/$slug" }
 foreach ($k in $keep.Keys) { $manifestJson[$k] = $keep[$k] }

@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 应用内更新：下载完 APK 后拉起系统安装器（Android 8+ 必需；用户仍会看到系统确认框）。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -51,6 +53,15 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme.Translucent" />
+
+        <!-- 应用内更新：把下载好的 APK 以 content:// 交给系统安装器（Android 7+ 禁止 file://）。
+             自写极简 provider（本项目不依赖 androidx，见 net/ApkFileProvider.java）：
+             只读、只暴露 getExternalFilesDir(null)/updates 下的文件。 -->
+        <provider
+            android:name="com.dsh.mobile.net.ApkFileProvider"
+            android:authorities="com.dsh.mobile.apk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <!-- 后台保持接收：只挂一条低优先级常驻通知，让进程在后台不被挂起（否则收不到
              会话事件，任务完成/待审批的通知根本发不出来）。见 notify/KeepAliveService.java。
