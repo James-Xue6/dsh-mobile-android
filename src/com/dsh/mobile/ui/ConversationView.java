@@ -439,7 +439,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         //      列表顶部按其高度留白，且加一层**顶部渐隐**让文字"穿过去淡出"。
         topFade = new View(ctx);
         FrameLayout.LayoutParams tfLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_H));
+                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 64));
         tfLp.gravity = Gravity.TOP;
         topFade.setLayoutParams(tfLp);
         topFade.setBackground(buildTopFade(ctx));
@@ -454,7 +454,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planTopLp.topMargin = Ui.dp(ctx, 6);
         stage.addView(planView, planTopLp);
         planView.addOnLayoutChangeListener((v, l, tt, r, b, ol, ot, or, ob) -> {
-            int h = v.getHeight();
+            boolean hasCard = v.getVisibility() == View.VISIBLE;
+            if (topFade != null) topFade.setVisibility(hasCard ? View.VISIBLE : View.GONE);
+            int h = hasCard ? v.getHeight() : 0;
+            if (!hasCard) {
+                if (list.getPaddingTop() != listBasePadTop) list.setPadding(list.getPaddingLeft(), listBasePadTop, list.getPaddingRight(), list.getPaddingBottom());
+                return;
+            }
             if (h <= 0) return;
             int want = h + listBasePadTop;
             if (list.getPaddingTop() != want) {
