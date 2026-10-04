@@ -2777,6 +2777,15 @@ public final class MainActivity extends Activity implements
     public void onQueueItemAction(final String itemId, final String text) {
         if (currentSessionId == null || currentSessionId.isEmpty()
                 || itemId == null || itemId.isEmpty()) return;
+        // 半开链路防护（与发送/停止同一套判据，评审 P1-12）：App 以为连接还在、
+        // 帧写进 socket 却永远到不了网关（真机实测：ws=open 但网关毫无记录，
+        // 手机走移动数据+公网隧道时最典型）。canSend() 要求 30s 内收到过入站帧。
+        if (!gw.canSend()) {
+            Toast.makeText(this, "连接不稳定，这条操作没发出去；正在重连，稍后重试",
+                    Toast.LENGTH_LONG).show();
+            gw.retryNow();
+            return;
+        }
         final java.util.List<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
         opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("steer", "立即插入当前回答", "打断当前回合，把这条插进去"));
         opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("edit", "修改这条内容", ""));
@@ -2822,20 +2831,50 @@ public final class MainActivity extends Activity implements
         return sb.toString();
     }
 
+    /** 队列操作回执：记进诊断区（最终状态仍以 session-queue 帧为准）。 */
+    @Override
+    public void onQueueUpdated(org.json.JSONObject frame) {
+        if (frame == null) return;
+        evtLogAdd("queue-item-updated item=" + frame.optString("itemId", "")
+                + " action=" + frame.optString("action", "(改文本)"));
+        refreshDiagnostics();
+    }
+
     /** 「修改这条内容」：一个带输入框的对话框（回车即提交 queue-update 的 text）。 */
     private void promptEditQueue(final String itemId, String current) {
         final android.widget.EditText e = com.dsh.mobile.ui.Ui.field(this, "排队内容");
         e.setText(current == null ? "" : current);
         e.setSelection(e.getText().length());
-        com.dsh.mobile.ui.Ui.dialog(this)
+        final Runnable submit = () -> {
+            String v = e.getText().toString().trim();
+            if (v.isEmpty()) { Toast.makeText(this, "内容不能为空", Toast.LENGTH_SHORT).show(); return; }
+            if (!gw.canSend()) {
+                Toast.makeText(this, "连接不稳定，修改没发出去；正在重连，稍后重试",
+                        Toast.LENGTH_LONG).show();
+                gw.retryNow();
+                return;
+            }
+            evtLogAdd("→ queue-update 改文本 item=" + itemId + " 「" + head(v) + "」");
+            gw.queueUpdate(currentSessionId, itemId, v, null);
+            Toast.makeText(this, "已提交修改", Toast.LENGTH_SHORT).show();
+            refreshDiagnostics();
+        };
+        // 回车即提交（键盘上那颗"完成"也能保存）
+        e.setOnEditorActionListener((v, actionId, ev) -> { submit.run(); return true; });
+        final android.app.AlertDialog dlg = com.dsh.mobile.ui.Ui.dialog(this)
                 .setTitle("修改排队内容")
                 .setView(e)
-                .setPositiveButton("保存", (d, w) -> {
-                    String v = e.getText().toString().trim();
-                    if (!v.isEmpty()) gw.queueUpdate(currentSessionId, itemId, v, null);
-                })
+                .setPositiveButton("保存", (d, w) -> submit.run())
                 .setNegativeButton("取消", null)
-                .show();
+                .create();
+        dlg.show();
+        // **关键**：弹窗弹出时输入框会自动聚焦、键盘随之弹起，把「保存 / 取消」盖住 ——
+        // 用户与自动化都点不到（真机实测复现：保存点了没反应、网关也没收到 queue-update）。
+        // 所以显式让键盘别自动弹；用户想改内容再点一下输入框即可。
+        android.view.Window w2 = dlg.getWindow();
+        if (w2 != null) {
+            w2.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+        }
     }
 
     /** token 数的可读写法（1.2k / 3.4M）。 */
@@ -6468,6 +6507,9 @@ public final class MainActivity extends Activity implements
         if (!pairTrace.isEmpty()) {
             sb.append("\n\n[配对诊断] 本次配对的每一步（不含配对码/令牌明文）：");
             for (String line : pairTrace) sb.append('\n').append("  ").append(line);
+        }
+        if (gw != null && !gw.lastQueueSendInfo().isEmpty()) {
+            sb.append("\n\n[最近一次队列操作] ").append(gw.lastQueueSendInfo());
         }
         if (!evtLog.isEmpty()) {
             sb.append("\n\n[事件流] 最近 ").append(evtLog.size())

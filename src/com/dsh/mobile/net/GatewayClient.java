@@ -70,6 +70,9 @@ public final class GatewayClient {
          */
         default void onSessionQueue(JSONObject frame) { }
 
+        /** 队列操作回执（queue-item-updated）：只是「已提交」回执，最终状态以 session-queue 为准。 */
+        default void onQueueUpdated(JSONObject frame) { }
+
         /**
          * 用量（PROTOCOL §5 context-usage）：
          * {@code {tokenUsage:{totals:{…}}, contextPressure:{contextWindow,pressureTokens,surfaceTokens}}}
@@ -977,9 +980,21 @@ public final class GatewayClient {
             o.put("itemId", itemId);
             if (text != null && !text.trim().isEmpty()) o.put("text", text.trim());
             else if (action != null && !action.isEmpty()) o.put("action", action);
+            // 发之前把连接状态一并记下来：这样「点了保存没反应」时能一眼区分
+            // "连接此刻是断的"（帧被门禁丢掉）还是"发出去了但对端没认"（见 setLastQueueSend）。
+            WsClient c = ws;
+            lastQueueSend = "queue-update item=" + itemId
+                    + " action=" + (action == null ? "(改文本)" : action)
+                    + " ws=" + (c == null ? "null" : (c.isClosed() ? "closed" : "open"));
             sendRaw(o);
-        } catch (Throwable ignored) { }
+        } catch (Throwable e) {
+            lastQueueSend = "queue-update 构造失败: " + e;
+        }
     }
+
+    /** 最近一次 queue-update 的发送现场（诊断用）。 */
+    private volatile String lastQueueSend = "";
+    public String lastQueueSendInfo() { return lastQueueSend; }
 
     public void requestGoal(String sessionId) {
         try {
@@ -1099,6 +1114,9 @@ public final class GatewayClient {
             case "session-queues":
             case "session-queue":
                 l.onSessionQueue(f);
+                break;
+            case "queue-item-updated":
+                l.onQueueUpdated(f);
                 break;
             case "approval-resolved":
             case "question-resolved":
