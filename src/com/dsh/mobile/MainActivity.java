@@ -206,7 +206,10 @@ public final class MainActivity extends Activity implements
             // **已停用（重要）**：unsubscribe 会切断当前会话的 follow → session-snapshot 不再到达
             // → hasMore/nextBeforeSeq 取不到 → 「往上滑加载更早历史」失效（用户实测两次）。
             // 因此恢复"始终订阅当前会话"：跨会话提醒这条不再用客户端 hack，改由电脑端插件解决。
-            globalLaneHandler.postDelayed(this, 60_000L);
+            // 重新启用周期重连：分页状态现在会保留（onSnapshot 的 keepPaging），
+            // 所以"重连拿全局重放"不再毁历史翻页 -> 跨会话提问/审批进通知栏
+            if (gw != null && gw.wantsGlobalLane()) gw.retryNow();
+            globalLaneHandler.postDelayed(this, 30_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
@@ -2329,6 +2332,10 @@ public final class MainActivity extends Activity implements
         nextBeforeSeq = snap.has("nextBeforeSeq") ? snap.optLong("nextBeforeSeq") : null;
         // 快照 = 会话重置成新基线：在途的那一页已经没有意义，一起复位，
         // 否则 loadingMore 会残留成"永久挡住上滑加载更早历史"。
+        // **重连再同步不应毁掉"能不能往上翻"**：保存旧分页状态，快照重建后恢复。
+        final boolean keepPaging = !items.isEmpty();
+        final boolean oldHasMore = hasMore;
+        final Long oldNext = nextBeforeSeq;
         resetLoadMore();
 
         // **保住本地待处理的交互卡**（提问/审批）——「切过去闪一下就消失」的根因：
@@ -2385,6 +2392,11 @@ public final class MainActivity extends Activity implements
             readdedPending = true;
         }
         if (readdedPending) rebuildOrder();
+        // 恢复分页状态（周期重连后的快照只重建"当前窗口"，更早历史仍可继续加载）
+        if (keepPaging) {
+            if (oldHasMore) hasMore = true;
+            if (nextBeforeSeq == null) nextBeforeSeq = oldNext;
+        }
         if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
     }
 
