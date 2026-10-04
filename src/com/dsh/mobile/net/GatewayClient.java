@@ -1272,7 +1272,8 @@ public final class GatewayClient {
         helloWarning = w.toString();
         // split-channels：开 control 连接（专收全局待处理交互；主连接已被 subscribe 过滤掉）
         android.util.Log.i(CTL_TAG, "hello caps=" + (caps == null ? "null" : caps.toString()));
-        if (caps != null && caps.contains("split-channels")) { ctlStatus = "准备连接（hello 已宣告 split-channels）"; openControlLane(); ensureCtlRefresh(); }
+        // 第二条连接实测握手永远完不成（14s 超时，LAN 下同样），已改用"单连接 + unsubscribe 窗口"
+        if (caps != null && caps.contains("split-channels")) { ctlStatus = "已改用单连接方案（不建第二条连接）"; }
         else ctlStatus = "未开：hello 没有 split-channels";
     }
 
@@ -1307,7 +1308,21 @@ public final class GatewayClient {
         // **后台线程建连**：WsClient 构造里是阻塞式握手，第二条连接若挂在隧道上，
         // 会把 hello 处理线程与周期刷新任务一起卡死 —— 真机实测表现就是
         // `[control 通道]` 永远停在"准备连接"，既不连上也不重试。
-        ctlStatus = "连接中…";
+        ctlStatus = "连接中…（TCP/TLS/101 进行中）";
+        final long ctlAttemptAt = System.currentTimeMillis();
+        // **握手看门狗**：第二条连接卡在哪一步，全靠它。15s 还没 onOpen 就判定超时并记下结论。
+        controlHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (wsControl == null) return;
+                if (System.currentTimeMillis() - ctlAttemptAt < 14_000L) return;
+                String st = String.valueOf(ctlStatus);
+                if (st.startsWith("已连接")) return;   // 已经成功，不误报
+                ctlStatus = "握手超时(>14s)，停在: " + st;
+                try { wsControl.close(1000, "handshake-timeout"); } catch (Throwable ignored) { }
+                wsControl = null;
+                controlRetryAt = System.currentTimeMillis() + 10_000L;
+            }
+        }, 15_000L);
         final List<String> fProtos = protos;
         final Map<String, String> fHeaders = headers;
         new Thread(new Runnable() {
@@ -1374,6 +1389,32 @@ public final class GatewayClient {
             ctlStatus = "刷新异常: " + e;
         }
     }
+
+    /**
+     * **单连接方案**：短暂 unsubscribe → 稍后重新 subscribe。
+     *
+     * <p>背景：第二条 WS 连接在本 App 里握手永远完不成（实测 14s 超时，且 LAN 下同样如此），
+     * 所以放弃"两条连接"。改用协议里现成的一条规则 —— **「不订阅 = 接收所有会话」**
+     * （PROTOCOL §subscribe）：主连接短暂 unsubscribe 期间会收到**所有会话**的
+     * approval/question 帧，宿主据此弹通知 / 顶部提示栏；随后立刻 re-subscribe 恢复当前会话流。
+     */
+    public void refreshGlobalView(final String sessionId) {
+        if (!wantConnected) return;
+        try {
+            sendRaw(base("unsubscribe"));
+            globalViewUntil = System.currentTimeMillis() + 1500L;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try { Thread.sleep(1500L); } catch (InterruptedException e) { return; }
+                    if (wantConnected && sessionId != null && !sessionId.isEmpty()) subscribe(sessionId);
+                }
+            }, "global-view-resub").start();
+        } catch (Throwable ignored) { }
+    }
+
+    /** 正在"全局视图"窗口内（unsubscribe 与 re-subscribe 之间）。 */
+    private volatile long globalViewUntil = 0L;
+    public boolean inGlobalView() { return System.currentTimeMillis() < globalViewUntil; }
 
     /** 是否需要全局通道（供宿主判断要不要继续打节拍）。 */
     public boolean wantsGlobalLane() { return wantConnected; }

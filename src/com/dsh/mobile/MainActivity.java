@@ -200,8 +200,11 @@ public final class MainActivity extends Activity implements
     private final android.os.Handler globalLaneHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable globalLaneTick = new Runnable() {
         @Override public void run() {
-            if (gw != null && gw.wantsGlobalLane()) gw.refreshGlobalLane();
-            globalLaneHandler.postDelayed(this, 30_000L);
+            // 单连接方案：短暂 unsubscribe 换取"所有会话"的交互流（别的会话的提问/审批）
+            if (gw != null && gw.canSend() && !currentSessionId.isEmpty()) {
+                gw.refreshGlobalView(currentSessionId);
+            }
+            globalLaneHandler.postDelayed(this, 25_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
