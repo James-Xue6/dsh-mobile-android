@@ -196,6 +196,8 @@ public final class MainActivity extends Activity implements
     private String lastEffort = "";
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
     private org.json.JSONArray lastTodos = null;
+    /** 各会话的待处理队列（来自网关 session-queues / session-queue；权威值）。 */
+    private final java.util.Map<String, org.json.JSONArray> queueBySession = new java.util.HashMap<>();
 
     // ---------------------------------------------------------------- 通知（见 com.dsh.mobile.notify.Notifier）
     //
@@ -1292,8 +1294,9 @@ public final class MainActivity extends Activity implements
         // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
         refreshProjectChip();   // 「项目」chip 先按会话 cwd 填上
         requestModelsQuietly();
-        // 「待发送」是本机提示，不当成跨会话状态带着走（切进来先清空）
+        // 「待发送」条：优先用网关队列的权威值（没有队列就整块收起）
         if (convo != null) convo.clearPendingSends();
+        refreshQueueStrip();
     }
 
     private void showSettings() {
@@ -2676,6 +2679,87 @@ public final class MainActivity extends Activity implements
         }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "任务列表",
                 "由 Agent 的 todo_write 维护（App 只读）", opts, "", id -> { });
+    }
+
+    // ---- 队列（PROTOCOL §「排队消息同步」）——待发送条的权威数据源 + 立即插入/修改/删除
+
+    /**
+     * 队列帧：session-queues = 全量快照（整体替换，快照里没有的会话要清掉）；
+     * session-queue = 单会话全量替换（空数组 = 该会话队列已空）。
+     */
+    @Override
+    public void onSessionQueue(org.json.JSONObject frame) {
+        if (frame == null) return;
+        if ("session-queues".equals(frame.optString("kind", ""))) {
+            queueBySession.clear();
+            org.json.JSONObject qs = frame.optJSONObject("queues");
+            if (qs != null) {
+                java.util.Iterator<String> it = qs.keys();
+                while (it.hasNext()) {
+                    String sid = it.next();
+                    org.json.JSONArray arr = qs.optJSONArray(sid);
+                    if (arr != null && arr.length() > 0) queueBySession.put(sid, arr);
+                }
+            }
+        } else {
+            String sid = frame.optString("sessionId", "");
+            if (sid.isEmpty()) return;
+            org.json.JSONArray arr = frame.optJSONArray("items");
+            if (arr == null || arr.length() == 0) queueBySession.remove(sid);
+            else queueBySession.put(sid, arr);
+        }
+        refreshQueueStrip();
+    }
+
+    /** 把当前会话的队列渲染到「待发送」条（每条可点 → 立即插入 / 修改 / 删除）。 */
+    private void refreshQueueStrip() {
+        if (convo == null) return;
+        org.json.JSONArray arr = currentSessionId == null ? null : queueBySession.get(currentSessionId);
+        java.util.List<String[]> out = new ArrayList<>();
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String id = o.optString("id", "");
+                if (id.isEmpty()) continue;
+                org.json.JSONObject msg = o.optJSONObject("message");
+                String text = msg == null ? "" : msg.optString("content", "");
+                out.add(new String[] { id, text, o.optString("placement", "") });
+            }
+        }
+        convo.setPendingItems(out);
+    }
+
+    /** 点「待发送」条上的一条：立即插入 / 修改 / 删除。 */
+    @Override
+    public void onQueueItemAction(final String itemId, final String text) {
+        if (currentSessionId == null || currentSessionId.isEmpty()
+                || itemId == null || itemId.isEmpty()) return;
+        final java.util.List<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
+        opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("steer", "立即插入当前回答", "打断当前回合，把这条插进去"));
+        opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("edit", "修改这条内容", ""));
+        opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("remove", "删除这条", "从队列移除，不再发送"));
+        com.dsh.mobile.ui.ModelSheet.showOptions(this, "排队消息", text, opts, "", id -> {
+            if ("steer".equals(id)) gw.queueUpdate(currentSessionId, itemId, null, "steer");
+            else if ("remove".equals(id)) gw.queueUpdate(currentSessionId, itemId, null, "remove");
+            else if ("edit".equals(id)) promptEditQueue(itemId, text);
+        });
+    }
+
+    /** 「修改这条内容」：一个带输入框的对话框（回车即提交 queue-update 的 text）。 */
+    private void promptEditQueue(final String itemId, String current) {
+        final android.widget.EditText e = com.dsh.mobile.ui.Ui.field(this, "排队内容");
+        e.setText(current == null ? "" : current);
+        e.setSelection(e.getText().length());
+        com.dsh.mobile.ui.Ui.dialog(this)
+                .setTitle("修改排队内容")
+                .setView(e)
+                .setPositiveButton("保存", (d, w) -> {
+                    String v = e.getText().toString().trim();
+                    if (!v.isEmpty()) gw.queueUpdate(currentSessionId, itemId, v, null);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /** token 数的可读写法（1.2k / 3.4M）。 */

@@ -61,6 +61,16 @@ public final class GatewayClient {
         default void onTasks(JSONObject frame) { }
 
         /**
+         * 队列（PROTOCOL §「排队消息同步」）：session-queues = 全量快照（整体替换），
+         * session-queue = 单会话全量替换。条目 {id, placement, message:{id,content}, rpcId?}。
+         *
+         * **网关把这类帧广播给 legacy/control 连接**（lib/index.mjs:2330
+         * broadcastSessionMetadataFrame 只排除 conversation 通道）——所以单连接就能拿到，
+         * 「立即插入 / 修改 / 删除」所需的 itemId 正在这里。
+         */
+        default void onSessionQueue(JSONObject frame) { }
+
+        /**
          * 用量（PROTOCOL §5 context-usage）：
          * {@code {tokenUsage:{totals:{…}}, contextPressure:{contextWindow,pressureTokens,surfaceTokens}}}
          */
@@ -954,6 +964,23 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * 排队项操作（PROTOCOL §「排队消息同步」）。
+     *
+     * @param text 非空 = 改这条排队项的文本；为空则按 action 操作
+     * @param action {@code "remove"} 删除 / {@code "steer"} 立即插入当前回答
+     */
+    public void queueUpdate(String sessionId, String itemId, String text, String action) {
+        try {
+            JSONObject o = base("queue-update");
+            o.put("sessionId", sessionId);
+            o.put("itemId", itemId);
+            if (text != null && !text.trim().isEmpty()) o.put("text", text.trim());
+            else if (action != null && !action.isEmpty()) o.put("action", action);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
     public void requestGoal(String sessionId) {
         try {
             JSONObject o = base("goal");
@@ -1068,6 +1095,10 @@ public final class GatewayClient {
             case "tasks":
             case "tasks-updated":
                 l.onTasks(f);
+                break;
+            case "session-queues":
+            case "session-queue":
+                l.onSessionQueue(f);
                 break;
             case "approval-resolved":
             case "question-resolved":

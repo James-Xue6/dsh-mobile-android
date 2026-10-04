@@ -58,6 +58,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onProjectTap();
         /** 点「任务」chip：展开该会话的 todo 列表。 */
         void onTasksTap();
+        /** 点「待发送」条上的一条：弹出 立即插入 / 编辑 / 删除（itemId 来自网关队列）。 */
+        void onQueueItemAction(String itemId, String text);
         void onVoiceInput();
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
@@ -608,6 +610,42 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             lp.topMargin = Ui.dp(ctx, 4);
             row.setLayoutParams(lp);
             pendingBox.addView(row);
+            pendingBox.setVisibility(View.VISIBLE);
+        });
+    }
+
+    /**
+     * 用**网关队列**渲染「待发送」条（权威版本；条目可点，弹 立即插入 / 编辑 / 删除）。
+     *
+     * @param items 每项 {itemId, text, placement}；空 = 队列空了，整块收起
+     */
+    public void setPendingItems(final java.util.List<String[]> items) {
+        postOnUi(() -> {
+            if (pendingBox == null) return;
+            pendingBox.removeAllViews();
+            if (items == null || items.isEmpty()) { pendingBox.setVisibility(View.GONE); return; }
+            for (String[] it : items) {
+                if (it == null || it.length < 2) continue;
+                final String itemId = it[0];
+                final String text = it[1];
+                String place = it.length > 2 ? it[2] : "";
+                String label = "steering".equals(place) ? "即将插入" : "待发送";
+                TextView row = Ui.text(ctx, label + " · " + text, Ui.S_CAP1, Ui.INK_SUB, false);
+                row.setSingleLine(true);
+                row.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                row.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
+                row.setBackground(Ui.round(Ui.dp(ctx, 12), Ui.CHIP_BG));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                lp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+                lp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+                lp.topMargin = Ui.dp(ctx, 4);
+                row.setLayoutParams(lp);
+                row.setClickable(true);
+                Ui.tap(row);
+                row.setOnClickListener(v -> { Ui.haptic(v); host.onQueueItemAction(itemId, text); });
+                pendingBox.addView(row);
+            }
             pendingBox.setVisibility(View.VISIBLE);
         });
     }
