@@ -1,9 +1,9 @@
 {
-  "versionCode": 11,
-  "versionName": "0.83",
-  "notes": "修「修改排队内容点了没反应」（网关强制要求 action 字段，协议文档漏写；改文本现发 action=edit）；带图片消息不再显示成一大串；编辑弹窗被键盘挡住；排队内容 JSON 原文",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.83/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.83/dist/dsh-mobile.apk",
+  "versionCode": 12,
+  "versionName": "0.84",
+  "notes": "修「提问/审批卡切过去闪一下就消失」（快照整体重建冲掉本地待处理卡，现保留）；跨会话提醒改走不订阅的第二条连接 + 顶部待处理提示栏",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.84/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.84/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

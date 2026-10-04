@@ -58,6 +58,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onProjectTap();
         /** 点「任务」chip：展开该会话的 todo 列表。 */
         void onTasksTap();
+        /** 点顶部提示栏：切到那条有待回答提问/审批的会话。 */
+        void onOpenPendingSession();
         /** 点「待发送」条上的一条：弹出 立即插入 / 编辑 / 删除（itemId 来自网关队列）。 */
         void onQueueItemAction(String itemId, String text);
         void onVoiceInput();
@@ -106,6 +108,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private TextView usageChip;
     /** 「项目」chip（当前会话的工作区/项目名）。 */
     private TextView projectChip;
+    /** 顶部「待处理交互」提示栏（别的会话有提问/审批待答时显示）。 */
+    private TextView pendingBar;
     /** 「任务」chip（该会话 todo 进度；无任务时隐藏）。 */
     private TextView taskChip;
     /** 当前模型名（网关确认后写入；空 = 还没拿到）。 */
@@ -399,6 +403,19 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         ffLp.gravity = Gravity.BOTTOM;
         stage.addView(bottomFade, ffLp);
 
+        // ---- 顶部「待处理交互」提示栏（2026-10-04 用户要求「顶部给一个信息栏提示」）：
+        // 别的会话里有待回答的**提问/审批**时，这条栏会露出来；点它切到那条会话 ——
+        // 切过去时 App 会 subscribe，网关随即**重放**那条仍未回答的提问（实测日志
+        // `interaction replay: trigger=subscribe … questions=1`），卡片就出现了 ✓
+        pendingBar = Ui.text(ctx, "", Ui.S_CAP2, Ui.INK, true);
+        pendingBar.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10));
+        pendingBar.setBackground(Ui.round(0, Ui.SELECT_BG));
+        pendingBar.setVisibility(GONE);
+        pendingBar.setClickable(true);
+        Ui.tap(pendingBar);
+        pendingBar.setOnClickListener(v -> { Ui.haptic(v); host.onOpenPendingSession(); });
+        addView(pendingBar);
+
         addView(stage);
 
         // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap / 渐隐之后，绘在最上层
@@ -684,6 +701,20 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (projectChip != null) {
             projectChip.setText(projectLabel.isEmpty() ? "项目" : ("项目 · " + projectLabel));
         }
+    }
+
+    /**
+     * 顶部提示栏：别的会话有待回答的提问/审批时露出来（点它由宿主切过去）。
+     *
+     * @param text 为空则整条收起
+     */
+    public void setPendingBanner(String text) {
+        postOnUi(() -> {
+            if (pendingBar == null) return;
+            boolean show = text != null && !text.trim().isEmpty();
+            pendingBar.setText(show ? text : "");
+            pendingBar.setVisibility(show ? View.VISIBLE : View.GONE);
+        });
     }
 
     /** 供宿主在用户点「项目」时取完整路径。 */

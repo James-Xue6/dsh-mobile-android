@@ -1231,7 +1231,12 @@ public final class GatewayClient {
         Map<String, String> headers = new HashMap<>();
         if (!deviceId.isEmpty()) headers.put("X-DSH-Device-ID", deviceId);
         headers.put("Authorization", "Bearer " + token);
-        headers.put("X-DSH-Channel", "control");
+        // **刻意不发 `X-DSH-Channel: control`**：实测该自定义头在经 Cloudflare 隧道时会被剥掉
+        // （网关日志把我们的第二条连接判成 channel=legacy），所以走"控制通道"这条路在公网下不通。
+        // 改用协议里另一条等价规则：「**不订阅 = 接收所有会话**」（PROTOCOL §subscribe）——
+        // 这条连接**永不 subscribe**，因此能收到**所有会话**的 approval/question 帧。
+        // 唯一的纪律：这条线上收到的帧只用于"提醒/角标/待处理栏"，绝不重复驱动当前会话的 UI
+        // （见 dispatchControl 的白名单）。
         try {
             wsControl = new WsClient(url, protos, headers, new WsClient.Listener() {
                 @Override public void onOpen() {

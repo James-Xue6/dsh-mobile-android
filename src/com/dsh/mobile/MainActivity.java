@@ -194,6 +194,8 @@ public final class MainActivity extends Activity implements
     private org.json.JSONObject lastUsage = null;
     /** 当前思考等级（select-model 确认后写入；空 = 未知）。 */
     private String lastEffort = "";
+    /** 顶部提示栏要跳过去的那条会话（别的会话有待回答提问/审批时记下）。 */
+    private String pendingJumpSessionId = "";
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
     private org.json.JSONArray lastTodos = null;
     /**
@@ -1326,7 +1328,8 @@ public final class MainActivity extends Activity implements
         refreshProjectChip();   // 「项目」chip 先按会话 cwd 填上
         requestModelsQuietly();
         // 「待发送」条：优先用网关队列的权威值（没有队列就整块收起）
-        if (convo != null) convo.clearPendingSends();
+        if (convo != null) { convo.clearPendingSends(); convo.setPendingBanner(""); }
+        pendingJumpSessionId = "";
         refreshQueueStrip();
     }
 
@@ -2302,6 +2305,15 @@ public final class MainActivity extends Activity implements
         // 否则 loadingMore 会残留成"永久挡住上滑加载更早历史"。
         resetLoadMore();
 
+        // **保住本地待处理的交互卡**（提问/审批）——「切过去闪一下就消失」的根因：
+        // 切会话会重订阅 → 网关重放提问（卡片出现）→ 紧接着 session-snapshot 整体重建
+        // （items.clear()），而提问/审批卡是**本地实时建的、不在服务端历史里**，
+        // 于是被这次替换冲掉，用户看到的就是"闪一下没了"。
+        final java.util.List<ChatItem> keepPendingCards = new ArrayList<>();
+        for (ChatItem pc : items) {
+            if (pc == null || pc.resolved || pc.key == null) continue;
+            if (pc.key.startsWith("question:") || pc.key.startsWith("approval:")) keepPendingCards.add(pc);
+        }
         items.clear();
         byKey.clear();
         seenSeq.clear();
@@ -2338,6 +2350,15 @@ public final class MainActivity extends Activity implements
         rebuildOrder();
         // items/byKey 刚刚整体重建：把"等在回执上"的卡片状态迁移到新对象（评审 P0-3）
         migratePendingInteractions();
+        // 历史里没有、但本地仍在待处理的交互卡，补回列表（否则重放出来的卡片被快照冲掉）
+        boolean readdedPending = false;
+        for (ChatItem pc : keepPendingCards) {
+            if (byKey.containsKey(pc.key)) continue;
+            byKey.put(pc.key, pc);
+            items.add(pc);
+            readdedPending = true;
+        }
+        if (readdedPending) rebuildOrder();
         if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
     }
 
@@ -2773,7 +2794,24 @@ public final class MainActivity extends Activity implements
     }
 
     /** 点「待发送」条上的一条：立即插入 / 修改 / 删除。 */
+    /**
+     * 点顶部提示栏：切到那条有待回答提问/审批的会话。
+     *
+     * <p>关键：切过去时 App 会 subscribe，网关随即**重放**那条仍未回答的提问
+     * （真机日志实测 `interaction replay: trigger=subscribe … questions=1`），卡片就出现 ✓
+     */
     @Override
+    public void onOpenPendingSession() {
+        String sid = pendingJumpSessionId;
+        pendingJumpSessionId = "";
+        if (convo != null) convo.setPendingBanner("");
+        if (sid == null || sid.isEmpty()) return;
+        for (SessionInfo s : sessions) {
+            if (s != null && sid.equals(s.id)) { onOpenSession(s); return; }
+        }
+        Toast.makeText(this, "那条会话暂时不在列表里（可能已归档）", Toast.LENGTH_SHORT).show();
+    }
+
     public void onQueueItemAction(final String itemId, final String text) {
         if (currentSessionId == null || currentSessionId.isEmpty()
                 || itemId == null || itemId.isEmpty()) return;
@@ -2910,6 +2948,10 @@ public final class MainActivity extends Activity implements
         notifyPendingRequest(sid, approvalKey(frame), false);
         if (!sid.equals(currentSessionId)) {
             notifyPending(sid, 2, "有待审批");
+            pendingJumpSessionId = sid;
+            if (convo != null) {
+                convo.setPendingBanner("有待审批 · 「" + sessionLabel(sid) + "」· 点这里过去");
+            }
             return;
         }
         cancelSendWatchdog();   // 网关还能推审批 = 连接是活的
@@ -2947,6 +2989,10 @@ public final class MainActivity extends Activity implements
         notifyPendingRequest(sid, questionKey(frame), true);
         if (!sid.equals(currentSessionId)) {
             notifyPending(sid, 1, "有提问待回答");
+            pendingJumpSessionId = sid;
+            if (convo != null) {
+                convo.setPendingBanner("有提问待回答 · 「" + sessionLabel(sid) + "」· 点这里过去");
+            }
             return;
         }
         String rpcId = frame.optString("rpcId", "");
