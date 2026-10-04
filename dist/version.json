@@ -1,9 +1,9 @@
 {
-  "versionCode": 12,
-  "versionName": "0.84",
-  "notes": "修「提问/审批卡切过去闪一下就消失」（快照整体重建冲掉本地待处理卡，现保留）；跨会话提醒改走不订阅的第二条连接 + 顶部待处理提示栏",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.84/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.84/dist/dsh-mobile.apk",
+  "versionCode": 15,
+  "versionName": "0.85",
+  "notes": "目标卡改顶部浮动层(与输入框对称/点开就地展开/顶部渐隐)；任务项状态渲染(打钩划掉/转动/空心圈)；修点不开、灰底黑框、无卡时误渐隐、历史翻页被重连重置、带图消息文字竖排、排队修改无反应、助手消息图片不显示；跨会话提醒走通知栏(周期重连)+多项诊断",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.85/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.85/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
