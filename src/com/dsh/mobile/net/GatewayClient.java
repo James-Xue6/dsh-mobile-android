@@ -209,13 +209,30 @@ public final class GatewayClient {
      * 把全局待处理集合刷成最新 —— 代价是一次很小的 WS 握手，换来 ≈30s 内可见的跨会话提醒。
      */
     private static final long CTL_REFRESH_MS = 30_000L;
+    private volatile boolean ctlRefreshRunning = false;
+    /** 只在第一次收到 split-channels 时启动；**任何地方都不清它**（自续期）。 */
+    private void ensureCtlRefresh() {
+        if (ctlRefreshRunning) return;
+        ctlRefreshRunning = true;
+        controlHandler.removeCallbacks(controlRefresh);
+        controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
+    }
     private final Runnable controlRefresh = new Runnable() {
         @Override public void run() {
-            if (!wantConnected) return;
-            closeControlLane();
-            controlRetryAt = 0L;
-            openControlLane();
-            controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
+            // **先续期、再做活**：如果先做活，中途任何一次异常都会让续期语句执行不到，
+            // 整条刷新链就永久断掉（Handler 不会自动重试）—— 这正是上一版"刷新不生效"的原因。
+            if (wantConnected) controlHandler.postDelayed(this, CTL_REFRESH_MS);
+            else { ctlRefreshRunning = false; return; }
+            try {
+                // 只关这一条连接，不调 closeControlLane()（它会 removeCallbacks 把本任务的下一次也清掉）
+                WsClient c = wsControl;
+                wsControl = null;
+                if (c != null) { try { c.close(1000, "refresh"); } catch (Throwable ignored) { } }
+                controlRetryAt = 0L;
+                openControlLane();
+            } catch (Throwable t) {
+                rec("! 全局通道刷新异常: " + t);
+            }
         }
     };
     private String url = "";
@@ -384,6 +401,8 @@ public final class GatewayClient {
         ws = null;
         if (c != null) c.close(1000, "bye");
         closeControlLane();          // control 连接跟着主连接一起收
+        ctlRefreshRunning = false;
+        controlHandler.removeCallbacks(controlRefresh);
         setState(State.DISCONNECTED, "已断开");
     }
 
@@ -1221,7 +1240,7 @@ public final class GatewayClient {
         helloWarning = w.toString();
         // split-channels：开 control 连接（专收全局待处理交互；主连接已被 subscribe 过滤掉）
         android.util.Log.i(CTL_TAG, "hello caps=" + (caps == null ? "null" : caps.toString()));
-        if (caps != null && caps.contains("split-channels")) { ctlStatus = "准备连接（hello 已宣告 split-channels）"; openControlLane(); }
+        if (caps != null && caps.contains("split-channels")) { ctlStatus = "准备连接（hello 已宣告 split-channels）"; openControlLane(); ensureCtlRefresh(); }
         else ctlStatus = "未开：hello 没有 split-channels";
     }
 
@@ -1266,8 +1285,7 @@ public final class GatewayClient {
                 @Override public void onOpen() {
                     controlRetryAt = 0L;
                     ctlStatus = "已连接 ✓";
-                    controlHandler.removeCallbacks(controlRefresh);
-                    controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
+                    ensureCtlRefresh();
                     rec("control 通道已连接");
                 }
                 @Override public void onText(String text) {
@@ -1306,7 +1324,8 @@ public final class GatewayClient {
     /** 关掉 control 连接（disconnect / 换端点时调）。 */
     private void closeControlLane() {
         controlHandler.removeCallbacks(controlRetry);
-        controlHandler.removeCallbacks(controlRefresh);
+        // 注意：**不清 controlRefresh**（它自续期）。主连接每次重连都会调 closeControlLane()，
+        // 一旦在这里清掉刷新，30s 的周期就永远跑不满（这正是上一版"刷新不生效"的原因）。
         WsClient c = wsControl;
         wsControl = null;
         if (c != null) {
