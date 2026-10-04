@@ -1402,10 +1402,10 @@ public final class GatewayClient {
         if (!wantConnected) return;
         try {
             sendRaw(base("unsubscribe"));
-            globalViewUntil = System.currentTimeMillis() + 1500L;
+            globalViewUntil = System.currentTimeMillis() + 2500L;
             new Thread(new Runnable() {
                 @Override public void run() {
-                    try { Thread.sleep(1500L); } catch (InterruptedException e) { return; }
+                    try { Thread.sleep(2500L); } catch (InterruptedException e) { return; }
                     if (wantConnected && sessionId != null && !sessionId.isEmpty()) subscribe(sessionId);
                 }
             }, "global-view-resub").start();

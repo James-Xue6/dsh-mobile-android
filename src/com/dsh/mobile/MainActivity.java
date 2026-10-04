@@ -200,11 +200,13 @@ public final class MainActivity extends Activity implements
     private final android.os.Handler globalLaneHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable globalLaneTick = new Runnable() {
         @Override public void run() {
-            // 单连接方案：短暂 unsubscribe 换取"所有会话"的交互流（别的会话的提问/审批）
-            if (gw != null && gw.canSend() && !currentSessionId.isEmpty()) {
+            // 单连接方案：短暂 unsubscribe 换取"所有会话"的交互流（别的会话的提问/审批）。
+            // **不要用 canSend() 做门槛**：它要求"30s 内收到过入站帧"，安静时段为假 ——
+            // 那会让窗口整轮不开、通知时有时无（真机实测：第一次收到、第二次没有任何通知）。
+            if (gw != null && gw.wantsGlobalLane() && !currentSessionId.isEmpty()) {
                 gw.refreshGlobalView(currentSessionId);
             }
-            globalLaneHandler.postDelayed(this, 25_000L);
+            globalLaneHandler.postDelayed(this, 20_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
