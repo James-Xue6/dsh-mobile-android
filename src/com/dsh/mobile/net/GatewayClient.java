@@ -795,7 +795,9 @@ public final class GatewayClient {
         // **全局视图窗口内不重新订阅**：App 在对话页会频繁 subscribe，
         // 那会把我刚打开的 unsubscribe 窗口立刻关掉 → 别的会话的提问/审批又收不到了
         // （真机现象：停在对话页收不到提醒，停在设置页能收到）。窗口结束后补发。
-        if (inGlobalView()) { pendingResubscribe = sessionId; return; }
+        if (inGlobalView()) { pendingResubscribe = sessionId; gvSuppressed++;
+            gvLast += " 挡下订阅@" + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date());
+            return; }
         try {
             JSONObject o = base("subscribe");
             o.put("sessionId", sessionId);
@@ -1402,11 +1404,23 @@ public final class GatewayClient {
      * （PROTOCOL §subscribe）：主连接短暂 unsubscribe 期间会收到**所有会话**的
      * approval/question 帧，宿主据此弹通知 / 顶部提示栏；随后立刻 re-subscribe 恢复当前会话流。
      */
-    public void refreshGlobalView(final String sessionId) {
+    public void refreshGlobalView(final String sessionId, final boolean needStream) {
         if (!wantConnected) return;
         try {
+            // **空闲时不订阅**（needStream=false）：连接长期保持"未过滤"，因此收得到**所有会话**
+            // 的提问/审批（这正是"停在设置页能收到"的机制）。只有当前会话正在跑回合、
+            // 需要实时流时才 subscribe —— 那时再靠窗口期收全局交互。
+            if (!needStream) {
+                sendRaw(base("unsubscribe"));
+                globalViewUntil = System.currentTimeMillis() + 60_000L;   // 视为长期处于全局视图
+                gvOpens++;
+                gvLast = "空闲·保持未订阅@" + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date());
+                return;
+            }
             sendRaw(base("unsubscribe"));
             globalViewUntil = System.currentTimeMillis() + 9000L;
+            gvOpens++;
+            gvLast = "开@" + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date());
             new Thread(new Runnable() {
                 @Override public void run() {
                     try { Thread.sleep(9000L); } catch (InterruptedException e) { return; }
@@ -1423,6 +1437,12 @@ public final class GatewayClient {
     private volatile long globalViewUntil = 0L;
     /** 窗口期内被挡下的订阅请求，窗口结束后补发。 */
     private volatile String pendingResubscribe = null;
+    /** 全局视图探针：开了几次窗口、挡下几次订阅、最后一次的时刻（显示在 App 内诊断）。 */
+    private volatile int gvOpens = 0, gvSuppressed = 0;
+    private volatile String gvLast = "";
+    public String globalViewInfo() {
+        return "窗口开 " + gvOpens + " 次 · 挡下重订阅 " + gvSuppressed + " 次 · " + gvLast;
+    }
     public boolean inGlobalView() { return System.currentTimeMillis() < globalViewUntil; }
 
     /** 是否需要全局通道（供宿主判断要不要继续打节拍）。 */

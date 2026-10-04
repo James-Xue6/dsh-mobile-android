@@ -200,13 +200,13 @@ public final class MainActivity extends Activity implements
     private final android.os.Handler globalLaneHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable globalLaneTick = new Runnable() {
         @Override public void run() {
-            // 单连接方案：短暂 unsubscribe 换取"所有会话"的交互流（别的会话的提问/审批）。
-            // **不要用 canSend() 做门槛**：它要求"30s 内收到过入站帧"，安静时段为假 ——
-            // 那会让窗口整轮不开、通知时有时无（真机实测：第一次收到、第二次没有任何通知）。
+            // **已回退"周期强制重连"**：它会让会话列表被 snapshot 反复重置，导致
+            // 「往上滑加载历史」失效（用户实测：之前的内容读不出来）。跨会话提醒改用
+            // 空闲期保持未订阅（Connection 未过滤）的路线，不再动连接。
             if (gw != null && gw.wantsGlobalLane() && !currentSessionId.isEmpty()) {
-                gw.refreshGlobalView(currentSessionId);
+                gw.refreshGlobalView(currentSessionId, running);
             }
-            globalLaneHandler.postDelayed(this, 18_000L);
+            globalLaneHandler.postDelayed(this, 20_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
@@ -6581,6 +6581,7 @@ public final class MainActivity extends Activity implements
             for (String line : pairTrace) sb.append('\n').append("  ").append(line);
         }
         if (gw != null) sb.append("\n\n[control 通道] ").append(gw.controlLaneStatus());
+        if (gw != null) sb.append("\n[全局视图] ").append(gw.globalViewInfo());
         if (gw != null && !gw.lastQueueSendInfo().isEmpty()) {
             sb.append("\n\n[最近一次队列操作] ").append(gw.lastQueueSendInfo());
         }
