@@ -2381,6 +2381,10 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onEvent(String sessionId, JSONObject event, Object seq, Object time) {
+        // 事件探针：电脑端发的消息为什么手机上不出现，靠这行日志定位
+        // （adb logcat -s DSH-Evt）。type/sessionId 是否对得上、还是被别的分支吞掉。
+        if (event != null) android.util.Log.i("DSH-Evt", "recv type=" + event.optString("type", "")
+                + " sid=" + sessionId + (sessionId != null && sessionId.equals(currentSessionId) ? " (当前会话)" : " (非当前会话→丢弃)"));
         if (!sessionId.equals(currentSessionId) || event == null) return;
         cancelSendWatchdog();   // 该会话有动静 = 这次发送有着落
         applyEvent(event.optString("type", ""), event, seq, time, false);
@@ -2723,7 +2727,10 @@ public final class MainActivity extends Activity implements
                 String id = o.optString("id", "");
                 if (id.isEmpty()) continue;
                 org.json.JSONObject msg = o.optJSONObject("message");
-                String text = msg == null ? "" : msg.optString("content", "");
+                // **content 可能是内容块数组**（带图片/多块时不是字符串）：
+                // 直接 optString 会拿到 org.json 的数组 toString —— 那就是用户看到的
+                // "一堆其他字符"（[{"type":"text",...},{"type":"image",...}]）。必须按块解析。
+                String text = msg == null ? "" : contentToPlainText(msg.opt("content"));
                 out.add(new String[] { id, text, o.optString("placement", "") });
             }
         }
@@ -2744,6 +2751,40 @@ public final class MainActivity extends Activity implements
             else if ("remove".equals(id)) gw.queueUpdate(currentSessionId, itemId, null, "remove");
             else if ("edit".equals(id)) promptEditQueue(itemId, text);
         });
+    }
+
+    /**
+     * 把「内容块」转成纯文本（队列项 / 消息 content 通用）。
+     *
+     * <p>协议里 content 可以是字符串，也可以是块数组
+     * （{type:"text",text} / {type:"image",...} / {type:"tool_use",...}）。
+     * 块数组直接 optString 会退化成 JSON 原文，所以统一走这里：
+     * 文字块取 text、图片块记 [图片]、其余块忽略。
+     */
+    private static String contentToPlainText(Object content) {
+        if (content == null) return "";
+        if (content instanceof String) return (String) content;
+        if (!(content instanceof org.json.JSONArray)) return String.valueOf(content);
+        org.json.JSONArray arr = (org.json.JSONArray) content;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < arr.length(); i++) {
+            Object raw = arr.opt(i);
+            if (raw instanceof String) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append((String) raw);
+                continue;
+            }
+            if (!(raw instanceof org.json.JSONObject)) continue;
+            org.json.JSONObject b = (org.json.JSONObject) raw;
+            String type = b.optString("type", "");
+            String piece = "";
+            if ("text".equals(type)) piece = b.optString("text", "");
+            else if ("image".equals(type)) piece = "[图片]";
+            if (piece.isEmpty()) continue;
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(piece);
+        }
+        return sb.toString();
     }
 
     /** 「修改这条内容」：一个带输入框的对话框（回车即提交 queue-update 的 text）。 */
@@ -3512,7 +3553,10 @@ public final class MainActivity extends Activity implements
         switch (type) {
             case "user/message": {
                 String text = textOfMessage(payload);
-                if (isInjectedContext(payload, text)) return;
+                if (isInjectedContext(payload, text)) {
+                    android.util.Log.i("DSH-Evt", "user/message 被 isInjectedContext 丢弃: " + text);
+                    return;
+                }
                 // 专家团成员 / 子代理回传也是 user/message（source.kind = team-message /
                 // agent-message）：说话的不是用户，单独成卡，否则既会伪装成用户气泡、
                 // 又会在历史形态下被注入过滤器整段丢掉（判据见 MessageSource）。
@@ -3528,7 +3572,11 @@ public final class MainActivity extends Activity implements
                 }
                 String key = seqNum != null ? "u:" + seqNum : "u:" + t + ":" + text.hashCode();
                 if (byKey.containsKey(key)) return;
-                if (seqNum != null && !seenSeq.add(seqNum)) return;
+                if (seqNum != null && !seenSeq.add(seqNum)) {
+                    android.util.Log.i("DSH-Evt", "user/message 去重丢弃 seq=" + seqNum);
+                    return;
+                }
+                android.util.Log.i("DSH-Evt", "user/message 上屏 seq=" + seqNum + " 文本=" + text);
                 ChatItem it = ChatItem.of(ChatItem.USER, key, text);
                 it.time = t;
                 collectAttachmentIds(payload, it);
