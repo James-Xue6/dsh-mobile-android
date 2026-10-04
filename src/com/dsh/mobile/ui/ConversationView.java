@@ -930,7 +930,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             planView.setVisibility(GONE);
             return;
         }
-        planView.setMaxLines(compact ? 1 : 8);
+        // **展开状态优先**：否则每次计划刷新（setPlanText）都会把用户点开的卡片压回 1 行，
+        // 表现为"点开没反应、卡片永远只占一节"。
+        planView.setMaxLines(planExpanded ? 12 : (compact ? 1 : 8));
         planFullText = planText == null ? "" : planText;
         planCompactMode = compact;
         planView.setText(compact ? compactPlan(planText) : planText);
