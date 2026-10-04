@@ -1353,6 +1353,31 @@ public final class GatewayClient {
         }, "ctl-lane").start();
     }
 
+    /**
+     * **外部驱动**的全局通道刷新：由宿主的 Handler 每 30s 调一次。
+     *
+     * <p>为什么不让 GatewayClient 自己管定时：Handler 版与独立线程版实测 tick 都不触发
+     * （App 内状态一直停在"已发起连接（等握手）"，网关也没有任何 trigger=connect），
+     * 排查成本太高。宿主那套 Handler 是实测work的（心跳/看门狗都靠它），把节拍交给它。
+     */
+    public void refreshGlobalLane() {
+        if (!wantConnected) return;
+        ctlStatus = "刷新 tick " + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                .format(new java.util.Date());
+        try {
+            WsClient c = wsControl;
+            wsControl = null;
+            if (c != null) { try { c.close(1000, "refresh"); } catch (Throwable ignored) { } }
+            controlRetryAt = 0L;
+            openControlLane();
+        } catch (Throwable e) {
+            ctlStatus = "刷新异常: " + e;
+        }
+    }
+
+    /** 是否需要全局通道（供宿主判断要不要继续打节拍）。 */
+    public boolean wantsGlobalLane() { return wantConnected; }
+
     /** 关掉 control 连接（disconnect / 换端点时调）。 */
     private void closeControlLane() {
         controlHandler.removeCallbacks(controlRetry);

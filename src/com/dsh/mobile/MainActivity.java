@@ -196,6 +196,14 @@ public final class MainActivity extends Activity implements
     private String lastEffort = "";
     /** 顶部提示栏要跳过去的那条会话（别的会话有待回答提问/审批时记下）。 */
     private String pendingJumpSessionId = "";
+    /** 全局通道的节拍器（宿主主线程 Handler，每 30s 让网关做一次全量不限会话的交互重放）。 */
+    private final android.os.Handler globalLaneHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable globalLaneTick = new Runnable() {
+        @Override public void run() {
+            if (gw != null && gw.wantsGlobalLane()) gw.refreshGlobalLane();
+            globalLaneHandler.postDelayed(this, 30_000L);
+        }
+    };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
     private org.json.JSONArray lastTodos = null;
     /**
@@ -886,6 +894,9 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onResume() {
+        // 全局通道节拍器：App 在前台时每 30s 刷一次全局待处理交互（跨会话提问/审批提醒）
+        globalLaneHandler.removeCallbacks(globalLaneTick);
+        globalLaneHandler.postDelayed(globalLaneTick, 30_000L);
         super.onResume();
         // 从设置页 / 别处切回来时对齐一次截屏策略：用户在设置里一改就立即生效，不需要重启 App
         applyScreenshotPolicy();
