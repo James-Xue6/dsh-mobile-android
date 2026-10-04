@@ -981,8 +981,13 @@ public final class GatewayClient {
             JSONObject o = base("queue-update");
             o.put("sessionId", sessionId);
             o.put("itemId", itemId);
-            if (text != null && !text.trim().isEmpty()) o.put("text", text.trim());
-            else if (action != null && !action.isEmpty()) o.put("action", action);
+            // **action 是必填**（网关 lib/index.mjs:1472 校验 itemId + action ∈ edit/remove/steer，
+            // 缺了直接返回 "queue-update requires itemId and action edit, remove, or steer"）。
+            // 协议文档里「改文本」的例子只写了 {sessionId,itemId,text}，**漏了这个字段** ——
+            // 照文档实现就会被静默拒绝，这就是「点了保存没反应」的真因。
+            boolean hasText = text != null && !text.trim().isEmpty();
+            o.put("action", hasText ? "edit" : (action == null || action.isEmpty() ? "edit" : action));
+            if (hasText) o.put("text", text.trim());
             // 发之前把连接状态一并记下来：这样「点了保存没反应」时能一眼区分
             // "连接此刻是断的"（帧被门禁丢掉）还是"发出去了但对端没认"（见 setLastQueueSend）。
             WsClient c = ws;

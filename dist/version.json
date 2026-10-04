@@ -1,9 +1,9 @@
 {
-  "versionCode": 10,
-  "versionName": "0.82",
-  "notes": "带图片的消息不再显示成一大串（助手卡片补渲染图片 + 助手回合补收集附件）；修排队修改点了没反应（补半开连接门禁）、编辑弹窗被键盘挡住、排队内容显示 JSON 原文；新增 control 通道/队列操作诊断",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.82/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.82/dist/dsh-mobile.apk",
+  "versionCode": 11,
+  "versionName": "0.83",
+  "notes": "修「修改排队内容点了没反应」（网关强制要求 action 字段，协议文档漏写；改文本现发 action=edit）；带图片消息不再显示成一大串；编辑弹窗被键盘挡住；排队内容 JSON 原文",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.83/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.83/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
