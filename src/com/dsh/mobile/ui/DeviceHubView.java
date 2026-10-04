@@ -46,6 +46,23 @@ public final class DeviceHubView extends LinearLayout {
         /** 高级入口：原来的连接设置页（地址/令牌字段仍然保留）。 */
         void onOpenSettings();
         /**
+         * 连接门·「重新连接」：用户明确要求重试一次。
+         *
+         * <p>宿主负责「先重连、连上才进会话」，并在重连失败后自动跑一次
+         * 局域网地址发现（见 {@code MainActivity.onRetryConnect}）。
+         */
+        void onRetryConnect();
+        /**
+         * 连接门·「重新扫码配对」：所有已知地址都失效时的最终出路
+         * （电脑上的 DSH 重启过、或换了网络，地址可能全变了）。
+         */
+        void onRescanPair();
+        /**
+         * 连接门·「切换线路」：内网/公网两个地址都存着、当前这条连不上时，
+         * 手动换另一条试一次（不改用户设置的连接方式，只影响这一次尝试）。
+         */
+        void onSwitchRoute();
+        /**
          * 这台设备「这次该走内网还是公网、依据哪条规则」（规则在
          * {@code net/RoutePolicy.java}，宿主按进程级 WiFi 判定算好）。
          * 卡片只显示「走内网/走公网 + 规则来源」，**不显示地址**（用户要求便于截图分享）。
@@ -77,6 +94,26 @@ public final class DeviceHubView extends LinearLayout {
      * 连接结果由宿主（MainActivity.onOpenDevice 的等待/超时逻辑）决定后才切页。
      */
     private boolean connecting = false;
+
+    // ------------------------------------------------------------ 连接门（用户要求）
+
+    /**
+     * 连接门容器：**放在顶部区（head）里**，不随设备卡片一起滚走。
+     *
+     * <p>为什么必须在 head 里：用户报的场景是「App 一打开就进了一条连不上的会话，
+     * 干等」——他要的是"没连上就明确告诉我、并给我一个重试入口"。这个入口如果跟着
+     * 卡片区一起滚动，用户一划就看不见了，等于没给。
+     */
+    private LinearLayout gateBox;
+    /** 连接门当前内容（主题切换时整块重画，配色烘在创建时，见 applyTheme）。 */
+    private boolean gateVisible = false;
+    private String gateTitle = "";
+    private String gateHint = "";
+    private String gateRoute = "";
+    private String gateAddr = "";
+    private String gateReason = "";
+    private boolean gateCanSwitch = false;
+    private boolean gateBusy = false;
 
     public DeviceHubView(Context ctx, Host host) {
         super(ctx);
@@ -115,6 +152,13 @@ public final class DeviceHubView extends LinearLayout {
         status = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_FAINT, false);
         status.setPadding(0, Ui.dp(ctx, Ui.G_SECTION), 0, 0);
         head.addView(status);
+
+        // ---- 连接门：没连上时顶在最上面（状态 + 目标地址 + 失败原因 + 三个按钮）
+        gateBox = Ui.col(ctx);
+        gateBox.setVisibility(GONE);
+        gateBox.setPadding(0, Ui.dp(ctx, 12), 0, 0);
+        head.addView(gateBox);
+
         addView(head, Ui.fill());
 
         // ---- 设备卡片区（可滚动）
@@ -194,6 +238,8 @@ public final class DeviceHubView extends LinearLayout {
         if (titleView != null) titleView.setTextColor(Ui.INK);
         if (subTitle != null) subTitle.setTextColor(Ui.INK_SUB);
         if (status != null) status.setTextColor(Ui.INK_FAINT);
+        // 连接门是手搓 View，配色烘在创建时（Ui.card 的 CardBg 读的是当次主题色）→ 必须整块重画
+        renderGate();
         buildBody();
         requestLayout();
     }
@@ -228,6 +274,134 @@ public final class DeviceHubView extends LinearLayout {
     public void setStatus(String s, boolean error) {
         status.setText(s == null ? "" : s);
         status.setTextColor(error ? Ui.WARN : Ui.INK_FAINT);
+    }
+
+    // ------------------------------------------------------------ 连接门
+
+    /**
+     * 连接门：**没连上电脑时**顶在设备页最上面的一块状态面板。
+     *
+     * <p>用户明确要求（2026-10-05）：
+     * <pre>
+     *   「退出应用强制首页，连上再进入」 —— 没连上就别把人丢进一条连不上的会话里干等；
+     *   要停在设备页，显示 当前线路 / 目标地址 / 失败原因，并给出
+     *   「重新连接」「重新扫码配对」「切换线路」三个入口。
+     * </pre>
+     *
+     * <p>刻意**不做成阻塞式弹窗**：它只是设备页顶部的一块面板，下面的设备卡片、
+     * 左缘抽屉（历史会话）、右上角齿轮（设置）全都照常可用 —— 连不上也要能看历史。
+     *
+     * @param visible   要不要显示（连上了就整块收起）
+     * @param title     一句话结论，如「还没连上电脑」
+     * @param hint      下一步该做什么（白话）
+     * @param routeLine 当前线路，如「走内网 · 自动 · 已连 WiFi」
+     * @param address   目标地址（host:port）
+     * @param reason    失败原因（白话；空串则不占一行）
+     * @param canSwitch 是否显示「切换线路」（内网/公网两个地址都存着时才显示）
+     * @param busy      正在重连/扫描：按钮置灰、点不动（防重复触发）
+     */
+    public void setGate(boolean visible, String title, String hint, String routeLine,
+                        String address, String reason, boolean canSwitch, boolean busy) {
+        this.gateVisible = visible;
+        this.gateTitle = title == null ? "" : title;
+        this.gateHint = hint == null ? "" : hint;
+        this.gateRoute = routeLine == null ? "" : routeLine;
+        this.gateAddr = address == null ? "" : address;
+        this.gateReason = reason == null ? "" : reason;
+        this.gateCanSwitch = canSwitch;
+        this.gateBusy = busy;
+        renderGate();
+    }
+
+    /** 按当前 gate* 字段整块重画（主题切换、状态刷新都走这里，保证配色不残留）。 */
+    private void renderGate() {
+        if (gateBox == null) return;
+        gateBox.removeAllViews();
+        if (!gateVisible) {
+            gateBox.setVisibility(GONE);
+            return;
+        }
+        gateBox.setVisibility(VISIBLE);
+
+        LinearLayout card = Ui.card(ctx);
+        card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 14),
+                Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 14));
+
+        // 第一行：状态点 + 一句话结论
+        LinearLayout r1 = Ui.row(ctx);
+        r1.setGravity(Gravity.CENTER_VERTICAL);
+        r1.addView(Ui.dot(ctx, 9f, gateBusy ? Ui.BRAND : Ui.WARN));
+        TextView title = Ui.text(ctx, gateTitle, Ui.S_TITLE3, Ui.INK, true);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = Ui.dp(ctx, 9);
+        title.setLayoutParams(tlp);
+        r1.addView(title);
+        card.addView(r1);
+
+        // 第二行：下一步（白话）
+        if (!gateHint.isEmpty()) {
+            TextView hint = Ui.text(ctx, gateHint, Ui.S_FOOT, Ui.INK_SUB, false);
+            hint.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 5), 0, 0);
+            hint.setLineSpacing(Ui.dp(ctx, 2), 1.15f);
+            card.addView(hint);
+        }
+
+        // 第三行：当前线路 + 目标地址（用户要求显示这两项，便于自查）
+        String line2 = "";
+        if (!gateRoute.isEmpty()) line2 = "当前线路：" + gateRoute;
+        if (!gateAddr.isEmpty()) line2 += (line2.isEmpty() ? "" : "\n") + "目标地址：" + gateAddr;
+        if (!line2.isEmpty()) {
+            TextView l2 = Ui.text(ctx, line2, Ui.S_FOOT, Ui.INK, false);
+            l2.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 7), 0, 0);
+            l2.setLineSpacing(Ui.dp(ctx, 2), 1.15f);
+            card.addView(l2);
+        }
+
+        // 第四行：失败原因（有才显示）
+        if (!gateReason.isEmpty()) {
+            TextView rs = Ui.text(ctx, "失败原因：" + gateReason, Ui.S_FOOT, Ui.WARN, false);
+            rs.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 6), 0, 0);
+            rs.setLineSpacing(Ui.dp(ctx, 2), 1.15f);
+            card.addView(rs);
+        }
+
+        // 第五行：按钮（主操作 = 重新连接；次操作 = 重新扫码配对）
+        LinearLayout btns = Ui.row(ctx);
+        btns.setPadding(0, Ui.dp(ctx, 13), 0, 0);
+        TextView retry = Ui.primaryButton(ctx, gateBusy ? "正在重试…" : "重新连接");
+        if (gateBusy) Ui.setButtonEnabled(retry, false);
+        retry.setContentDescription("重新连接");
+        retry.setOnClickListener(v -> host.onRetryConnect());
+        btns.addView(retry, btnWeight(1.25f, 0));
+
+        TextView rescan = Ui.secondaryButton(ctx, "重新扫码配对");
+        rescan.setContentDescription("重新扫码配对");
+        rescan.setOnClickListener(v -> host.onRescanPair());
+        btns.addView(rescan, btnWeight(1f, 10));
+        card.addView(btns);
+
+        // 第六行：切换线路（内网/公网都存着才有意义）
+        if (gateCanSwitch) {
+            TextView sw = Ui.secondaryButton(ctx, "切换线路（内网 ⇄ 公网）");
+            sw.setContentDescription("切换线路");
+            if (gateBusy) Ui.setButtonEnabled(sw, false);
+            else sw.setOnClickListener(v -> host.onSwitchRoute());
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            slp.topMargin = Ui.dp(ctx, 9);
+            sw.setLayoutParams(slp);
+            card.addView(sw);
+        }
+
+        gateBox.addView(card);
+    }
+
+    private LinearLayout.LayoutParams btnWeight(float w, int marginStartDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, w);
+        lp.leftMargin = Ui.dp(ctx, marginStartDp);
+        return lp;
     }
 
     // ------------------------------------------------------------ 卡片

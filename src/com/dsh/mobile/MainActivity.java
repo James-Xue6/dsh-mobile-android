@@ -19,6 +19,7 @@ import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.model.WorkspaceGroup;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.net.LanAddress;
+import com.dsh.mobile.net.LanScan;
 import com.dsh.mobile.net.NetStatus;
 import com.dsh.mobile.net.RoutePolicy;
 import com.dsh.mobile.notify.Notifier;
@@ -700,6 +701,17 @@ public final class MainActivity extends Activity implements
                 connectNow();
             }
         }
+        // [连接门·2026-10-05] 冷启动落点由「连接门」统一决定（用户要求：
+        // 「退出应用强制首页，连上再进入」）：
+        //   已经连着 → 直接回上次那条会话，不再多停一页；
+        //   没连上   → 停在设备页（显示 线路/地址/失败原因 + 三个入口），
+        //              并在给普通重连 4 秒机会后自动扫一次局域网找电脑。
+        if (gw.state() == GatewayClient.State.READY) {
+            pendingRestoreSessionId = store.lastSessionId();
+            enterChat();
+        } else {
+            evaluateConnectionGate("冷启动", true);
+        }
         refreshListStatus();
         registerNetworkCallback();
         registerBackInvoked();
@@ -739,6 +751,9 @@ public final class MainActivity extends Activity implements
                     if (caps != null && caps.hasCapability(
                             android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                         onNetworkChanged(network, caps);
+                        // [方案5·B] 网络一变（5G↔WiFi）就做一次地址对比：对不上就更新。
+                        // onCapabilitiesChanged 触发很频繁，但 maybeRefreshWanUrl 内部有 30s 节流。
+                        maybeRefreshWanUrl("网络变化");
                     }
                 }
                 @Override public void onLost(android.net.Network network) {
@@ -1143,6 +1158,9 @@ public final class MainActivity extends Activity implements
         // 链路看着新鲜也补发一次 ping 探测（2.5s 无新入站帧就直接重连）。
         // onResume 紧随 onStart 调用，GatewayClient 内部有 1.5s 去重，不会重复探测。
         checkForegroundLiveness();
+        // [连接门·2026-10-05] 回前台：没连上就把用户按在设备页（并给他重试入口），
+        // 别让他对着一条连不上的会话干等。延后 1.2s 判定（刚回来那一下 socket 可能正在重建）。
+        scheduleConnectionGate("回前台");
     }
 
     /**
@@ -1156,6 +1174,9 @@ public final class MainActivity extends Activity implements
         if (gw == null || store == null) return;
         if (!gw.wantConnected()) return;
         gw.foregroundLivenessCheck();
+        // [方案5] 回前台也顺手同步一次公网地址（用户实测：一直 READY 时不会有新的 READY 事件，
+        // 只在 onState(READY) 触发会永远不刷新）。内部 30s 节流，不会打得太频。
+        maybeRefreshWanUrl("回前台");
     }
 
     @Override
@@ -1170,6 +1191,8 @@ public final class MainActivity extends Activity implements
         armTitleSweep();
         // P0-2：与 onStart 同一入口（内部去重），保证只走 onResume 的 ROM 路径也查一次。
         checkForegroundLiveness();
+        // [连接门] 与 onStart 同一入口（内部会取消上一次排程），只走 onResume 的 ROM 路径也判一次。
+        scheduleConnectionGate("回前台");
     }
 
     /**
@@ -1389,6 +1412,9 @@ public final class MainActivity extends Activity implements
     /** 按 ‹ 箭头拉开抽屉：这是"看一眼任务列表"，返回键只负责关掉它。 */
     private void openDrawer() {
         drawerAsParent = false;
+        // [连接门] 用户自己拉抽屉去翻历史/会话 = 他已经接管了导航：
+        // 撤掉"连上后替你进会话"的意图，别在他挑会话的时候把他带走。
+        gateForced = false;
         if (drawerHost == null) return;
         if (listScreen != null) {
             listScreen.setCurrentSession(currentSessionId);
@@ -1614,6 +1640,9 @@ public final class MainActivity extends Activity implements
 
     private void showSettings() {
         screen = Screen.SETTINGS;
+        // [连接门] 用户自己走进了设置页 = 他此刻不想被"连上就进会话"带走：
+        // 撤掉连接门的"连上后替你进会话"意图（面板本身也随设备页一起离屏，不挡路）。
+        gateForced = false;
         // 在设置页 = 没在看任何会话：这条会话的提醒照样该响
         Notifier.setViewedSession(this, "");
         if (settingsView == null) settingsView = new SettingsView(this, this);
@@ -1660,7 +1689,7 @@ public final class MainActivity extends Activity implements
         return gw != null && gw.state() == GatewayClient.State.READY && gw.canSend();
     }
 
-    /** 重画设备卡片：设备表 + 当前生效的那台 + 实况在线状态。 */
+    /** 重画设备卡片：设备表 + 当前生效的那台 + 实况在线状态 + 连接门。 */
     private void refreshDevices() {
         if (deviceHub == null) return;
         java.util.List<Store.Device> list = store.devices();
@@ -1670,6 +1699,34 @@ public final class MainActivity extends Activity implements
         // 先落"是否在等重连"再重建卡片：卡片是整体重建的，按钮文案/置灰在重建时读这个标志
         deviceHub.setConnecting(waiting);
         deviceHub.setDevices(list, active == null ? "" : active.id, online);
+
+        // ---- 连接门（用户要求 2026-10-05）：没连上就顶在设备页最上面，把话说明白 + 给三个入口。
+        //
+        // 判据用 isOnline()（READY 且最近 30s 真有入站帧）而不是只看 READY：
+        // 连接门回答的是"我现在到底能不能用这台电脑"，半开链路（界面写已连接、其实发不出帧）
+        // 正是用户实测过的假在线 —— 那种情况必须把重试入口亮出来。
+        // 注意：**导航层面**（要不要把用户从会话页拉回设备页）用的是更宽松的 READY，
+        // 见 evaluateConnectionGate()：那一边宁可不动，也不要为一次"暂时没回音"就抢屏幕。
+        boolean gate = active != null && !online && store.paired();
+        if (gate) {
+            String title;
+            String hint;
+            if (!gateBusyText.isEmpty()) {
+                title = "正在连电脑…";
+                hint = gateBusyText;
+            } else if (waiting) {
+                title = "正在重连…";
+                hint = "连上了就自动进入对话";
+            } else {
+                title = "还没连上电脑 · 点这里重试";
+                hint = "点下面「重新连接」再试一次。电脑上的 DSH 刚重启过的话，地址可能变了 —— 重新扫码最稳。";
+            }
+            deviceHub.setGate(true, title, hint, routeLabel(), gateAddressText(),
+                    gateReasonText(), canSwitchRoute(), !gateBusyText.isEmpty() || waiting);
+        } else {
+            deviceHub.setGate(false, "", "", "", "", "", false, false);
+        }
+
         if (list.isEmpty()) {
             deviceHub.setStatus("还没有设备 · 点下面的「＋ 添加设备」", false);
             return;
@@ -1677,6 +1734,9 @@ public final class MainActivity extends Activity implements
         if (online) {
             // 只显示「走内网/走公网 + 依据哪条规则」，**不显示地址**（用户要求卡片便于截图分享）
             deviceHub.setStatus("已连接 " + active.displayName() + " · " + routeLabel(), false);
+        } else if (gate) {
+            // 连接门那块面板已经把「线路 / 地址 / 原因 / 下一步」说全了，状态行别再重复一遍
+            deviceHub.setStatus("", false);
         } else if (waiting) {
             deviceHub.setStatus("正在重连 " + pendingEnterName() + "…", false);
         } else {
@@ -1854,6 +1914,26 @@ public final class MainActivity extends Activity implements
         autoEntered = true;
         if (!currentSessionId.isEmpty()) return;
         if (screen != Screen.CHAT) return;
+
+        // [连接门·2026-10-05] 优先回到「上次所在的会话」（用户要求：连上后再进入上次的会话）。
+        // 上次那条已被删/归档（findSession 找不到）时退回下面的"最近一条顶层会话"，不干等。
+        String want = pendingRestoreSessionId.isEmpty() ? store.lastSessionId() : pendingRestoreSessionId;
+        if (!want.isEmpty()) {
+            SessionInfo last = findSession(want);
+            if (last != null) {
+                pendingRestoreSessionId = "";
+                onOpenSession(last);
+                return;
+            }
+            if (sessions.isEmpty()) {
+                // 会话列表还没到（刚 READY，requestSessions 的响应在路上）：这次先不定落点，
+                // 放开 autoEntered 让 onSessions() 再试一次 —— 否则会落到一条空会话/空抽屉上。
+                autoEntered = false;
+                return;
+            }
+            pendingRestoreSessionId = "";
+        }
+
         List<SessionInfo> vis = visibleSessions();
         Set<String> ids = new HashSet<>();
         for (SessionInfo s : vis) ids.add(s.id);
@@ -2277,6 +2357,11 @@ public final class MainActivity extends Activity implements
                 failPendingEnter(detail);
             }
         }
+        // [连接门·2026-10-05] 连上了 → 若刚才是我们把他按在设备页（冷启动 / 回前台时未连接），
+        // 现在替他回到上次那条会话（用户要求「连上再进入」）。
+        // **只处理 READY**：断开/重连抖动不能把正在看会话的用户拽回设备页 ——
+        // 「拉回设备页」只在冷启动与回前台两处判定（用户口径），状态事件太密，不能当判据。
+        if (st == GatewayClient.State.READY) onGateConnected();
         if (st != GatewayClient.State.READY) {
             Notifier.clearRunning(this);
             uiHandler.removeCallbacks(bgSessionsPoll);   // 断线时不轮询（拉了也没用）
@@ -2354,6 +2439,9 @@ public final class MainActivity extends Activity implements
                 gw.requestTasks(currentSessionId);
                 gw.requestGoal(currentSessionId);
             }
+            // [方案5·局域网自动重配] 连上就顺手同步电脑当前最新的公网(隧道)地址
+            //（隧道地址会变、内网地址固定 → 回家连一次就自动更新，出门不用再扫码）。
+            maybeRefreshWanUrl("READY");
         }
         // READY 默认不挂横幅（连接正常不该常驻一条提示）；但 hello 暴露了协议/能力问题时
         // 必须挂出来（评审 P1-16）—— 否则这条告警只活在设置页诊断里，普通用户看不到，
@@ -2398,6 +2486,24 @@ public final class MainActivity extends Activity implements
             if (!gid.isEmpty()) store.setGatewayId(gid);
             if (!gname.isEmpty()) store.setGatewayName(gname);
             historyFormatVersion = hello.optInt("historyFormatVersion", 4);
+        } catch (Throwable ignored) { }
+        // [方案5·A 第 1 层 · 2026-10-05] hello 里带了电脑当前的公网(隧道)地址
+        //（由网关补丁 pc-plugin/patches/patch-gateway-hello-publicurl.ps1 加上的字段）。
+        // 每次连上都对比一次：不一致就更新 —— 于是"手机一连上就自动同步"天然成立，
+        // 不依赖推送/轮询/手动按钮（用户最想要的效果）。
+        try {
+            String pub = hello.optString("publicUrl", "");
+            if (pub != null && !pub.isEmpty() && !pub.equals(store.wanUrl())) {
+                store.setWanUrl(pub);
+                pairTraceAdd("hello 同步 → 公网地址已更新为新地址");
+                updateHint("已更新公网地址");
+                if (settingsView != null) {
+                    settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
+                            store.deviceName(), store.netMode());
+                }
+                Toast.makeText(this, "已同步电脑的公网地址", Toast.LENGTH_SHORT).show();
+                refreshRouteUI();
+            }
         } catch (Throwable ignored) { }
         // 网关告诉我们的身份/版本落进"当前这台设备"：离线时卡片也能显示名字与版本标签
         store.updateActiveMeta(gid, gname, dshVer);
@@ -3940,8 +4046,30 @@ public final class MainActivity extends Activity implements
         return android.graphics.Bitmap.createScaledBitmap(src, Math.round(w * r), Math.round(h * r), true);
     }
 
+    // [2026-10-05 用户要求] 「从电脑同步地址」手动入口已按用户要求**移除**
+    //（他说"怎么还多出个按钮，后台自动不就行了"）→ 界面上不再有按钮；
+    // maybeRefreshWanUrl(source, true) 的内部能力保留（后台自动路径仍在用）。
+
     @Override
     public void onOther(String kind, JSONObject frame) {
+        // [方案5·A] 电脑主动推送"隧道地址变了"：收到即覆盖本地旧地址 + 轻提示。
+        // 这条推送在手机用**局域网**连着时到达 —— 正是"DSH 重启后主动替换"成立的场景。
+        if ("route-updated".equals(kind)) {
+            final String url = frame.optString("publicUrl", "");
+            if (url != null && !url.isEmpty() && store != null && !url.equals(store.wanUrl())) {
+                store.setWanUrl(url);
+                pairTraceAdd("推送[route-updated] → 已更新为新地址");
+                updateHint("已更新公网地址");
+                if (settingsView != null) {
+                    settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
+                            store.deviceName(), store.netMode());
+                }
+                Toast.makeText(this, "电脑已更新公网地址", Toast.LENGTH_SHORT).show();
+                refreshRouteUI();
+                refreshDiagnostics();
+            }
+            return;
+        }
         if ("tasks".equals(kind) || "tasks-updated".equals(kind)) {
             if (frame.optString("sessionId", currentSessionId).equals(currentSessionId)) {
                 applyTodos(frame.optJSONArray("todos"));
@@ -4772,6 +4900,9 @@ public final class MainActivity extends Activity implements
         s.pending = 0;
         clearPendingWorkspace();   // 进了已有会话：之前选的工作区目标作废
         currentSessionId = s.id;
+        // [连接门·2026-10-05] 落盘"上次所在的会话"：进程被杀（force-stop / 系统回收）后
+        // 内存里的 currentSessionId 是空的，靠它才能做到「连上后回到上次那条会话」。
+        store.setLastSessionId(s.id);
         currentTitle = s.display();
         currentCwd = s.cwd;
         String p = s.parentSessionId == null ? "" : s.parentSessionId;
@@ -5508,6 +5639,88 @@ public final class MainActivity extends Activity implements
     @Override
     public void onOpenSettings() {
         showSettings();
+    }
+
+    // ------------------------------------------------------------ 连接门（DeviceHubView.Host）
+
+    /**
+     * 连接门·「重新连接」：用户明确要求重试一次。
+     *
+     * <p>顺序（用户报的问题就出在这条链上）：
+     * <pre>
+     *   ① 立刻用**当前规则算出的地址**重连（自动档：WiFi 走内网、否则走公网）；
+     *   ② 4 秒还没连上 → 自动跑一次「局域网地址发现」：
+     *      扫当前子网找到电脑上的 DSH 面板，从它那里拉最新内网/公网地址并重连。
+     *      —— DSH 重启后隧道地址会变、电脑的局域网 IP 也可能变，这一步才是治本；
+     *   ③ 扫描也找不到 → 连接门上明确写「请重新扫码配对」。
+     * </pre>
+     */
+    @Override
+    public void onRetryConnect() {
+        if (gw == null || store == null) return;
+        gateReason = "";
+        gateBusyText = "";
+        // 用户显式点重试 = 重新评估一次：清掉内网退避，让自动档重新优先内网
+        Store.clearLanFailure();
+        failoverUsed = false;
+        pendingAutoFailover = false;
+        discoverLogAdd("连接门：用户点「重新连接」");
+        if (!gatewayReconnect()) {          // 缺地址/令牌或明文被拦：gatewayReconnect 已经 Toast 过了
+            gateBusyText = "";
+            refreshDevices();
+            return;
+        }
+        gateBusyText = "正在重连…";
+        refreshDevices();
+        // 给普通重连一个机会；4 秒后仍未 READY 才去扫局域网（见 startAddressDiscovery）
+        scheduleDiscovery("用户点重新连接后仍未连上", DISCOVERY_AFTER_RETRY_MS);
+    }
+
+    /** 连接门·「重新扫码配对」：所有已知地址都失效时的最终出路。 */
+    @Override
+    public void onRescanPair() {
+        gateForced = false;
+        discoverLogAdd("连接门：用户点「重新扫码配对」");
+        onScanQr();
+    }
+
+    /**
+     * 连接门·「切换线路」：内网/公网两个地址都存着、当前这条连不上时，手动换另一条试一次。
+     *
+     * <p>只影响**这一次尝试**，不改用户设置的连接方式（自动档下一次重连仍按规则评估）：
+     * 顺手把"内网刚失败"的退避记一下/清一下，让自动档在换过去之后不会立刻又切回来（防乒乓）。
+     */
+    @Override
+    public void onSwitchRoute() {
+        if (gw == null || store == null) return;
+        Store.Device d = store.activeDevice();
+        if (d == null) return;
+        boolean onWan = isWanUrl(lastConnectUrl);
+        String other = onWan ? d.lanUrl : d.wanUrl;
+        if (other == null || other.isEmpty()) {
+            Toast.makeText(this, "这台电脑只存了一个地址，没有另一条线路可切", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String problem = GatewayClient.cleartextProblem(other);
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (onWan) Store.clearLanFailure();   // 切到内网：清掉退避，别让自动档立刻又切回公网
+        else Store.noteLanFailure();          // 切到公网：记一次内网失败，60s 内不再首选内网
+        failoverUsed = false;
+        pendingAutoFailover = false;
+        gateReason = "";
+        gateBusyText = "正在切换到" + (onWan ? "内网" : "公网") + "…";
+        lastConnectUrl = other;
+        discoverLogAdd("连接门：用户切线路 → " + (onWan ? "内网" : "公网")
+                + " " + LanAddress.hostOf(other) + ":" + LanAddress.portOf(other));
+        gw.setTrustAllCerts(store.insecureTls());
+        gw.connect(other, store.token(), store.deviceId(), store.deviceName());
+        armAutoLanFailover(other);
+        Toast.makeText(this, "改用" + (onWan ? "内网" : "公网") + "地址重连…", Toast.LENGTH_SHORT).show();
+        refreshRouteUI();
+        refreshDevices();
     }
 
     /**
@@ -6337,6 +6550,511 @@ public final class MainActivity extends Activity implements
     /** 最近一次更新检查的结论（设置页还没创建时先存着，创建后回填）。 */
     private String lastUpdateHint = "";
 
+    // ---------------- [方案5·局域网自动重配] 在家自动同步公网(隧道)地址 ----------------
+    //
+    // 隧道地址会变、局域网地址固定：手机**走内网连上**时顺手把电脑当前最新的公网地址拉回来，
+    // 与本地存的不一致就持久化 + 轻提示 —— 出门直接用新地址，不用再扫码。
+    // 地址来源：电脑上 dsh-mobile-access 插件的 http://<内网IP>:8099/public-url
+    //（它走 loopback 代理到网关 /mgw/status，因此不需要改网关插件）。
+    /** 节流：30s 内只刷一次（手动触发不受限）。 */
+    private long lastWanRefreshAt = 0L;
+
+    /** [方案5] 触发入口：READY / 回前台 / 网络变化。 */
+    private void maybeRefreshWanUrl(String source) { maybeRefreshWanUrl(source, false); }
+
+    /**
+     * [方案5·局域网自动重配] 从电脑同步"当前公网(隧道)地址"。
+     *
+     * <p>为什么不能只在 onState(READY) 触发（用户实测"连了半天没更新"）：App 一直 READY 时
+     * **不会再有 READY 事件** → 刷新永远不执行 ✗。所以回前台 / 网络变化 / 手动 都要能触发。
+     *
+     * <p>也不要求"必须走内网"（用户可能正用旧公网地址连着 → 那也永远刷不到 ✗）：
+     * 走内网就直接打 8099；否则**拿已存的内网地址试一次**，成功即刷新。
+     *
+     * <p>每次尝试都写进设置页诊断轨迹（触发来源 / 目标 / HTTP 状态 / 结果），一眼可查。
+     */
+    private void maybeRefreshWanUrl(String source, boolean manual) {
+        try {
+            if (store == null) return;
+            if (!manual && !store.isAutoMode()) return;            // 手动档不擅自改用户填的地址
+            final long now = System.currentTimeMillis();
+            if (!manual && now - lastWanRefreshAt < 30_000L) return;
+            lastWanRefreshAt = now;
+            String host = "";
+            // [根因修复·2026-10-05 · B 的真机诊断] 这里原来用的是本类的 hostOf()，
+            // 它**不剥端口** ✗：ws://192.168.2.29:3091/ws/mobile → "192.168.2.29:3091"
+            // → 拼出 http://192.168.2.29:3091:8099/public-url → MalformedURLException ✗
+            // （真机诊断原文：`同步地址[回前台] → 192.168.2.29:3091:8099 → 失败：MalformedURLException`）
+            // → READY / 回前台 / 网络变化 **全都同步失败**，这正是"连了半天没同步"的真正原因 ✓。
+            // 改用 B 的纯函数 LanAddress.hostOf()（剥端口 + 处理 IPv6 方括号）✓，不自己再写一份 ✗。
+            if (!lastConnectUrl.isEmpty() && isLanUrl(lastConnectUrl)) host = LanAddress.hostOf(lastConnectUrl);
+            if (host.isEmpty()) host = LanAddress.hostOf(store.lanUrl());
+            if (host.isEmpty()) {
+                pairTraceAdd("同步地址[" + source + "]：没有可用的内网地址，跳过");
+                return;
+            }
+            final String targetHost = host;
+            final String token = store.token();
+            final String trace = "同步地址[" + source + "] → " + targetHost + ":8099";
+            new Thread(() -> {
+                String got = null;
+                String note;
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                            new java.net.URL("http://" + targetHost + ":8099/public-url").openConnection();
+                    c.setConnectTimeout(6000);
+                    c.setReadTimeout(6000);
+                    c.setRequestProperty("X-DSH-Token", token == null ? "" : token);
+                    int code = c.getResponseCode();
+                    java.io.InputStream in = (code >= 200 && code < 300) ? c.getInputStream() : c.getErrorStream();
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[4096];
+                    int n;
+                    while (in != null && (n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                    JSONObject o = new JSONObject(new String(bo.toByteArray(), "UTF-8"));
+                    got = o.optString("publicUrl", "");
+                    note = "HTTP " + code + " · " + ((got == null || got.isEmpty())
+                            ? ("无公网地址：" + o.optString("reason", "")) : "拿到地址");
+                } catch (Throwable t) {
+                    note = "失败：" + t.getClass().getSimpleName();
+                }
+                final String url = got;
+                final String res = note;
+                runOnUiThread(() -> {
+                    try {
+                        if (url == null || url.isEmpty()) {
+                            pairTraceAdd(trace + " → " + res);
+                            if (manual) Toast.makeText(this, "没取到公网地址：" + res, Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        String old = store.wanUrl();
+                        if (url.equals(old)) {
+                            pairTraceAdd(trace + " → " + res + " · 与本地一致");
+                            if (manual) Toast.makeText(this, "公网地址已是最新", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        store.setWanUrl(url);
+                        pairTraceAdd(trace + " → " + res + " · 已更新为新地址");
+                        updateHint("已更新公网地址");
+                        if (settingsView != null) {
+                            settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
+                                    store.deviceName(), store.netMode());
+                        }
+                        Toast.makeText(this, manual ? ("已同步：" + url) : "已更新公网地址（在家自动同步）",
+                                Toast.LENGTH_SHORT).show();
+                        refreshRouteUI();
+                        refreshDiagnostics();
+                    } catch (Throwable ignored) { }
+                });
+            }, "wan-url-refresh").start();
+        } catch (Throwable ignored) { }
+    }
+
+    // ============================================================ 连接门 + 地址自动重新发现（2026-10-05）
+    //
+    // 用户报的两个问题（原话）：
+    //   ①「重启了 DSH，然后内网也连不上了呢？需要手动进入这个链接首页点重新连接才行」
+    //      —— DSH 重启后 Cloudflare 隧道地址会变，电脑的**局域网 IP 也可能变**
+    //         （换网口 / DHCP 续租到别的地址）。两个地址一起失效时，旧实现只会一直
+    //         拿旧地址重试；而「同步公网地址」那条路又要求**已经能用内网连上**，
+    //         于是永远刷不了 → 用户只能手动去电脑面板点「重新连接」。
+    //   ②「能不能退出应用强制首页，连上再进入」
+    //      —— 没连上就别把人丢进一条连不上的会话里干等。
+    //
+    // 本段落地：
+    //   · 连接门：冷启动 / 回前台时 socket 非 READY → 停在设备页，显示
+    //     当前线路 + 目标地址 + 失败原因 + 「重新连接」「重新扫码配对」「切换线路」；
+    //     连上了才回到「上次所在的会话」。刻意**不做成阻塞弹窗**：抽屉（历史会话）
+    //     与设置页照常可用（用户要求"要能点进去看历史/设置"）。
+    //   · 地址发现（治本）：已存内网 → 已存公网 → **主动扫当前子网找面板** →
+    //     从面板拉最新内网/公网地址并持久化 + 自动重连 → 都不行才让用户重新扫码。
+    //     只在「用户点重试 / 回到前台且未连接」时跑一次（短超时 + 限并发 + 总预算），
+    //     绝不后台常驻扫描。
+
+    /** 地址发现是否正在跑（防重入）。 */
+    private boolean discoveryRunning = false;
+    /** 上次地址发现的时刻（节流：15s 内不重复扫）。 */
+    private long lastDiscoveryAt = 0L;
+    private static final long DISCOVERY_MIN_GAP_MS = 15_000L;
+    /** 一次扫描的总预算（毫秒）—— 用户要求"别把手机卡住"。 */
+    private static final long DISCOVERY_BUDGET_MS = LanScan.DEFAULT_BUDGET_MS;
+    /** 用户点了「重新连接」/冷启动后，给普通重连多久才启动扫描。 */
+    private static final long DISCOVERY_AFTER_RETRY_MS = 4_000L;
+    /** 回前台判定「真的没连上」的宽限：刚回来那一下 socket 可能正在重建，别立刻抢屏幕。 */
+    private static final long GATE_GRACE_MS = 1_200L;
+
+    /** 是我们主动把用户按在设备页的（连上后要替他回到上次那条会话）。 */
+    private boolean gateForced = false;
+    /** 连接门上的"正在忙"文案（非空 = 正在重连/扫描）。 */
+    private String gateBusyText = "";
+    /** 地址发现给出的失败原因（白话），比 socket 状态更贴近用户能懂的话。 */
+    private String gateReason = "";
+    /** 连上后要回到的会话（由 maybeAutoEnter 消费）。 */
+    private String pendingRestoreSessionId = "";
+    /** 地址发现的轨迹（最新在前；设置页诊断里能看到，真机取证靠它）。 */
+    private final java.util.ArrayDeque<String> discoverLog = new java.util.ArrayDeque<>();
+    /** 回前台连接门的延后判定任务（onStart/onResume 连击时取消上一次）。 */
+    private Runnable gateGraceTask;
+
+    private void discoverLogAdd(String line) {
+        String ts = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
+                .format(new java.util.Date());
+        // 可能在地址发现的工作线程上被调用 → 必须同步（主线程只读）
+        synchronized (discoverLog) {
+            discoverLog.addFirst(ts + " " + line);
+            while (discoverLog.size() > 14) discoverLog.removeLast();
+        }
+    }
+
+    private String discoverLogText() {
+        StringBuilder sb = new StringBuilder();
+        synchronized (discoverLog) {
+            for (String s : discoverLog) sb.append("\n  ").append(s);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 回前台时**延后**判定一次连接门。
+     *
+     * <p>为什么要延后：刚切回来的那一瞬间 socket 可能正在重建（前台存活检查刚发起重连），
+     * 立刻判定会把"马上就好"的连接也判成没连上、把用户从会话里拽出来。1.2s 足够看清。
+     * 重复调用会取消上一次排程（onStart 与 onResume 常连着来）。
+     */
+    private void scheduleConnectionGate(final String why) {
+        if (gateGraceTask != null) uiHandler.removeCallbacks(gateGraceTask);
+        gateGraceTask = new Runnable() {
+            @Override public void run() {
+                gateGraceTask = null;
+                evaluateConnectionGate(why, true);
+            }
+        };
+        uiHandler.postDelayed(gateGraceTask, GATE_GRACE_MS);
+    }
+
+    /** 连接门的「已连上」分支：撤掉忙碌/失败状态；若刚才是我们按着他，就回到上次那条会话。 */
+    private void onGateConnected() {
+        gateBusyText = "";
+        gateReason = "";
+        if (!gateForced) return;
+        gateForced = false;
+        if (screen != Screen.DEVICE) return;      // 用户已经自己走开了（设置/会话）：不抢屏幕
+        pendingRestoreSessionId = store.lastSessionId();
+        discoverLogAdd("连接门：已连上 → 回到上次的会话");
+        enterChat();
+    }
+
+    /**
+     * 连接门（用户要求）的统一判定入口：冷启动 / 回前台 / 状态变化都走这里。
+     *
+     * <p>判据用 {@code state() == READY}（用户原话「socket 非 READY」），**不用** isOnline()：
+     * 后者还要求"最近 30s 有入站帧"，回前台那一刻链路可能只是暂时没回音 ——
+     * 用它会把"其实好好的连接"也判成没连上、把用户从会话里拽出来。
+     * （设备页上那块面板用 isOnline() 判，见 {@link #refreshDevices()}：两处判据刻意不同。）
+     *
+     * @param why            触发来源（写进诊断轨迹）
+     * @param allowDiscovery 这次是否允许顺带安排一次局域网地址发现
+     */
+    private void evaluateConnectionGate(String why, boolean allowDiscovery) {
+        if (gw == null || store == null) return;
+        if (gw.state() == GatewayClient.State.READY) {
+            onGateConnected();
+            return;
+        }
+        if (!store.paired()) {
+            refreshDevices();          // 还没配对：设备页空态自己会引导「＋ 添加设备」
+            return;
+        }
+        if (screen == Screen.CHAT) {
+            // 未连接却停在会话页：拉回设备页 —— 这正是用户要的"没连上别丢我进会话"。
+            // deviceOverChat=true：返回键回会话页（他原来就在那儿），不是直接退出 App。
+            gateForced = true;
+            deviceOverChat = true;
+            discoverLogAdd("连接门：未连接（" + gw.state() + "）· " + why + " → 回到设备页");
+            showDevices();
+        } else if (screen == Screen.DEVICE) {
+            gateForced = true;
+        }
+        refreshDevices();
+        if (allowDiscovery) scheduleDiscovery(why, DISCOVERY_AFTER_RETRY_MS);
+    }
+
+    /** 安排一次地址发现：delay 之后若仍未 READY 才真的跑。 */
+    private void scheduleDiscovery(final String why, long delayMs) {
+        uiHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (gw == null || store == null) return;
+                if (gw.state() == GatewayClient.State.READY) return;   // 已经连上了：不白扫
+                startAddressDiscovery(why);
+            }
+        }, Math.max(0L, delayMs));
+    }
+
+    /**
+     * 地址自动重新发现（治本那一步）。
+     *
+     * <p>用户要求的顺序：① 已存内网地址试连 → ② 已存公网地址试连 → ③ 主动扫局域网 →
+     * ④ 都不行才提示「请重新扫码配对」。
+     *
+     * <p>①② 其实就是既有的自动选路（{@link #connectNow()} + 内网超时切公网 + 前台存活检查），
+     * 这里不重复实现；本方法负责 ③：**只有在前面都试过、还没连上时才会被调用**
+     * （调用点只有两处：用户点「重新连接」之后、回到前台判定未连接之后）。
+     */
+    private void startAddressDiscovery(final String why) {
+        if (gw == null || store == null) return;
+        if (!store.paired() || store.token().isEmpty()) return;
+        if (discoveryRunning) return;
+        if (!NetStatus.wifi()) {
+            // 不在 WiFi 上就没有子网可扫（扫了也只是浪费电）——直接给出人话结论
+            discoverLogAdd("地址发现：跳过（当前不是 WiFi · " + why + "）");
+            gateReason = "手机现在不在 WiFi 上 · 请连上和电脑同一个 WiFi 再试，或改用公网地址";
+            refreshDevices();
+            refreshDiagnostics();
+            return;
+        }
+        final long now = System.currentTimeMillis();
+        if (now - lastDiscoveryAt < DISCOVERY_MIN_GAP_MS) {
+            discoverLogAdd("地址发现：跳过（" + ((now - lastDiscoveryAt) / 1000) + "s 前刚扫过 · " + why + "）");
+            return;
+        }
+        lastDiscoveryAt = now;
+        discoveryRunning = true;
+        gateReason = "";
+        gateBusyText = "正在局域网里找电脑…";
+        discoverLogAdd("地址发现：开始（" + why + "）");
+        refreshDevices();
+        refreshDiagnostics();
+        final String token = store.token();
+        final String lanTemplate = store.lanUrl();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    java.util.List<LanScan.LocalNet> nets = LanScan.localNets();
+                    StringBuilder nb = new StringBuilder();
+                    for (LanScan.LocalNet n : nets) {
+                        if (nb.length() > 0) nb.append(' ');
+                        nb.append(n.ip).append('/').append(n.prefix);
+                    }
+                    if (nets.isEmpty()) {
+                        finishDiscovery(null, null, "手机没有拿到局域网地址 · 请确认已连上 WiFi", why);
+                        return;
+                    }
+                    discoverLogAdd("地址发现：本机网段 " + nb);
+                    java.util.List<String> found = LanScan.scan(nets, LanScan.PANEL_PORT,
+                            LanScan.DEFAULT_CONCURRENCY, LanScan.DEFAULT_TIMEOUT_MS,
+                            DISCOVERY_BUDGET_MS, new LanScan.Progress() {
+                                @Override public void onProgress(final int tried, final int total) {
+                                    uiHandler.post(new Runnable() {
+                                        @Override public void run() {
+                                            if (!discoveryRunning) return;
+                                            gateBusyText = "正在扫描局域网… " + tried + "/" + total;
+                                            refreshDevices();
+                                        }
+                                    });
+                                }
+                                @Override public void onFound(String ip) {
+                                    discoverLogAdd("地址发现：发现面板 " + ip + ":" + LanScan.PANEL_PORT);
+                                }
+                            }, null);
+                    if (found.isEmpty()) {
+                        finishDiscovery(null, null,
+                                "局域网里没找到电脑上的 DSH · 请确认电脑开着 DSH、手机与电脑在同一个 WiFi", why);
+                        return;
+                    }
+                    for (String ip : found) {
+                        PanelInfo info = fetchPanelAddresses(ip, token, lanTemplate);
+                        if (info == null) continue;      // 不是我们那台（面板不认识这台手机的令牌）
+                        finishDiscovery(info.lanUrl, info.wanUrl, "", why);
+                        return;
+                    }
+                    finishDiscovery(null, null,
+                            "找到了 DSH 面板，但它不认识这台手机 · 请重新扫码配对", why);
+                } catch (Throwable t) {
+                    finishDiscovery(null, null, "扫描出错：" + t.getClass().getSimpleName(), why);
+                }
+            }
+        }, "addr-discovery").start();
+    }
+
+    /** 面板拉回来的最新地址（任一可空）。 */
+    private static final class PanelInfo {
+        String lanUrl = "";
+        String wanUrl = "";
+    }
+
+    /**
+     * 从扫到的面板拉最新地址：{@code GET http://<ip>:8099/public-url}（带设备令牌）。
+     *
+     * <p>为什么令牌同时充当"身份确认"：局域网里可能不止一台电脑跑着 DSH，只有
+     * 「能返回合法 publicUrl JSON」的那台才是我们自己的插件。令牌**只在确认是 DSH 面板之后**
+     * 才发（扫描阶段只读不含凭证的面板首页），不会对着 254 个陌生 IP 广播设备令牌。
+     *
+     * <p>{@code lanUrls}（电脑上报的权威内网地址列表，见 pc-plugin/dsh-mobile-access/index.js）
+     * 优先；插件还是老版本、没有这个字段时退回「扫到的 IP + 沿用已存内网地址的端口/路径」。
+     */
+    private PanelInfo fetchPanelAddresses(String ip, String token, String lanTemplate) {
+        java.net.HttpURLConnection c = null;
+        try {
+            java.net.URL u = new java.net.URL(
+                    "http://" + ip + ":" + LanScan.PANEL_PORT + "/public-url");
+            c = (java.net.HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(2500);
+            c.setReadTimeout(3000);
+            c.setRequestProperty("X-DSH-Token", token == null ? "" : token);
+            int code = c.getResponseCode();
+            if (code != 200) {
+                discoverLogAdd("地址发现：面板 " + ip + " 拒绝（HTTP " + code + "）");
+                return null;
+            }
+            java.io.InputStream in = c.getInputStream();
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            in.close();
+            JSONObject o = new JSONObject(new String(bo.toByteArray(), "UTF-8"));
+            if (!o.has("publicUrl")) {
+                discoverLogAdd("地址发现：面板 " + ip + " 返回的不是本插件的格式");
+                return null;
+            }
+            PanelInfo pi = new PanelInfo();
+            pi.wanUrl = o.optString("publicUrl", "");
+            java.util.List<String> cand = new java.util.ArrayList<>();
+            JSONArray arr = o.optJSONArray("lanUrls");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) cand.add(arr.optString(i, ""));
+            }
+            // 必须过滤：网关上报的 lanUrls 里会混着电脑上虚拟网卡（172.30.x）的地址，
+            // 手机路由不过去（LanAddress.pickLanUrl 会挑出真实家用/办公网段那条）。
+            pi.lanUrl = LanAddress.pickLanUrl(cand);
+            if (pi.lanUrl.isEmpty()) pi.lanUrl = LanAddress.lanUrlFor(ip, lanTemplate);
+            discoverLogAdd("地址发现：面板 " + ip + " 确认 · 内网="
+                    + (pi.lanUrl.isEmpty() ? "无"
+                       : LanAddress.hostOf(pi.lanUrl) + ":" + LanAddress.portOf(pi.lanUrl))
+                    + " · 公网=" + (pi.wanUrl.isEmpty() ? "无" : "有"));
+            return pi;
+        } catch (Throwable t) {
+            discoverLogAdd("地址发现：读面板 " + ip + " 失败（" + t.getClass().getSimpleName() + "）");
+            return null;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** 地址发现收尾（回主线程：落盘 → 重连 → 刷新界面）。 */
+    private void finishDiscovery(final String newLan, final String newWan,
+                                 final String failReason, final String why) {
+        uiHandler.post(new Runnable() {
+            @Override public void run() {
+                discoveryRunning = false;
+                gateBusyText = "";
+                boolean got = (newLan != null && !newLan.isEmpty())
+                        || (newWan != null && !newWan.isEmpty());
+                if (!got) {
+                    gateReason = failReason == null ? "" : failReason;
+                    discoverLogAdd("地址发现：失败 · " + gateReason);
+                    refreshDevices();
+                    refreshDiagnostics();
+                    return;
+                }
+                boolean changed = false;
+                try {
+                    if (newLan != null && !newLan.isEmpty() && !newLan.equals(store.lanUrl())) {
+                        store.setLanUrl(newLan);
+                        changed = true;
+                        discoverLogAdd("地址发现：内网地址已更新为 "
+                                + LanAddress.hostOf(newLan) + ":" + LanAddress.portOf(newLan));
+                    }
+                    if (newWan != null && !newWan.isEmpty() && !newWan.equals(store.wanUrl())) {
+                        store.setWanUrl(newWan);
+                        changed = true;
+                        discoverLogAdd("地址发现：公网地址已更新");
+                    }
+                } catch (Throwable ignored) { }
+                gateReason = "";
+                // 地址是新的：清掉"内网刚失败"的退避，让自动档重新优先内网
+                Store.clearLanFailure();
+                failoverUsed = false;
+                pendingAutoFailover = false;
+                if (gw.state() == GatewayClient.State.READY) {
+                    // 扫描期间自己连上了：只把新地址落盘，不要拿它再重连一次（会打断会话）
+                    discoverLogAdd("地址发现：已经连上了，只更新地址不重连");
+                    refreshRouteUI();
+                    refreshDevices();
+                    refreshDiagnostics();
+                    return;
+                }
+                String url = store.url();
+                if (url.isEmpty()) {
+                    gateReason = "没有可用地址 · 请重新扫码配对";
+                    refreshDevices();
+                    refreshDiagnostics();
+                    return;
+                }
+                discoverLogAdd("地址发现：用新地址重连 " + LanAddress.hostOf(url)
+                        + ":" + LanAddress.portOf(url));
+                lastConnectUrl = url;
+                gw.setTrustAllCerts(store.insecureTls());
+                gw.connect(url, store.token(), store.deviceId(), store.deviceName());
+                armAutoLanFailover(url);
+                Toast.makeText(MainActivity.this,
+                        changed ? "已自动找到电脑，正在重连…" : "正在重连…", Toast.LENGTH_SHORT).show();
+                refreshRouteUI();
+                refreshDevices();
+                refreshDiagnostics();
+            }
+        });
+    }
+
+    /** 连接门上的"目标地址"（host:port，够用户核对是哪台机器；不显示完整 URL/令牌）。 */
+    private String gateAddressText() {
+        String url = store == null ? "" : store.url();
+        if (url == null || url.isEmpty()) return "还没有可用地址";
+        String host = LanAddress.hostOf(url);
+        if (host.isEmpty()) return "还没有可用地址";
+        String port = LanAddress.portOf(url);
+        return port.isEmpty() ? host : host + ":" + port;
+    }
+
+    /**
+     * 连接门上的失败原因（**白话**，用户是非技术用户）。
+     *
+     * <p>优先用地址发现给出的结论（最贴近"该怎么办"），其次把 socket 状态翻译成人话。
+     */
+    private String gateReasonText() {
+        if (!gateReason.isEmpty()) return gateReason;
+        if (gw == null) return "";
+        GatewayClient.State st = gw.state();
+        String raw = lastStateText == null ? "" : lastStateText.trim();
+        switch (st) {
+            case READY:
+                return "";
+            case CONNECTING:
+            case AUTHENTICATING:
+                return raw.isEmpty() ? "正在连接电脑…" : raw;
+            case GATEWAY_OFF:
+                return "电脑上的 DSH 没开着（或「移动设备」面板被关掉了）";
+            case UNAUTHORIZED:
+                return "配对信息失效了 · 重新扫码最稳";
+            case FAILED:
+                return raw.isEmpty()
+                        ? "连不上这台电脑 · 电脑上的 DSH 刚重启过的话，地址可能变了"
+                        : raw;
+            default:
+                return raw.isEmpty()
+                        ? "还没连上电脑 · 电脑上的 DSH 刚重启过的话，地址可能变了"
+                        : raw;
+        }
+    }
+
+    /** 内网/公网两个地址都存着时，才值得给「切换线路」这个入口。 */
+    private boolean canSwitchRoute() {
+        Store.Device d = store == null ? null : store.activeDevice();
+        if (d == null) return false;
+        return d.lanUrl != null && !d.lanUrl.isEmpty()
+                && d.wanUrl != null && !d.wanUrl.isEmpty();
+    }
+
     private void updateHint(String text) {
         lastUpdateHint = text == null ? "" : text;
         if (settingsView != null) settingsView.setUpdateHint(lastUpdateHint);
@@ -7139,6 +7857,20 @@ public final class MainActivity extends Activity implements
         }
         if (gw != null) sb.append("\n\n[control 通道] ").append(gw.controlLaneStatus());
         if (gw != null) sb.append("\n[全局视图] ").append(gw.globalViewInfo());
+        // [连接门·2026-10-05] 没连上时 App 到底做了什么：连接门判定 / 地址发现扫了哪个网段、
+        // 找到哪些面板、拉到了什么地址、失败原因 —— 真机取证就靠这一段（本机 logcat 读不到明文）。
+        sb.append("\n\n[连接门] 状态=").append(gw == null ? "?" : gw.state())
+                .append(" · 强制停在设备页=").append(gateForced ? "是" : "否")
+                .append(" · 在等重连=").append(pendingEnterDeviceId.isEmpty() ? "否" : "是")
+                .append(" · 上次会话=").append(store.lastSessionId().isEmpty() ? "无" : "有")
+                .append(" · 地址发现=").append(discoveryRunning ? "进行中" : "空闲")
+                .append("\n  目标地址=").append(gateAddressText())
+                .append("\n  失败原因=").append(gateReasonText().isEmpty() ? "（无）" : gateReasonText())
+                .append("\n  可切换线路=").append(canSwitchRoute() ? "是" : "否");
+        if (!discoverLog.isEmpty()) {
+            sb.append("\n\n[地址发现] 最近 ").append(discoverLog.size()).append(" 条（最新在上）：")
+                    .append(discoverLogText());
+        }
         if (gw != null && !gw.lastQueueSendInfo().isEmpty()) {
             sb.append("\n\n[最近一次队列操作] ").append(gw.lastQueueSendInfo());
         }

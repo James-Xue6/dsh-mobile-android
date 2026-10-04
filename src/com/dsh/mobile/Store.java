@@ -79,6 +79,14 @@ public final class Store {
     private static final String K_NOTIF_ASKED = "notify_perm_asked";
 
     private final SharedPreferences sp;
+    /**
+     * 上次所在的会话 id（连接门用）。
+     *
+     * <p>用户要求「退出重进后连上就回到上次那条会话」，所以必须落盘 ——
+     * 进程被杀（{@code am force-stop} / 系统回收）后内存里的 currentSessionId 是空的。
+     */
+    private static final String K_LAST_SESSION = "last_session_id";
+
     /** 会话标题缓存：网关的 sessions 列表不含 title，标题从历史里的 session/title 事件抽取后落盘。 */
     private final SharedPreferences titles;
 
@@ -154,6 +162,19 @@ public final class Store {
         if (sessionId == null || sessionId.isEmpty()) return;
         if (title == null || title.trim().isEmpty()) return;
         titles.edit().putString(sessionId, title.trim()).apply();
+    }
+
+    /**
+     * 上次所在的会话 id（空 = 没有记录）。
+     *
+     * <p>写入时机：用户真正打开某条会话时（{@code MainActivity.onOpenSession}）。
+     * 读取时机：连接门判定「连上了 → 回到上次那条会话」。会话已被删除/归档时
+     * 由调用方退回「最近一条会话」，这里不做校验（列表只有连上之后才有）。
+     */
+    public String lastSessionId() { return sp.getString(K_LAST_SESSION, ""); }
+
+    public void setLastSessionId(String sessionId) {
+        sp.edit().putString(K_LAST_SESSION, sessionId == null ? "" : sessionId.trim()).apply();
     }
 
     public String lanUrl() { return sp.getString(K_LAN, ""); }

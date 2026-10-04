@@ -298,6 +298,67 @@ export function apply(ctx) {
         fs.createReadStream(APK_PATH).pipe(res)
         return
       }
+      // [方案5·局域网自动重配] 手机在局域网里连上后，用它取"电脑当前最新的公网(隧道)地址"。
+      //
+      // 为什么放在这里：网关的 /mgw/status 带 adminLoopbackOnly（手机永远打不到），
+      // 而本插件本来就在电脑上、能走 loopback 代理到 /mgw —— 于是**不需要改网关插件**。
+      // 鉴权：要求 X-DSH-Token（手机本来就持有设备令牌）；本服务只在局域网可达，
+      // 返回的是隧道地址（不是凭证），并且**不打印任何令牌**。
+      if (p === '/public-url') {
+        const token = String(req.headers['x-dsh-token'] || '').trim()
+        if (!token) {
+          const body = Buffer.from(JSON.stringify({
+            error: 'unauthorized', message: '缺少设备令牌（X-DSH-Token）',
+          }), 'utf8')
+          res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
+          res.end(body)
+          return
+        }
+        callGateway(port, 'GET', '/mgw/status', null).then((result) => {
+          let publicUrl = ''
+          let lanUrls = []
+          let gatewayId = ''
+          let gatewayName = ''
+          try {
+            const parsed = JSON.parse(result.body)
+            publicUrl = String((parsed && parsed.publicUrl) || '')
+            // [连接门·地址自动重新发现] 电脑自己的**权威**内网地址列表（含真实网关端口）。
+            //
+            // 为什么必须由电脑给：手机扫子网只能知道"面板在哪台 IP 上"，
+            // 拼 WebSocket 地址时端口得猜（网关 lanPort 可被 profile 覆盖，本项目是 3091
+            // 而不是上游默认的 3081）。这里直接把网关自己上报的 lan.urls 透出去，
+            // 手机拿到的就是电脑当前真正在听的地址 —— 换了网口 / DHCP 换了 IP 也一样准。
+            const lan = parsed && parsed.lan
+            if (lan && Array.isArray(lan.urls)) {
+              lanUrls = lan.urls
+                .filter((u) => typeof u === 'string' && u.trim())
+                .map((u) => u.trim())
+            }
+            gatewayId = String((parsed && parsed.gatewayId) || '')
+            gatewayName = String((parsed && parsed.gatewayName) || '')
+          } catch { publicUrl = '' }
+          // 拿不到就明确说"无公网地址"，绝不返回空串糊弄（App 侧据此保持原地址不变）
+          const body = Buffer.from(JSON.stringify({
+            publicUrl,
+            available: !!publicUrl,
+            reason: publicUrl ? '' : '无公网地址（隧道未开启或未就绪）',
+            // 老 App 不认识这两个字段，直接忽略；新 App 据此把内网地址更新成电脑当前值
+            lanUrls,
+            gatewayId,
+            gatewayName,
+            at: Date.now(),
+          }), 'utf8')
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
+          res.end(body)
+        }).catch(() => {
+          const body = Buffer.from(JSON.stringify({
+            publicUrl: '', available: false, reason: '网关管理接口不可达', lanUrls: [],
+          }), 'utf8')
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
+          res.end(body)
+        })
+        return
+      }
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       res.end('not found')
     })

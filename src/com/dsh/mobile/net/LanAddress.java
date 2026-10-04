@@ -126,6 +126,66 @@ public final class LanAddress {
         return !host.isEmpty() && isUsableLanAddress(host);
     }
 
+    /**
+     * 从 URL 里抠出**显式**端口；没写端口返回空串（不要拿 80/443 之类的默认值糊弄调用方）。
+     * 与 {@link #hostOf(String)} 同一套宽松写法：去 scheme、去用户名口令、去路径。
+     */
+    public static String portOf(String url) {
+        String s = url == null ? "" : url.trim();
+        int scheme = s.indexOf("://");
+        if (scheme >= 0) s = s.substring(scheme + 3);
+        int slash = s.indexOf('/');
+        if (slash >= 0) s = s.substring(0, slash);
+        int at = s.lastIndexOf('@');
+        if (at >= 0) s = s.substring(at + 1);
+        if (s.startsWith("[")) {                       // IPv6 字面量：端口在 ] 之后
+            int e = s.indexOf(']');
+            if (e < 0) return "";
+            int colon = s.indexOf(':', e);
+            return colon >= 0 ? s.substring(colon + 1).trim() : "";
+        }
+        int colon = s.indexOf(':');
+        if (colon < 0 || colon != s.lastIndexOf(':')) return "";   // 无端口 / IPv6 裸写
+        return s.substring(colon + 1).trim();
+    }
+
+    /** 从 URL 里抠出路径（含查询串）；没有路径返回空串。 */
+    public static String pathOf(String url) {
+        String s = url == null ? "" : url.trim();
+        int scheme = s.indexOf("://");
+        if (scheme >= 0) s = s.substring(scheme + 3);
+        int slash = s.indexOf('/');
+        return slash >= 0 ? s.substring(slash).trim() : "";
+    }
+
+    /**
+     * 电脑端移动网关的**局域网**监听端口默认值。
+     *
+     * <p>本项目 profile 的 {@code cordis.patch.yml} 把网关 {@code lanPort} 覆盖成 3091
+     * （避开 dsh-pocket 占用的 3081），所以模板缺失时按 3091 拼。
+     * 这只是**兜底猜测**：面板 {@code /public-url} 返回的 {@code lanUrls} 才是权威值，
+     * 调用方应当优先用它（见 {@code MainActivity.startAddressDiscovery}）。
+     */
+    public static final String DEFAULT_GATEWAY_PORT = "3091";
+
+    /**
+     * 用扫描到的内网 IP 拼一条「走内网」的 WebSocket 地址（方案 B：地址变了也能自己找回来）。
+     *
+     * <p>端口与路径**只从已存的内网地址模板**沿用 —— 绝不能拿公网模板的端口去推：
+     * 电脑的局域网监听端口（网关 lanPort）与隧道侧的端口/路径是两回事，
+     * 拿 {@code wss://域名/ws/mobile}（无端口）去推只会拼出一条连不上的地址。
+     * 模板缺失/残缺时退回 {@code ws://<ip>:3091/ws/mobile}。
+     */
+    public static String lanUrlFor(String ip, String lanTemplateUrl) {
+        String host = ip == null ? "" : ip.trim();
+        if (host.isEmpty()) return "";
+        String port = portOf(lanTemplateUrl);
+        String path = pathOf(lanTemplateUrl);
+        if (port.isEmpty()) port = DEFAULT_GATEWAY_PORT;
+        if (path.isEmpty()) path = "/ws/mobile";
+        return "ws://" + host + ":" + port + path;
+    }
+
     /** 排序权重：真实家用网段（192.168.x、10.x）排在其它网段前面，与 PC 面板一致。 */
     public static int lanAddressRank(String ip) {
         String s = ip == null ? "" : ip.trim();

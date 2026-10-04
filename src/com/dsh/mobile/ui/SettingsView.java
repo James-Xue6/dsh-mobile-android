@@ -218,6 +218,11 @@ public final class SettingsView extends LinearLayout {
         row2.addView(clear, weight(1f, 0));
         card.addView(row2);
 
+        // [2026-10-05 用户要求] 这里原来有一个「从电脑同步地址」手动按钮 —— 用户明确说
+        // 「搞得太复杂了吧，怎么还多出个按钮，后台自动不就行了」→ **已移除** ✓。
+        // 同步能力保留在后台全自动：hello 握手同步（一连上就对齐）✓ + 回前台 / 5G↔WiFi
+        // 网络变化自动对比 ✓ + 电脑主动广播 route-updated ✓（见 GatewayClient / onHello）。
+
 
         // ---- 对话显示模式
         LinearLayout disp = section(body, "对话显示", false);

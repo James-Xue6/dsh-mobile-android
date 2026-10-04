@@ -149,10 +149,31 @@ Step '4/7' 'd8 — 生成 classes.dex'
 $classFiles = @(Get-ChildItem $cls -Recurse -Filter *.class | ForEach-Object FullName)
 $d8Args = @('--lib', $androidJar, '--min-api', "$MinSdk", '--output', $dexd)
 if (-not $NoOptimize) { $d8Args += '--release' }
-$d8Args += $classFiles
+# [2026-10-05 修复 · d8 命令行过长] 不再把每一个 .class 全路径都拼进命令行。
+#   实测：新增 net/LanScan.java 等文件后，即使绕开 d8.bat 直接 CreateProcess 起 java，
+#   也越过了 32767 的上限 → "The command line is too long."（d8 失败）。
+#   改为**先打一个临时 jar 再喂给 d8**：命令行只剩一条路径，与文件数无关。
+#   临时 jar 用完即删，不进产物、不进暂存目录残留。
+$tmpJar = Join-Path $cls 'tmp-classes.jar'
+$jarExe = Join-Path $Jdk 'bin\jar.exe'
+if (-not (Test-Path $jarExe)) { $jarExe = 'jar' }
+Invoke-Tool $jarExe @('cf', $tmpJar, '-C', $cls, '.') 'jar' | Out-Null
+$d8Args += $tmpJar
 if ($libs.Count -gt 0) { $d8Args += $libs }
 
-Invoke-Tool "$bt\d8.bat" $d8Args 'd8' | Out-Null
+# 直接用 java 跑 d8.jar，**不走 d8.bat**：
+#   d8.bat 是批处理，内部用 `set params=%params% %1` 逐个拼参数 —— 而 cmd.exe 对一条
+#   命令行有 8191 字符的硬上限。本工程 .class 已经涨到 120+ 个（含大量匿名内部类），
+#   拼出来约 8400 字符 → 直接报 "The command line is too long."（2026-10-05 实测，
+#   新增 net/LanScan.java 之后正好越线）。绕过批处理、由 PowerShell 直接 CreateProcess
+#   起 java，命令行上限是 32767，留足余量；JVM 参数与 d8.bat 的默认值保持一致。
+$d8Jar = Join-Path $bt 'lib\d8.jar'
+if (-not (Test-Path $d8Jar)) { $d8Jar = Join-Path $bt 'd8.jar' }
+if (-not (Test-Path $d8Jar)) { throw "缺少 d8.jar（找过 $bt\lib 与 $bt）" }
+$javaExe = Join-Path $Jdk 'bin\java.exe'
+Invoke-Tool $javaExe (@('-Xmx1024M', '-Xss1m', '-cp', $d8Jar, 'com.android.tools.r8.D8') + $d8Args) 'd8' | Out-Null
+# 临时 jar 用完即删：不留在暂存目录、不进产物（评审要求）
+Remove-Item $tmpJar -Force -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- 5. 打包 dex
 Step '5/7' '打包 — 把 classes.dex 写入 APK'
