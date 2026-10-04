@@ -137,7 +137,7 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ## 更新日志
 
-### v0.85
+### v0.85（开发中，未发布）
 **新增**
 - 顶部「待处理交互」提示栏：别的会话有待回答的提问/审批时露出，点它切过去
 
