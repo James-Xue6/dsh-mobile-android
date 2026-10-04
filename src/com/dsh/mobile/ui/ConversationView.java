@@ -278,7 +278,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 纯色 SURFACE + 无阴影 = 与卡片同色、干净。
         planView.setBackground(Ui.round(Ui.dp(ctx, Ui.R_CARD), Ui.SURFACE));
         planView.setElevation(0f);
-        planView.setMaxLines(8);
+        planView.setMaxLines(1);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         planView.setVisibility(GONE);
         LinearLayout.LayoutParams planLp = new LinearLayout.LayoutParams(
@@ -448,6 +448,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         FrameLayout.LayoutParams planTopLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         planTopLp.gravity = Gravity.TOP;
+        // 与底部输入框同侧边距（M_SIDE=16dp），不要通到两边
+        planTopLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        planTopLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+        planTopLp.topMargin = Ui.dp(ctx, 6);
         stage.addView(planView, planTopLp);
         planView.addOnLayoutChangeListener((v, l, tt, r, b, ol, ot, or, ob) -> {
             int h = v.getHeight();
@@ -830,7 +834,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     public void togglePlanExpand() {
         if (planView == null) return;
         planExpanded = !planExpanded;
-        planView.setMaxLines(planExpanded ? 12 : (planCompactMode ? 1 : 8));
+        planView.setMaxLines(planExpanded ? 8 : 1);
         planView.setEllipsize(planExpanded ? null : android.text.TextUtils.TruncateAt.END);
         planView.setText(planFullText);
         if (planView.getParent() instanceof android.view.View) {
@@ -969,7 +973,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
         // **展开状态优先**：否则每次计划刷新（setPlanText）都会把用户点开的卡片压回 1 行，
         // 表现为"点开没反应、卡片永远只占一节"。
-        planView.setMaxLines(planExpanded ? 12 : (compact ? 1 : 8));
+        planView.setMaxLines(planExpanded ? 8 : 1);
         planFullText = planText == null ? "" : planText;
         planCompactMode = compact;
         planView.setText(compact ? compactPlan(planText) : planText);
