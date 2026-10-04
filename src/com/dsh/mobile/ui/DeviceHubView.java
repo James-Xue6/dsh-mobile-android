@@ -317,10 +317,15 @@ public final class DeviceHubView extends LinearLayout {
     private void renderGate() {
         if (gateBox == null) return;
         gateBox.removeAllViews();
-        if (!gateVisible) {
-            gateBox.setVisibility(GONE);
-            return;
-        }
+        // [2026-10-05 用户要求：把新加的那个卡片整个删掉 ✗]
+        // 用户原话："你能不能不瞎改，我的设备那页还是要默认页啊，就是**你新加的那个不要**，
+        // 怎么还有" → 那张"还没连上电脑 · 点这里重试"的卡片（含线路/目标/失败原因 +
+        // 「重新连接」「重新扫码配对」「切换线路」三个大按钮）**整体不再渲染** ✓。
+        // 「我的设备」页保持原来的样子（原设备卡 + 添加设备 ✓）。
+        // 未连接的提示交给 App 原有的连接状态文案/横幅 ✓（不在这里新造卡片 ✗）。
+        // 后台逻辑全部保留：LanScan 自动发现 ✓ / Store 上次会话 ✓ / LanAddress ✓ / 自动重连 ✓。
+        gateBox.setVisibility(GONE);
+        if (true) return;
         gateBox.setVisibility(VISIBLE);
 
         LinearLayout card = Ui.card(ctx);
@@ -366,33 +371,33 @@ public final class DeviceHubView extends LinearLayout {
             card.addView(rs);
         }
 
-        // 第五行：按钮（主操作 = 重新连接；次操作 = 重新扫码配对）
-        LinearLayout btns = Ui.row(ctx);
-        btns.setPadding(0, Ui.dp(ctx, 13), 0, 0);
-        TextView retry = Ui.primaryButton(ctx, gateBusy ? "正在重试…" : "重新连接");
-        if (gateBusy) Ui.setButtonEnabled(retry, false);
-        retry.setContentDescription("重新连接");
-        retry.setOnClickListener(v -> host.onRetryConnect());
-        btns.addView(retry, btnWeight(1.25f, 0));
-
-        TextView rescan = Ui.secondaryButton(ctx, "重新扫码配对");
-        rescan.setContentDescription("重新扫码配对");
-        rescan.setOnClickListener(v -> host.onRescanPair());
-        btns.addView(rescan, btnWeight(1f, 10));
-        card.addView(btns);
-
-        // 第六行：切换线路（内网/公网都存着才有意义）
-        if (gateCanSwitch) {
-            TextView sw = Ui.secondaryButton(ctx, "切换线路（内网 ⇄ 公网）");
-            sw.setContentDescription("切换线路");
-            if (gateBusy) Ui.setButtonEnabled(sw, false);
-            else sw.setOnClickListener(v -> host.onSwitchRoute());
-            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            slp.topMargin = Ui.dp(ctx, 9);
-            sw.setLayoutParams(slp);
-            card.addView(sw);
+        // [2026-10-05 用户决定：删掉连接门 ✗] 原来这里是「重新连接」大按钮 + 「重新扫码配对」
+        // 大按钮并排（外加「切换线路」大按钮）—— 用户原话："app 上面有个手动的重新连接，
+        // 还有个重新扫码配对…都自动适配了，加那玩意没啥意义啊"✗。
+        // 改成**极简空态**：不再有任何大按钮 ✓，只留一行说明 + 两个低调小字链接（最终出路）✓。
+        // 正常情况下这个页面根本不该出现（自动发现会自己扫回来 ✓）。
+        TextView tip = Ui.text(ctx, "正在自动重连并搜索电脑…\n正常情况下不用管，连上会自动进入。",
+                Ui.S_FOOT, Ui.INK_SUB, false);
+        tip.setPadding(0, Ui.dp(ctx, 13), 0, 0);
+        card.addView(tip);
+        if (gateBusy) {
+            TextView busy = Ui.text(ctx, "正在重试…", Ui.S_FOOT, Ui.INK_SUB, false);
+            busy.setPadding(0, Ui.dp(ctx, 6), 0, 0);
+            card.addView(busy);
         }
+        LinearLayout links = Ui.row(ctx);
+        links.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        TextView rescanLink = Ui.text(ctx, "重新扫码配对", Ui.S_FOOT, Ui.INK, false);
+        rescanLink.setContentDescription("重新扫码配对");
+        rescanLink.setOnClickListener(v -> host.onRescanPair());
+        links.addView(rescanLink);
+        if (gateCanSwitch) {
+            TextView swLink = Ui.text(ctx, "    切换线路（内网 ⇄ 公网）", Ui.S_FOOT, Ui.INK, false);
+            swLink.setContentDescription("切换线路");
+            if (!gateBusy) swLink.setOnClickListener(v -> host.onSwitchRoute());
+            links.addView(swLink);
+        }
+        card.addView(links);
 
         gateBox.addView(card);
     }

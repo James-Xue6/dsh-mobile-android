@@ -701,16 +701,16 @@ public final class MainActivity extends Activity implements
                 connectNow();
             }
         }
-        // [连接门·2026-10-05] 冷启动落点由「连接门」统一决定（用户要求：
-        // 「退出应用强制首页，连上再进入」）：
-        //   已经连着 → 直接回上次那条会话，不再多停一页；
-        //   没连上   → 停在设备页（显示 线路/地址/失败原因 + 三个入口），
-        //              并在给普通重连 4 秒机会后自动扫一次局域网找电脑。
+        // [2026-10-05 用户要求：恢复原有落点 ✓] 冷启动**默认停在「我的设备」页**
+        // （用户原话："我的设备那页还是要默认页啊"）。已连接 → 直接回上次会话；
+        // 未连接 → 停在设备页（App 原有行为 ✓）。未连接的提示走**原有**连接状态文案/横幅 ✓，
+        // 不再新造任何卡片 ✗。自动发现照旧在后台跑 ✓。
         if (gw.state() == GatewayClient.State.READY) {
             pendingRestoreSessionId = store.lastSessionId();
             enterChat();
         } else {
-            evaluateConnectionGate("冷启动", true);
+            showDevices();
+            evaluateConnectionGate("冷启动", true);   // 仅用于安排后台自动发现
         }
         refreshListStatus();
         registerNetworkCallback();
@@ -834,6 +834,7 @@ public final class MainActivity extends Activity implements
             lastNetReconnectAt = now;
             gw.retryNow();
             armAutoLanFailover(store.url());
+            discoverLogReconnect("网络句柄变化", "已发起重连（READY 且网卡真换了）");
             return;
         }
         if (st != GatewayClient.State.FAILED && !gw.backoffAtMax()) return;
@@ -844,6 +845,7 @@ public final class MainActivity extends Activity implements
         // 明文校验在 retryNow() 内部统一拦截，这里不必重复。
         gw.retryNow();
         armAutoLanFailover(store.url());
+        discoverLogReconnect("网络变化", "已发起重连（保留退避）");
     }
 
     // ---- 线路选择（WiFi=内网 / 移动数据或未连 WiFi=公网 / 手动档优先）
@@ -983,6 +985,7 @@ public final class MainActivity extends Activity implements
                 Toast.LENGTH_SHORT).show();
         wanSwitchPending = true;                               // READY 时补一句「已切到公网」
         lastConnectUrl = store.url();
+        discoverLogReconnect("自动切线路 内网→公网", (dead ? "内网已死" : "内网" + why) + " → 已发起");
         gw.setTrustAllCerts(store.insecureTls());
         gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
         refreshRouteUI();
@@ -1138,6 +1141,7 @@ public final class MainActivity extends Activity implements
         //  ①「进行中」这类低优先级状态从此刻起才有意义（人在 App 里时没意义，见 Notifier.running）；
         //  ② 只有列表能告诉我们别的会话是否跑完了，所以后台每 60s 拉一次会话列表。
         appVisible = false;
+        cancelOnlineWatch();   // [在线态自检] 切后台不重画界面：撤掉 tick（回前台 onResume 再武装）
         Notifier.setForeground(this, false);
         uiHandler.removeCallbacks(bgSessionsPoll);
         if (gw != null && gw.wantConnected() && store.notifyEnabled()) {
@@ -1171,7 +1175,11 @@ public final class MainActivity extends Activity implements
      * 真正的去重与判死逻辑在 {@link GatewayClient#foregroundLivenessCheck()} 里（1.5s 去重）。
      */
     private void checkForegroundLiveness() {
-        if (gw == null || store == null) return;
+        if (store == null) return;
+        // [更新修复·2026-10-05] 回前台先自检「更新包已下载好但还没安装」→ 主动提示安装。
+        // 放在连接判断**之前**：离线时也要能提示（它跟连不连得上电脑无关）。
+        maybePromptPendingUpdate();
+        if (gw == null) return;
         if (!gw.wantConnected()) return;
         gw.foregroundLivenessCheck();
         // [方案5] 回前台也顺手同步一次公网地址（用户实测：一直 READY 时不会有新的 READY 事件，
@@ -1193,6 +1201,9 @@ public final class MainActivity extends Activity implements
         checkForegroundLiveness();
         // [连接门] 与 onStart 同一入口（内部会取消上一次排程），只走 onResume 的 ROM 路径也判一次。
         scheduleConnectionGate("回前台");
+        // [在线态自检 · 2026-10-05] 前台期间每 5s 重算一次「在线」判据：半开链路下不让界面
+        // 继续显示"已连接"（详见 armOnlineWatch 的注释）。onStop 里撤掉。
+        armOnlineWatch();
     }
 
     /**
@@ -1689,12 +1700,59 @@ public final class MainActivity extends Activity implements
         return gw != null && gw.state() == GatewayClient.State.READY && gw.canSend();
     }
 
+    /**
+     * [在线态自检 · 2026-10-05 复核 isOnline() / 假连接判据] 前台每 5s 重算一次「在线」判据。
+     *
+     * <p>为什么必须重算：{@link #isOnline()} 要求"最近 30s 内有入站帧"，但判据只在
+     * **重画时**算一次。半开链路（对端网卡关掉 / 隧道断掉，TCP 不会立刻 FIN）从第 30s 起
+     * {@code canSend()} 已经是 false，可那时若没有别的状态变化，界面还留着上一次画的
+     * 「已连接 · 走内网」—— 最长能骗到 45s 假连接判定（{@code GatewayClient.STALE_INBOUND_MS}，
+     * 见 GatewayClient.java:920）真的关掉 socket 才翻面 ✗。
+     * 这正是"UI 说在线、实际没连上"的最后一处窗口，用这个 tick 关掉 ✓。
+     *
+     * <p>开销纪律：纯内存读（几个 volatile 字段 + 一次时间比较），**只在判据翻面时**才重画 ✓；
+     * 不做任何 I/O、不轮询网络；切后台（onStop）立刻撤掉 ✓。
+     */
+    private static final long ONLINE_WATCH_TICK_MS = 5_000L;
+    private Runnable onlineWatchTask;
+    /** 界面上最后一次画出来的"在线"结论（null = 还没画过）。 */
+    private Boolean lastOnlineShown;
+
+    private void armOnlineWatch() {
+        cancelOnlineWatch();
+        onlineWatchTask = () -> {
+            onlineWatchTask = null;
+            if (gw == null || store == null) return;
+            boolean now = isOnline();
+            Boolean prev = lastOnlineShown;
+            lastOnlineShown = now;
+            if (prev != null && prev != now) {
+                // 翻面才记一条：正常连接时这个 tick 全程静默（不刷屏）
+                discoverLogReconnect("在线态自检",
+                        "判据 " + (prev ? "在线" : "离线") + " → " + (now ? "在线" : "离线") + "，已重画");
+                paintBanner();
+                refreshListStatus();
+                if (screen == Screen.DEVICE) refreshDevices();
+                if (screen == Screen.SETTINGS) refreshDiagnostics();
+            }
+            armOnlineWatch();
+        };
+        uiHandler.postDelayed(onlineWatchTask, ONLINE_WATCH_TICK_MS);
+    }
+
+    private void cancelOnlineWatch() {
+        Runnable r = onlineWatchTask;
+        onlineWatchTask = null;
+        if (r != null) uiHandler.removeCallbacks(r);
+    }
+
     /** 重画设备卡片：设备表 + 当前生效的那台 + 实况在线状态 + 连接门。 */
     private void refreshDevices() {
         if (deviceHub == null) return;
         java.util.List<Store.Device> list = store.devices();
         Store.Device active = store.activeDevice();
         boolean online = active != null && isOnline();
+        lastOnlineShown = online;   // 与"在线态自检"tick 对齐：tick 只认"界面上真正画出来的那个值"
         boolean waiting = !online && !pendingEnterDeviceId.isEmpty();
         // 先落"是否在等重连"再重建卡片：卡片是整体重建的，按钮文案/置灰在重建时读这个标志
         deviceHub.setConnecting(waiting);
@@ -2341,6 +2399,21 @@ public final class MainActivity extends Activity implements
         //  READY → 起前台服务（常驻「保持后台接收」，没有它切后台就收不到事件）；
         //  断开  → 停服务并撤掉「进行中」，不然通知栏会留一条骗人的状态。
         Notifier.onGatewayState(this, st == GatewayClient.State.READY);
+        // [连续失败自动重新发现 · 2026-10-05 用户要求] 连续失败 ≥3 次 → **自动**跑一次地址发现 ✓。
+        // 现场问题：地址卡死（旧隧道域名 / 电脑换了局域网 IP）时光靠退避重连是死循环 ✗，
+        // 用户只能手点「重连」（他点了好几十遍 ✗）。这条路径让"没人管"时也能自愈 ✓。
+        // 耗电纪律：**不是**每次失败都扫 ✗ —— 攒够 {@value #AUTO_DISCOVERY_FAIL_STREAK} 次才扫一次，
+        // 触发后计数清零（下次要再攒 3 次）✓；连上（READY）立刻清零 ✓。
+        if (st == GatewayClient.State.READY) {
+            connectFailStreak = 0;
+        } else if (isLinkFailureState(st, detail)) {
+            connectFailStreak++;
+            if (connectFailStreak >= AUTO_DISCOVERY_FAIL_STREAK) {
+                connectFailStreak = 0;
+                discoverLogReconnect("连续失败" + AUTO_DISCOVERY_FAIL_STREAK + "次", "自动重新发现地址");
+                if (store != null && store.paired()) scheduleDiscovery("连续失败自动发现", 0L);
+            }
+        }
         // 问题 A：用户点了「重连」之后的等待——只有真的 READY 才进对话页；
         // 明确失败（令牌错/网关没开/连不上）立刻给结论；一直连不上由 10s 超时兜底。
         if (!pendingEnterDeviceId.isEmpty()) {
@@ -2495,7 +2568,7 @@ public final class MainActivity extends Activity implements
             String pub = hello.optString("publicUrl", "");
             if (pub != null && !pub.isEmpty() && !pub.equals(store.wanUrl())) {
                 store.setWanUrl(pub);
-                pairTraceAdd("hello 同步 → 公网地址已更新为新地址");
+                pairTraceReconnect("hello 同步公网地址", "已更新为新地址");
                 updateHint("已更新公网地址");
                 if (settingsView != null) {
                     settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
@@ -4058,7 +4131,7 @@ public final class MainActivity extends Activity implements
             final String url = frame.optString("publicUrl", "");
             if (url != null && !url.isEmpty() && store != null && !url.equals(store.wanUrl())) {
                 store.setWanUrl(url);
-                pairTraceAdd("推送[route-updated] → 已更新为新地址");
+                pairTraceReconnect("推送[route-updated]", "公网地址已更新为新地址");
                 updateHint("已更新公网地址");
                 if (settingsView != null) {
                     settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
@@ -5527,6 +5600,10 @@ public final class MainActivity extends Activity implements
             cancelPendingEnter();
             return;
         }
+        // [诊断带目标地址 · 2026-10-05] 设备卡片上那个「重连」按钮走的就是这条路
+        //（gate 面板的「重新连接」已按用户要求不再渲染，所以**用户实际点的就是这里**）。
+        // 日志必须带上"这次到底在打哪个地址"：卡死态下第一嫌疑就是打错了地址。
+        discoverLogReconnect("用户点卡片重连", "已发起（连上才进对话）");
         refreshDevices();                   // 立刻画出「重连中…」
         pendingEnterTimeout = () -> {
             pendingEnterTimeout = null;
@@ -5660,20 +5737,29 @@ public final class MainActivity extends Activity implements
         if (gw == null || store == null) return;
         gateReason = "";
         gateBusyText = "";
-        // 用户显式点重试 = 重新评估一次：清掉内网退避，让自动档重新优先内网
+        // [连接卡死修复 · 2026-10-05] 用户原话：「我**已经手动点击重连好几十遍了**」✗
+        // 真机现场（活体复现）：App 卡在「走公网 + 旧隧道域名 + 不试内网 + 不重新发现」✗ ——
+        // 而网络其实完全正常（面板 :8099 → HTTP 401 = 可达 ✓、ping 0% 丢包 ✓）。
+        // 所以"用户显式重试"必须按事实重判一切：
+        //  ① 清掉"内网失败"记录 → 内网可达就重新优先内网 ✓（现场就是被这条卡死的 ✗）
+        //  ② 清掉端点故障切换锁 → 允许再切一次 ✓
+        //  ③ 强制重连：清退避 + 取消在途定时器 + 立刻建连 ✓（不再被 30s 退避挡住 ✗）
+        //  ④ 地址发现**立即**跑（原来是 4 秒后 ✗）→ 扫到面板就拿最新隧道地址重连 ✓
         Store.clearLanFailure();
         failoverUsed = false;
         pendingAutoFailover = false;
-        discoverLogAdd("连接门：用户点「重新连接」");
+        connectFailStreak = 0;   // 用户显式重试：连续失败计数从头算（本次已经立即发现一次）
+        discoverLogReconnect("用户点重新连接", "强制：清退避 + 重判内网 + 立即发现 → 已发起");
         if (!gatewayReconnect()) {          // 缺地址/令牌或明文被拦：gatewayReconnect 已经 Toast 过了
             gateBusyText = "";
             refreshDevices();
             return;
         }
+        gw.forceReconnectNow();             // ★ 关键：清退避 + 取消在途重连 + 立刻用当前地址建连
         gateBusyText = "正在重连…";
         refreshDevices();
-        // 给普通重连一个机会；4 秒后仍未 READY 才去扫局域网（见 startAddressDiscovery）
-        scheduleDiscovery("用户点重新连接后仍未连上", DISCOVERY_AFTER_RETRY_MS);
+        // ★ 立即发现（原来推迟 DISCOVERY_AFTER_RETRY_MS=4s ✗）：扫到面板就拉最新地址重连
+        scheduleDiscovery("用户点重新连接", 0L);
     }
 
     /** 连接门·「重新扫码配对」：所有已知地址都失效时的最终出路。 */
@@ -6590,12 +6676,13 @@ public final class MainActivity extends Activity implements
             if (!lastConnectUrl.isEmpty() && isLanUrl(lastConnectUrl)) host = LanAddress.hostOf(lastConnectUrl);
             if (host.isEmpty()) host = LanAddress.hostOf(store.lanUrl());
             if (host.isEmpty()) {
-                pairTraceAdd("同步地址[" + source + "]：没有可用的内网地址，跳过");
+                pairTraceReconnect("同步地址[" + source + "]", "没有可用的内网地址，跳过");
                 return;
             }
             final String targetHost = host;
             final String token = store.token();
-            final String trace = "同步地址[" + source + "] → " + targetHost + ":8099";
+            final String trace = "重连[同步地址·" + source + "] → 连接目标 " + attemptTargetText()
+                    + " → 面板 " + targetHost + ":8099";
             new Thread(() -> {
                 String got = null;
                 String note;
@@ -6696,6 +6783,67 @@ public final class MainActivity extends Activity implements
     /** 回前台连接门的延后判定任务（onStart/onResume 连击时取消上一次）。 */
     private Runnable gateGraceTask;
 
+    /**
+     * [连续失败自动重新发现 · 2026-10-05 用户要求] 连续失败达到这个次数 → **自动**跑一次地址发现。
+     *
+     * <p>为什么攒够才扫：每次失败都扫会很耗电 ✗（用户明确要求"不要每次失败都扫"）；
+     * 为什么必须有它：地址卡死（电脑换了局域网 IP / 隧道域名变了）时，光靠固定退避重连
+     * 是死循环 —— 重新发现才是治本那一步（与 {@link #onRetryConnect} 手动那条同一个出口）。
+     */
+    private static final int AUTO_DISCOVERY_FAIL_STREAK = 3;
+
+    /** 连续失败计数：READY 清零；触发一次自动发现后也清零（否则每次失败都会扫）。 */
+    private int connectFailStreak = 0;
+
+    /**
+     * 这一次失败算不算「链路级失败」（值得靠"重新发现地址"来救）。
+     *
+     * <p>只认两类：
+     * <ul>
+     *   <li>{@code FAILED}：连不上这个地址（{@code GatewayClient.java:786}）；</li>
+     *   <li>带「后重试」的 {@code CONNECTING}：每次"尝试失败 → 排下一次重连"恰好一条
+     *       （{@code GatewayClient.scheduleReconnect} 的唯一文案，{@code GatewayClient.java:826}）。</li>
+     * </ul>
+     * 刻意**不算** UNAUTHORIZED / GATEWAY_OFF：那是"令牌错 / 电脑端网关没开"，
+     * 换地址或重新发现都治不好（与 {@link #onState} 里"不切线路"的既有口径一致）。
+     */
+    private static boolean isLinkFailureState(GatewayClient.State st, String detail) {
+        if (st == GatewayClient.State.FAILED) return true;
+        return st == GatewayClient.State.CONNECTING && detail != null && detail.contains("后重试");
+    }
+
+    /**
+     * [诊断带目标地址 · 2026-10-05 用户要求] 本次重连**实际拨号**的目标地址（host:port）。
+     *
+     * <p>优先 {@link #lastConnectUrl}（真的拿它去连了），没有再退回当前规则算出的
+     * {@link Store#url()}。只给 host:port：完整 URL 会暴露隧道域名，不该进截屏/诊断文本。
+     */
+    private String attemptTargetText() {
+        String url = (lastConnectUrl == null || lastConnectUrl.isEmpty())
+                ? (store == null ? "" : store.url()) : lastConnectUrl;
+        if (url == null || url.isEmpty()) return "（无可用地址）";
+        String host = LanAddress.hostOf(url);
+        if (host.isEmpty()) return "（无可用地址）";
+        String port = LanAddress.portOf(url);
+        return port.isEmpty() ? host : host + ":" + port;
+    }
+
+    /**
+     * 重连类日志的统一格式：{@code 重连[来源] → 目标地址 → 结果}。
+     *
+     * <p>为什么必须带目标地址：真机上"点了重连没反应"时，旧日志只有一句
+     * "用户点重新连接"✗，根本分不清它是在打**旧隧道域名**还是内网地址 ——
+     * 而"打错地址"恰恰是卡死态的第一嫌疑。带上 host:port 一眼就能对上（取证也靠它）。
+     */
+    private void discoverLogReconnect(String source, String result) {
+        discoverLogAdd("重连[" + source + "] → " + attemptTargetText() + " → " + result);
+    }
+
+    /** {@link #discoverLogReconnect} 的配对诊断版（同一格式，进设置页 [配对诊断]）。 */
+    private void pairTraceReconnect(String source, String result) {
+        pairTraceAdd("重连[" + source + "] → " + attemptTargetText() + " → " + result);
+    }
+
     private void discoverLogAdd(String line) {
         String ts = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date());
@@ -6765,16 +6913,13 @@ public final class MainActivity extends Activity implements
             refreshDevices();          // 还没配对：设备页空态自己会引导「＋ 添加设备」
             return;
         }
-        if (screen == Screen.CHAT) {
-            // 未连接却停在会话页：拉回设备页 —— 这正是用户要的"没连上别丢我进会话"。
-            // deviceOverChat=true：返回键回会话页（他原来就在那儿），不是直接退出 App。
-            gateForced = true;
-            deviceOverChat = true;
-            discoverLogAdd("连接门：未连接（" + gw.state() + "）· " + why + " → 回到设备页");
-            showDevices();
-        } else if (screen == Screen.DEVICE) {
-            gateForced = true;
-        }
+        // [连接门已删除·2026-10-05 用户决定] 原来这里会把用户**强制拉回设备页**
+        // （gateForced + showDevices），用户明确说「都自动适配了，加那玩意没啥意义啊」✗。
+        // 现在：**不跳页、不弹页** ✓ —— 用户停在哪就停在哪，未连接只由顶部非阻塞横幅提示
+        //（横幅由 paintBanner 按连接状态渲染：「未连接电脑 · 正在自动重连…」，连上自动消失）。
+        // 自动发现照旧在后台跑 ✓（这才是真正有用的部分）。
+        discoverLogAdd("未连接（" + gw.state() + "）· " + why + " → 目标 " + attemptTargetText()
+                + " → 保留当前界面（仅横幅 + 后台自动发现）");
         refreshDevices();
         if (allowDiscovery) scheduleDiscovery(why, DISCOVERY_AFTER_RETRY_MS);
     }
@@ -6821,7 +6966,7 @@ public final class MainActivity extends Activity implements
         discoveryRunning = true;
         gateReason = "";
         gateBusyText = "正在局域网里找电脑…";
-        discoverLogAdd("地址发现：开始（" + why + "）");
+        discoverLogAdd("地址发现：开始（" + why + "）· 当前重连目标 " + attemptTargetText());
         refreshDevices();
         refreshDiagnostics();
         final String token = store.token();
@@ -6991,9 +7136,8 @@ public final class MainActivity extends Activity implements
                     refreshDiagnostics();
                     return;
                 }
-                discoverLogAdd("地址发现：用新地址重连 " + LanAddress.hostOf(url)
-                        + ":" + LanAddress.portOf(url));
                 lastConnectUrl = url;
+                discoverLogReconnect("地址发现拿到新地址", "已发起重连（地址已更新，changed=" + changed + "）");
                 gw.setTrustAllCerts(store.insecureTls());
                 gw.connect(url, store.token(), store.deviceId(), store.deviceName());
                 armAutoLanFailover(url);
@@ -7119,11 +7263,77 @@ public final class MainActivity extends Activity implements
     private volatile boolean updateDownloading = false;
     private volatile boolean updateCancelled = false;
 
+    /** [回前台自检] 已经提示过安装的版本，避免反复弹。 */
+    private String pendingUpdatePrompted = "";
+
+    /**
+     * [回前台自检 · 2026-10-05] 该版本**已下载完但还没安装** → 主动提示安装。
+     *
+     * <p>为什么必须做：下载完成那一刻如果 App 不在前台（用户切走了），
+     * 系统安装界面可能压根没弹出来 ✗ → 包就静静躺在私有目录里，
+     * 用户回来再点「更新」还会重新下载（本次修的 bug）✗。
+     * 回前台扫一次 updates 目录，发现"不是当前版本"的包就提示安装 ✓。
+     */
+    private void maybePromptPendingUpdate() {
+        try {
+            java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
+            java.io.File[] fs = dir.listFiles();
+            if (fs == null) return;
+            for (java.io.File f : fs) {
+                String n = f.getName();
+                if (!n.startsWith("dsh-mobile-") || !n.endsWith(".apk") || f.length() <= 0) continue;
+                final String ver = n.substring("dsh-mobile-".length(), n.length() - 4);
+                if (ver.equals(myVersionName())) continue;              // 就是当前版本：不必提示
+                if (ver.equals(pendingUpdatePrompted)) continue;        // 同一版本只提示一次
+                pendingUpdatePrompted = ver;
+                final java.io.File apk = f;
+                pairTraceAdd("更新：回前台自检发现已下载包 v" + ver + " → 提示安装（不再重复下载）");
+                Ui.dialog(this)
+                        .setTitle("更新包已下载好")
+                        .setMessage("v" + ver + " 的安装包已经在手机里了，不需要重新下载。\n"
+                                + "点「立即安装」打开系统安装界面。")
+                        .setPositiveButton("立即安装", (d, w) -> installDownloadedApk(apk))
+                        .setNegativeButton("以后再说", null)
+                        .show();
+                return;
+            }
+        } catch (Throwable ignored) { }
+    }
+
     private void startInAppUpdate(final String versionName, final String url, final String mirror,
                                   final String sha256, final long expectSize) {
         if (updateDownloading) { Toast.makeText(this, "正在下载中…", Toast.LENGTH_SHORT).show(); return; }
         final java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
+        // 文件名带 versionName：避免"上一版的包被当成这一版" ✗
         final java.io.File out = new java.io.File(dir, "dsh-mobile-" + versionName + ".apk");
+
+        // ★ [复用已下载包 · 2026-10-05 用户实测 bug]
+        //   用户原话：「下载完了，切窗口了，回来重新点更新，为什么不是刚才下载好的包直接安装，
+        //   而是重新下载安装？」→ 命中"已下载且校验通过"就直接进安装器，**不再下一遍** ✓；
+        //   存在但校验不过 → 删掉重下 ✓（并写诊断 ✓）。
+        if (out.exists() && out.length() > 0) {
+            String have = null;
+            try { have = sha256Of(out); } catch (Throwable ignored) { }
+            boolean ok;
+            if (sha256 != null && !sha256.trim().isEmpty()) {
+                ok = have != null && have.equalsIgnoreCase(sha256.trim());
+            } else {
+                ok = expectSize <= 0 || out.length() == expectSize;   // 清单没给 sha：按大小核对
+            }
+            if (ok) {
+                pairTraceAdd("更新：命中已下载包（校验通过）→ 直接安装 v" + versionName);
+                updateHint("更新包已下载好，正在安装 v" + versionName);
+                installDownloadedApk(out);
+                return;
+            }
+            pairTraceAdd("更新：已下载包校验不过 → 删除重下 v" + versionName
+                    + "（期望 " + (sha256 == null || sha256.isEmpty() ? "无" : sha256.substring(0, Math.min(12, sha256.length())))
+                    + "… 实际 " + (have == null ? "计算失败" : have.substring(0, Math.min(12, have.length()))) + "…）");
+            //noinspection ResultOfMethodCallIgnored
+            out.delete();
+        } else {
+            pairTraceAdd("更新：无已下载包 → 开始下载 v" + versionName);
+        }
 
         // 进度面板：不透明底 + 圆角（与项目其它自绘面板同一套安全配方，不用半透明叠层）
         LinearLayout box = Ui.col(this);

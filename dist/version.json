@@ -1,10 +1,10 @@
 {
-  "versionCode": 24,
-  "versionName": "0.86.7",
-  "notes": "应用内一键更新（进度条 + 下载完自动拉起系统安装器 + sha256 校验 + 未授权引导）；地址自动同步：hello 握手带 publicUrl（连上即同步）+ 网关启动/地址变化广播 route-updated + 回前台/网络切换自动对比；移除多余的手动同步按钮；修复 hostOf 未剥端口导致同步失败；连接门（未连接停设备页）+ 局域网自动发现",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.7/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.7/dist/dsh-mobile.apk",
-  "sha256": "ecfc9c6589ce82cd67f6497b66b0217f31077ebdc90459d4878fcebab4cd026a",
+  "versionCode": 25,
+  "versionName": "0.86.8",
+  "notes": "连接稳定性：手动「重连」不再卡死（清退避+清内网失败记录+立即重新发现地址）；网络恢复后自动重连（实测约4秒）；修复 hostOf 未剥端口导致同步失败；应用内更新复用已下载包（切窗口回来不再重下）+ 回前台提示安装；移除多余的连接页卡片；地址自动同步（hello 带 publicUrl + 启动/变化广播）",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.8/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.8/dist/dsh-mobile.apk",
+  "sha256": "9e467541cc17922fd06d2f88577c669dab5bfb66aa6bdcf3ce711aa7299b34fd",
   "size": 1038252,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",

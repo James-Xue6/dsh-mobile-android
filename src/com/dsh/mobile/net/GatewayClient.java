@@ -590,6 +590,35 @@ public final class GatewayClient {
         open();
     }
 
+    /**
+     * [连接卡死修复 · 2026-10-05] **用户显式重试**专用：清退避 + 取消在途重连 + 立刻建连。
+     *
+     * <p>真机现场（用户原话：「我跟你说之前我**已经手动点击重连好几十遍了**」✗）：
+     * App 卡在「走公网 + 旧隧道地址 + 不试内网 + 不重新发现」✗。
+     * 根因之一就是这里：{@link #retryNow()} **保留退避**（评审 P1-9 的刻意设计），
+     * 又只用"当前那条"（可能已失效的）地址 → 用户点几十遍都在同一个死地址上打转 ✗。
+     *
+     * <p>所以给"用户主动重试"单独一条强制路径：
+     * <ul>
+     *   <li>退避次数与短命罚分**清零** ✓（用户主动重试不该被 30s 退避挡住 ✗）；</li>
+     *   <li>取消在途的退避定时器 ✓（避免它稍后又用旧地址顶一次 ✗）；</li>
+     *   <li>立刻用**当前地址**建连 ✓（地址由 MainActivity 侧先"重判内网 + 重新发现"更新 ✓）。</li>
+     * </ul>
+     * 与 {@link #retryNow()} 语义分开：网络抖动等自动路径继续用 retryNow()（保留退避）✓。
+     */
+    public void forceReconnectNow() {
+        if (manualClose) { wantConnected = true; manualClose = false; }
+        if (!wantConnected) return;
+        if (url.isEmpty()) return;
+        if (!guardCleartext(url)) return;
+        reconnectAttempt.set(0);
+        shortLivedCount.set(0);
+        main.removeCallbacks(reconnectTask);
+        stopFgProbe();
+        rec("用户主动重试：清退避 + 立刻重连");
+        open();
+    }
+
     public void disconnect() {
         wantConnected = false;
         manualClose = true;
