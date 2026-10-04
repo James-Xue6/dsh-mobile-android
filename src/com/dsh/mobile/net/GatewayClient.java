@@ -177,6 +177,8 @@ public final class GatewayClient {
     // 协议给的正解是第二条带 `X-DSH-Channel: control` 的连接：
     // **「Global metadata and pending interactions are delivered only to this connection.」**
     // 它不订阅，所以收得到所有会话的待处理交互。
+    /** logcat tag：control 通道的诊断（`adb logcat -s DSH-Control`）。 */
+    private static final String CTL_TAG = "DSH-Control";
     private WsClient wsControl;
     private long controlRetryAt = 0L;
     private final android.os.Handler controlHandler =
@@ -1145,7 +1147,9 @@ public final class GatewayClient {
         capabilities = caps;
         helloWarning = w.toString();
         // split-channels：开 control 连接（专收全局待处理交互；主连接已被 subscribe 过滤掉）
+        android.util.Log.i(CTL_TAG, "hello caps=" + (caps == null ? "null" : caps.toString()));
         if (caps != null && caps.contains("split-channels")) openControlLane();
+        else android.util.Log.i(CTL_TAG, "hello 未宣告 split-channels，不开 control 通道");
     }
 
     /**
@@ -1157,9 +1161,13 @@ public final class GatewayClient {
      * device ID for conversation"）。
      */
     private void openControlLane() {
-        if (token == null || token.isEmpty() || url.isEmpty()) return;
-        if (wsControl != null) return;                                   // 已在
-        if (System.currentTimeMillis() < controlRetryAt) return;         // 退避中
+        if (token == null || token.isEmpty() || url.isEmpty()) {
+            android.util.Log.i(CTL_TAG, "skip: token/url 为空 token=" + (token == null ? "null" : (token.isEmpty() ? "empty" : "ok"))
+                    + " url=" + (url.isEmpty() ? "empty" : "ok"));
+            return;
+        }
+        if (wsControl != null) { android.util.Log.i(CTL_TAG, "skip: 已有连接"); return; }
+        if (System.currentTimeMillis() < controlRetryAt) { android.util.Log.i(CTL_TAG, "skip: 退避中"); return; }
         List<String> protos = new ArrayList<>();
         protos.add(PROTO);
         protos.add("dsh-auth." + token);
@@ -1171,6 +1179,7 @@ public final class GatewayClient {
             wsControl = new WsClient(url, protos, headers, new WsClient.Listener() {
                 @Override public void onOpen() {
                     controlRetryAt = 0L;
+                    android.util.Log.i(CTL_TAG, "control 通道已连接");
                     rec("control 通道已连接");
                 }
                 @Override public void onText(String text) {
@@ -1178,6 +1187,7 @@ public final class GatewayClient {
                 }
                 @Override public void onClosed(int code, String reason) {
                     wsControl = null;
+                    android.util.Log.i(CTL_TAG, "control 通道断开 code=" + code + " reason=" + reason);
                     rec("control 通道断开 code=" + code);
                     if (wantConnected) {
                         controlRetryAt = System.currentTimeMillis() + 4_000L;
@@ -1186,6 +1196,7 @@ public final class GatewayClient {
                 }
                 @Override public void onFailure(Throwable e) {
                     wsControl = null;
+                    android.util.Log.i(CTL_TAG, "control 通道失败: " + e);
                     if (wantConnected) {
                         controlRetryAt = System.currentTimeMillis() + 6_000L;
                         controlHandler.postDelayed(controlRetry, 6_000L);
@@ -1194,6 +1205,7 @@ public final class GatewayClient {
             });
         } catch (Throwable t) {
             wsControl = null;
+            android.util.Log.i(CTL_TAG, "control 通道建立失败: " + t);
             rec("! control 通道建立失败: " + t);
             controlRetryAt = System.currentTimeMillis() + 8_000L;
             controlHandler.postDelayed(controlRetry, 8_000L);
