@@ -269,10 +269,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 旧版浅色档用 PLAN_BG(#F2F2F7) 铺在 BG(#F2F2F7) 上，等于没有背景，提要像是浮在页面上。
         planView = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
         planView.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
-        planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
-                Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
-        planView.setElevation(Ui.dp(ctx, 2f));
+        // **改用纯色圆角底**（不再用 CardBg + elevation）：真机实测那一套在目标卡上渲染成
+        // "灰底 + 一圈深色描边"（用户报"一圈黑框啥玩意"），与其它白色卡片明显不一致。
+        // 纯色 SURFACE + 无阴影 = 与卡片同色、干净。
+        planView.setBackground(Ui.round(Ui.dp(ctx, Ui.R_CARD), Ui.SURFACE));
+        planView.setElevation(0f);
         planView.setMaxLines(8);
         planView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         planView.setVisibility(GONE);
@@ -284,7 +285,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planView.setLayoutParams(planLp);
         // 可点开看全文（原先 8 行封顶 + 省略号且不可点，用户报"显示有问题、点不开看全部"）
         planView.setClickable(true);
-        Ui.tap(planView);
+        // **不要用 Ui.tap()**：它会把 CardBg 的奶白渐变底**替换**成按压底色，
+        // 停按后未必复原 —— 真机表现为目标卡常年挂着一圈灰黑底（用户报"一圈黑框啥玩意"）。
+        // 这里保留卡片自己的底，只保留点击响应即可。
         // **就地向下展开**（点一下放大、再点收起）——不是底部弹窗、也不是系统弹窗
         planView.setOnClickListener(v -> { Ui.haptic(v); togglePlanExpand(); });
         addView(planView);
@@ -1271,10 +1274,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             planView.setTextColor(Ui.INK_SUB);
             // 必须与构造函数里那一份**逐参一致**（圆角 R_CARD + 奶白渐变体）：
             // 旧版这里写的是 12dp + SURFACE，切一次主题提要卡就悄悄变小、还从玻璃变成实心。
-            planView.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                    new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
-                    Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
-            planView.setElevation(Ui.dp(ctx, 2f));
+            planView.setBackground(Ui.round(Ui.dp(ctx, Ui.R_CARD), Ui.SURFACE));
+            planView.setElevation(0f);
         }
         if (preInputRow != null) preInputRow.setBackground(null);   // 透明（同顶栏修复）
         if (inputBarBg != null) {
