@@ -133,6 +133,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private int listBasePadBottom;
     /** 「回到底部」按钮的布局参数（下边距要跟悬浮层高度走）。 */
     private FrameLayout.LayoutParams toBottomFlp;
+    /** 「待发送」条容器（运行中排队的消息在这里显形；空则隐藏）。 */
+    private LinearLayout pendingBox;
     /** 顶部「目标 / 任务」提要条 */
     private TextView planView;
     /**
@@ -571,6 +573,52 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         ibLp.topMargin = Ui.dp(ctx, 4);
         ibLp.bottomMargin = Ui.dp(ctx, 12);
         bottomStack.addView(inputBar, ibLp);   // 加在悬浮层里（不再是根布局的兄弟节点）
+
+        // ---- 「待发送」条（2026-10-04 用户要求）：回合运行中把消息排进队列后，
+        // 桌面版会在输入框上方留一条待发送提示；App 原先只有一条 Toast，发完就"看不见了"，
+        // 用户无法确认自己那条到底排上没有。这里补上同一件事：
+        // 每排一条就加一行「待发送 · <内容>」，回合结束（队列被宿主消费）时整块收起。
+        //
+        // 插到 index 0 = 悬浮层最上面（就在输入区上方），与桌面版位置一致。
+        // 注：这是"本机记得的待发送"，不是宿主队列的权威快照 —— 权威快照要靠 control 连接的
+        // session-queue 帧（协议 §「排队消息同步」），那条连线另做。
+        pendingBox = Ui.col(ctx);
+        pendingBox.setVisibility(View.GONE);
+        bottomStack.addView(pendingBox, 0);
+    }
+
+    /**
+     * 追加一条「待发送」提示（运行中排队发送时调）。
+     *
+     * @param text 排队的内容（单行显示，过长省略）
+     */
+    public void addPendingSend(String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        postOnUi(() -> {
+            if (pendingBox == null) return;
+            TextView row = Ui.text(ctx, "待发送 · " + text.trim(), Ui.S_CAP1, Ui.INK_SUB, false);
+            row.setSingleLine(true);
+            row.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            row.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
+            row.setBackground(Ui.round(Ui.dp(ctx, 12), Ui.CHIP_BG));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+            lp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+            lp.topMargin = Ui.dp(ctx, 4);
+            row.setLayoutParams(lp);
+            pendingBox.addView(row);
+            pendingBox.setVisibility(View.VISIBLE);
+        });
+    }
+
+    /** 清空「待发送」条（回合结束 / 切会话 / 队列已被消费时调）。 */
+    public void clearPendingSends() {
+        postOnUi(() -> {
+            if (pendingBox == null) return;
+            pendingBox.removeAllViews();
+            pendingBox.setVisibility(View.GONE);
+        });
     }
 
     /** 更新底部「模型」chip 的文案（网关确认选中后调用；label 为空则回落到「模型」）。 */

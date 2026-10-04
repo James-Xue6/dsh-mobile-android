@@ -1292,6 +1292,8 @@ public final class MainActivity extends Activity implements
         // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
         refreshProjectChip();   // 「项目」chip 先按会话 cwd 填上
         requestModelsQuietly();
+        // 「待发送」是本机提示，不当成跨会话状态带着走（切进来先清空）
+        if (convo != null) convo.clearPendingSends();
     }
 
     private void showSettings() {
@@ -3958,6 +3960,8 @@ public final class MainActivity extends Activity implements
             // 显示就不会一直停在旧值。用量也在这时更新（token 统计刚结算）。
             if (screen == Screen.CHAT) requestModelsQuietly();
             refreshProjectChip();
+            // 队列已被宿主消费（排队的消息这时才真正发出）→ 收起「待发送」条
+            if (convo != null) convo.clearPendingSends();
         }
     }
 
@@ -4483,8 +4487,10 @@ public final class MainActivity extends Activity implements
         // **运行中发送 = 排队（与电脑端一致）**：帧里本来就有 mode:"queue"，宿主会把这条
         // 排进队列、当前回合结束后自动发出。这里给一句即时反馈，免得用户以为"没发出去"。
         // （队列内容的可视化要等 control 连接的 session-queue 帧，见 protocol §「排队消息同步」。）
-        if (running && !currentSessionId.isEmpty()) {
-            Toast.makeText(this, "已排队：当前回合结束后自动发出", Toast.LENGTH_SHORT).show();
+        if (running && !currentSessionId.isEmpty() && convo != null) {
+            // 运行中发送 = 排队。**不再只弹一条 Toast**（用户反馈"发完就看不见了"）：
+            // 在输入区上方留一条「待发送 · <内容>」，回合结束后自动收起。
+            convo.addPendingSend(text);
         }
         if (currentSessionId.isEmpty()) {
             // 新会话：先本地回显，等 sent 回来拿 sessionId
