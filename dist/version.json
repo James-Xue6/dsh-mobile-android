@@ -1,9 +1,9 @@
 {
-  "versionCode": 19,
-  "versionName": "0.86.2",
-  "notes": "紧急止血：彻底关闭周期重连（它会把连接搞成收不到本会话内容的状态：手机上卡片收不到、消息发不出去）。通知等网关插件侧广播方案落地再开",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.2/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.2/dist/dsh-mobile.apk",
+  "versionCode": 20,
+  "versionName": "0.86.3",
+  "notes": "最终版：目标卡(白卡/就地展开/顶部渐隐40dp/无卡不渐隐)；带图消息排版；历史翻页；发消息稳定(关闭周期重连)；排队修改与立即插入反馈；跨会话通知(网关插件广播)",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.3/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.3/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

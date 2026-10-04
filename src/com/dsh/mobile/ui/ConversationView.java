@@ -439,7 +439,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         //      列表顶部按其高度留白，且加一层**顶部渐隐**让文字"穿过去淡出"。
         topFade = new View(ctx);
         FrameLayout.LayoutParams tfLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 64));
+                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 40));
         tfLp.gravity = Gravity.TOP;
         topFade.setLayoutParams(tfLp);
         topFade.setBackground(buildTopFade(ctx));
@@ -454,7 +454,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planTopLp.topMargin = Ui.dp(ctx, 6);
         stage.addView(planView, planTopLp);
         planView.addOnLayoutChangeListener((v, l, tt, r, b, ol, ot, or, ob) -> {
-            boolean hasCard = v.getVisibility() == View.VISIBLE;
+            boolean hasCard = v.getVisibility() == View.VISIBLE && planFullText != null && !planFullText.trim().isEmpty();
             if (topFade != null) topFade.setVisibility(hasCard ? View.VISIBLE : View.GONE);
             int h = hasCard ? v.getHeight() : 0;
             if (!hasCard) {
@@ -867,7 +867,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     /** 依据目标卡当前高度设置列表顶部留白（+16dp 安全余量，避免首行被压住）。 */
     private void applyPlanPad() {
         if (planView == null || list == null) return;
-        boolean hasCard = planView.getVisibility() == View.VISIBLE;
+        boolean hasCard = planView.getVisibility() == View.VISIBLE && planFullText != null && !planFullText.trim().isEmpty();
         if (topFade != null) topFade.setVisibility(hasCard ? View.VISIBLE : View.GONE);
         int h = hasCard ? planView.getHeight() : 0;
         int want = (h > 0 ? h : 0) + listBasePadTop + Ui.dp(ctx, 4);

@@ -3007,6 +3007,7 @@ public final class MainActivity extends Activity implements
         String sid = frame.optString("sessionId", "");
         // 「需要处理」高优先级通知：审批是要人当场做决定的事，人不在这一页时必须响一下。
         // key 与下面建档用同一把（approval:approvalId），点通知进来才滚得到那张卡。
+        evtLogAdd("approval 帧 sid=" + shortSid(sid) + " global=" + frame.optBoolean("global", false));
         notifyPendingRequest(sid, approvalKey(frame), false);
         if (!sid.equals(currentSessionId)) {
             notifyPending(sid, 2, "有待审批");
@@ -3046,6 +3047,13 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onQuestionRequested(JSONObject frame) {
+        if (frame != null) {
+            String psid = frame.optString("sessionId", "");
+            evtLogAdd("question 帧 sid=" + shortSid(psid) + " global=" + frame.optBoolean("global", false)
+                    + (psid.equals(currentSessionId) ? " 当前会话" : " 非当前会话")
+                    + " notifyOn=" + (store != null && store.notifyEnabled())
+                    + " fg=" + com.dsh.mobile.notify.Notifier.isForeground());
+        }
         String sid = frame.optString("sessionId", "");
         // 同审批：提问也必须把人叫回来（高优先级，点通知直达那张待回答的卡）
         notifyPendingRequest(sid, questionKey(frame), true);
