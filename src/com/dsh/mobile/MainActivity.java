@@ -2732,6 +2732,9 @@ public final class MainActivity extends Activity implements
         String sid = frame.optString("sessionId", "");
         if (!sid.isEmpty() && !currentSessionId.isEmpty() && !sid.equals(currentSessionId)) return;
         lastTodos = frame.optJSONArray("todos");
+        // 探针：tasks 帧是否到达、条数、是否被会话过滤（真机 logcat 加密，只能走 App 内诊断）
+        evtLogAdd("tasks 帧 sid=" + shortSid(sid) + " n=" + (lastTodos == null ? "null" : String.valueOf(lastTodos.length()))
+                + (sid.equals(currentSessionId) ? "" : " 非当前会话"));
         // **必须继续喂给 applyTodos**：tasks / tasks-updated 以前是走 onOther 落到顶部
         // 「目标 / 任务」提要卡的；现在这条 kind 有了专用分支，不显式转一次就会把那张卡
         // 的更新路径截断（回归）。
