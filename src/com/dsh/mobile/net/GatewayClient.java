@@ -202,6 +202,22 @@ public final class GatewayClient {
     private final Runnable controlRetry = new Runnable() {
         @Override public void run() { openControlLane(); }
     };
+    /**
+     * 全局通道的**周期重连**：网关只在「连接建立」时做一次**不限会话**的待处理交互重放
+     * （真机日志 `interaction replay: trigger=connect channel=legacy filtered=false`），
+     * 新产生的提问/审批**不会**主动推给"不订阅"的连接。所以定期关掉重开一次，
+     * 把全局待处理集合刷成最新 —— 代价是一次很小的 WS 握手，换来 ≈30s 内可见的跨会话提醒。
+     */
+    private static final long CTL_REFRESH_MS = 30_000L;
+    private final Runnable controlRefresh = new Runnable() {
+        @Override public void run() {
+            if (!wantConnected) return;
+            closeControlLane();
+            controlRetryAt = 0L;
+            openControlLane();
+            controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
+        }
+    };
     private String url = "";
     private String token = "";
     private String pairingCode = "";
@@ -1237,11 +1253,21 @@ public final class GatewayClient {
         // 这条连接**永不 subscribe**，因此能收到**所有会话**的 approval/question 帧。
         // 唯一的纪律：这条线上收到的帧只用于"提醒/角标/待处理栏"，绝不重复驱动当前会话的 UI
         // （见 dispatchControl 的白名单）。
+        // **后台线程建连**：WsClient 构造里是阻塞式握手，第二条连接若挂在隧道上，
+        // 会把 hello 处理线程与周期刷新任务一起卡死 —— 真机实测表现就是
+        // `[control 通道]` 永远停在"准备连接"，既不连上也不重试。
+        ctlStatus = "连接中…";
+        final List<String> fProtos = protos;
+        final Map<String, String> fHeaders = headers;
+        new Thread(new Runnable() {
+            @Override public void run() {
         try {
-            wsControl = new WsClient(url, protos, headers, new WsClient.Listener() {
+            WsClient c = new WsClient(url, fProtos, fHeaders, new WsClient.Listener() {
                 @Override public void onOpen() {
                     controlRetryAt = 0L;
                     ctlStatus = "已连接 ✓";
+                    controlHandler.removeCallbacks(controlRefresh);
+                    controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
                     rec("control 通道已连接");
                 }
                 @Override public void onText(String text) {
@@ -1265,18 +1291,22 @@ public final class GatewayClient {
                     }
                 }
             });
+            synchronized (GatewayClient.this) { wsControl = c; }
+            ctlStatus = "已发起连接（等握手）";
         } catch (Throwable t) {
-            wsControl = null;
             ctlStatus = "建立失败: " + t;
             rec("! control 通道建立失败: " + t);
             controlRetryAt = System.currentTimeMillis() + 8_000L;
             controlHandler.postDelayed(controlRetry, 8_000L);
         }
+            }
+        }, "ctl-lane").start();
     }
 
     /** 关掉 control 连接（disconnect / 换端点时调）。 */
     private void closeControlLane() {
         controlHandler.removeCallbacks(controlRetry);
+        controlHandler.removeCallbacks(controlRefresh);
         WsClient c = wsControl;
         wsControl = null;
         if (c != null) {
