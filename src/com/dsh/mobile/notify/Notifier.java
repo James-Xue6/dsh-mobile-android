@@ -40,7 +40,12 @@ public final class Notifier {
 
     // ---------------------------------------------------------------- 渠道
     /** 「需要处理」：审批 / 提问。高优先级 —— 会弹横幅（heads-up）、有声音/震动。 */
-    public static final String CH_PENDING = "dsh_pending";
+    // [P0] 换新渠道 id：Android 语义下"渠道重要性创建后只能由用户改"，
+    // 真机实测 dsh_pending 的 mImportance 已被降为 3(DEFAULT) → 不弹横幅（用户看不到）。
+    // 新 id 会以 IMPORTANCE_HIGH 重新创建，横幅/响铃恢复；旧渠道留着不影响。
+    public static final String CH_PENDING = "dsh_pending_v2";
+    /** 常驻"保持后台接收"用：独立渠道，避免用户关掉"进行中"时连带失去后台保活。 */
+    public static final String CH_SERVICE = "dsh_service";
     /** 「任务完成」：回合结束 / 任务跑完。默认优先级 —— 有声音但不弹横幅。 */
     public static final String CH_DONE = "dsh_done";
     /** 「进行中」：正在执行的状态 + 前台服务常驻通知。低优先级、静默。 */
@@ -107,6 +112,8 @@ public final class Notifier {
         running.enableVibration(false);
 
         nm.createNotificationChannel(pending);
+        nm.createNotificationChannel(new NotificationChannel(
+                CH_SERVICE, "后台保持接收", NotificationManager.IMPORTANCE_LOW));
         nm.createNotificationChannel(done);
         nm.createNotificationChannel(running);
         channelsReady = true;

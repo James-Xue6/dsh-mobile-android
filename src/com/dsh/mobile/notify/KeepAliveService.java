@@ -50,7 +50,11 @@ public final class KeepAliveService extends Service {
         try {
             Store store = new Store(ctx);
             // 通知总开关关掉后，常驻服务只是白占一条通知栏：一并停掉
-            want = store.keepAlive() && store.notifyEnabled() && Notifier.isConnected();
+            // [M3] 原判据含 Notifier.isConnected() → 连接一进非 READY 就 stopService，进程随即被
+        // 冻结；恢复时 Android 12+ 禁止后台 startForegroundService（异常被吞）→ FGS 永久消失、
+        // 后台彻底收不到提醒（测试工程师实测结论 A，是"偶发成功、多数失败"的主因）。
+        // 改为只看"用户是否希望后台接收"：断线期间保持常驻（文案走"等待连接/正在重连"分支）。
+        want = store.keepAlive() && store.notifyEnabled();
         } catch (Throwable t) {
             want = false;
         }
