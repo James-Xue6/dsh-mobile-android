@@ -1,91 +1,59 @@
-# 下一版更新指南（v0.9x 计划）
+# 下一步计划（NEXT-UPDATE）
 
-> 本文件由用户 2026-10-04 口头确认的方向整理成可执行清单；
-> 能做的直接做，做不动的就留在这里，作为下一版的实施依据。
+> 状态标记：`[x]` 已完成并验证 / `[~]` 部分完成 / `[ ]` 待办。
+> 最近更新：2026-10-04（v0.86.4 发版后核对）。
 
-## 一、底部「生成物」按钮（新功能 · 用户明确要求）
+## 一、已完成（保留记录，避免重复讨论）
 
-**需求**：在底部 chip 行的 **思考 / 模型** 旁边再加一枚 **「生成物」**；
-点开列出本次会话产出的文件，每个文件可以 **直接打开** 或 **下载**。
+- [x] **跨会话/后台通知** —— 正解在**服务端**：网关插件新增 `hasAnyInteractionClient()`，放宽提问/审批两道 waterfall 门；
+  并让被 `filterSessionId` 过滤的连接照样收到（带 `global:true`，字段最小化）。**已发版 v0.86.4，用户实测通过。**
+  - 作废的三条客户端 hack（勿重提）：第二条 WS 连接（握手永远超时）/ `unsubscribe` 窗口（网关不推新交互）/ 周期强制重连（会毁输入与回答）。
+- [x] **前台服务不再断线自杀** —— `KeepAliveService.sync()` 去掉 `Notifier.isConnected()` 判据。
+- [x] **无界面时帧不再被静默丢弃** —— `GatewayClient.bgInteractionHook`（进程级通知钩子）。
+- [x] **通知渠道** —— `dsh_pending_v2`(HIGH) + 独立 `dsh_service`；通知失败可诊断（`lastPostError`/`lastPostAt`）；
+  设置页三行自查 + **渠道级深链**。
+- [x] **通知 id 槽位** 200 → 4000；`approvalKey/questionKey` 收成唯一实现。
+- [x] **卡片灰框** —— `Ui.CardBg` 自绘渐变在长卡片上整片压暗约 26% → 提问/审批卡改用框架 `Ui.cardGrad()`（像素证据）。
+- [x] **卡片底部按钮可达** —— 按钮移出滚动区；**卡片内部滚动位置**跨重绑保留（`ChatItem.cardScrollY`）。
+- [x] **提问卡内输入框草稿丢失** —— TextWatcher 边打边写回 `it.typed`。
+- [x] **点输入框后卡片乱滚** —— 内容区高度改固定值 + 键盘弹起时**只最小幅度滚外层列表**、不碰卡片内部滚动。
+- [x] **独立输入页方案** —— 曾实现，按用户要求**已撤回**（勿重提）。
+- [x] **交付纪律** —— 未验证透不发版；先贴 APK 给用户验，通过后再 `release.ps1`。
+- [x] **版本命名倒挂** —— v0.86.4 = versionCode 21，已按"只增不减"继续；后续一律走 `release.ps1`。
 
-**为什么与电脑端一致**：电脑端能拿到的就是"这条会话工作目录里的产物"，
-移动端保持同样范围即可 —— **只允许下载生成物/完成物，其他文件一律不下**。
+## 二、待办（按优先级）
 
-**实现要点（协议已具备）**：
-- 目录列举：`file-list { sessionId, path? }` → 返回该会话工作目录内的一层文件与文件夹
-- 单文件下载：`file-download-open { sessionId, path, requestId }` → `file-download-opened`
-  → 再 `file-download-read { transferId, offset }` 分块拉取；结束用 `file-download-cancel`
-- UI：chip 行新增「生成物」→ 底部 sheet（复用现有 ModelSheet 的安全配方：
-  不透明面板底 + 抓柄 + 可滚动 + 不套窗口模糊）→ 列表项右侧两个动作：**打开 / 下载**
-- 「打开」用系统 Intent 预览（`FileProvider` + `ACTION_VIEW`，按 MIME 分发）
-- 范围纪律：**只列/只下会话工作目录内的普通文件**，不提供任意路径访问
+### P0 · 网关插件补丁的工程化（最紧急，会静默失效）
+- [ ] 两处改动（放宽门 + 跨会话广播）**只活在 `node_modules`**，网关升级/重装即失效。
+  - 固化：`pc-plugin/patches/` 下加幂等 `patch-gateway-crosssession.ps1`（字符串锚点、支持 `--revert`），并让 `install.ps1` 调用；
+  - 备份现位于 `lib\index.mjs.bak-crosssession`；
+  - 补日志便于定位：`interaction replay` 打印 `session=`；门未通过时打印 `skipped (no mobile client)`。
 
-**验收**：手机在外面（公网）→ 点「生成物」→ 看到 xlsx/pptx → 点下载能存到手机；点打开能用系统应用预览。
+### P1 · 通知在荣耀/华为上的顽固点
+- [~] **渠道降级**：App 申请的 `IMPORTANCE_HIGH` 被 ROM 降为 DEFAULT（`mOriginalImp=4` → `mImportance=3`，`mUserLockedFields=0`）。
+  - 已做：换新渠道 id + 设置页读出实况 + 渠道级深链；
+  - 待做：自查行给出**可执行步骤**（"点这里 → 找到「需要处理」→ 打开横幅与响铃"）；
+  - 待做：降低对系统横幅的依赖 —— App 内常驻待处理栏/角标（已有 `pendingBanner` / `pendingJumpTarget` 可复用）。
+  - 结论：**换台荣耀/华为会重演**，只能引导 + 兜底，不能靠代码强行提权。
+- [ ] **不建议 `setFullScreenIntent`**：Android 14+ 默认只授通话/闹钟类；且只在锁屏/息屏全屏，覆盖不了"正在用手机但没看该会话"的主场景。
 
-## 二、交付物的落点（本次踩坑的结论）
+### P1 · 仍缺真机验证的两项（需能造出"进程活着但无界面"）
+- [ ] V2：界面被系统回收后，M1 钩子路径是否仍弹通知。本机 `always_finish_activities` **不销毁 Activity**（实测）。
+  - 可选：临时调试包提供"主动 finish()"入口（**发布包必须保持不可达**），或找 ROM 上只杀 Activity 不杀进程的办法。
+- [ ] V3 手机侧：断网/重连后 pending 提醒是否重新出现（**网关侧已验证**会补发：`interaction replay … questions=1`）。
 
-- 网关的文件下载**只服务"该会话工作目录内"的文件**（安全边界，保留）
-  → 所以**所有交付物必须写进会话工作目录**，否则手机下载会被拒
-  （真机踩坑：把 APK 放在工具工作目录、与会话记录的工作目录不一致 → 报"不在工作目录内"）
-- App 侧要把失败原因写清楚：区分「文件不在会话目录内」与「网络不可用」，
-  避免用户误判成"外网不能下载文件"（这正是本次的误解来源）
+### P2 · 产品功能（用户已点名）
+- [ ] **底部「生成物」按钮**：列本次会话产出文件 + 直接打开/下载；**只允许下载生成物，其他不下**。
+  - 协议已具备：`file-list` / `file-download-open` / `file-download-read`；"打开"走 `FileProvider` + `ACTION_VIEW`；
+  - UI 复用现有安全 sheet 配方（不透明面板底 + 抓柄 + 可滚动）。
+- [ ] 助手消息里的 **markdown 表格**未渲染（当前按纯文本显示）。
 
-## 三、排队消息「立即插入（steer）」卡住（待修）
+### P2 · 性能与数据一致性
+- [ ] 网关日志 `query ok: models` 每秒数十次 → 排查客户端是否在轮询模型列表。
+- [ ] 任务项渲染仍缺真实数据：宿主对移动端的 `tasks` 查询返回 `todos:null`（网关 `projection forwarded: key=todos` 在推事件）。
 
-- 现状：`queue-update { action: "steer" }` 字段正确；但条目若已被消费，
-  宿主返回 `session/steer-unavailable` / `session/queue-item-not-found`，App 没有反馈 → 看起来"卡住"
-- 修法：点击后**乐观移除**该条 + 明确 Toast；收到错误码时回滚并说明原因
+## 三、交付与运维提醒
 
-## 四、跨会话提醒的最终形态（当前折中）
-
-- 已试过并放弃的三条客户端路线：
-  1. 第二条 WS 连接（`X-DSH-Channel: control`）→ **握手永远完不成**（实测 14s 超时，LAN 同样）
-  2. 主连接 `unsubscribe` 窗口（不订阅=收所有会话）→ **网关不推新交互**，只推元数据帧
-  3. 周期强制重连 → **能收到**（连接建立时的全量重放）但会反复重建界面，
-     导致"打字被清空 / 回答提问被丢弃（我收不到你的消息）"→ **已关闭**
-- 结论：客户端 hack 的代价大于收益；**正确做法在网关侧**
-  让新产生的 approval/question 也广播给"未过滤"的连接（现在只广播 session-queue 这类元数据）
-  → **需要改插件并重启一次 DSH**，等用户确认时机
-
-## 五、其他待办
-
-- 助手消息里的 **markdown 表格** 未渲染（当前按纯文本显示）
-- 任务项渲染缺真实数据验证：宿主对移动端的 `tasks` 查询返回 `todos: null`
-  （网关日志显示 `projection forwarded: key=todos` 在推事件，两条路径不一致）
-- 已发布版本 0.85 / 0.86 / 0.87 是否撤回：待用户确认（回「撤」则删 tag + 回滚 `dist/version.json`）
-
-## 六、交付纪律（本次教训）
-
-- **未验证透不发版**：不往仓库/CDN 发；改为"构建好贴到对话里给用户点下载"
-- 真机验证优先：能用 App 内诊断（`[事件流]` / `[全局视图]` / `[最近一次队列操作]`）就不要猜
-- 荣耀手机 logcat 加密，诊断必须做进 App 再用 uiautomator 读取
-
----
-
-## 下一轮优化（2026-10-04 收口后新增）
-
-### 1. 通知（本机荣耀的顽固点）
-- **渠道降级**：App 申请的 `IMPORTANCE_HIGH` 被 ROM 降为 DEFAULT（`mOriginalImp=4` → `mImportance=3`，`mUserLockedFields=0`）。
-  换新渠道 id 只能拿一次初始值，**换台荣耀/华为会重演** → 自查行要给出"点这里 → 找到需要处理 → 打开横幅与响铃"的可执行步骤；
-  并降低对系统横幅的依赖：App 内常驻待处理栏/角标（已有 `pendingBanner` / `pendingJumpTarget`）。
-- **不建议 `setFullScreenIntent`**：Android 14+ 默认只授通话/闹钟类，且只在锁屏/息屏全屏，覆盖不了"正在用手机但没看该会话"的主场景。
-
-### 2. 仍缺真机验证的两项（需能造出"进程活着但无界面"）
-- V2：界面被系统回收后，M1 钩子路径是否仍弹通知。本机 `always_finish_activities` 不销毁 Activity。
-  可选：临时调试包提供"主动 finish()"入口（发布包必须保持不可达），或找 ROM 上只杀 Activity 不杀进程的办法。
-- V3 手机侧：断网/重连后 pending 提醒是否重新出现（网关侧已验证会补发）。
-
-### 3. 网关插件补丁的工程化（重要）
-- 跨会话广播 + 放宽门两处改动**只活在 `node_modules`**，网关一升级即静默失效。
-- 按既有样式固化：`pc-plugin/patches/` 下加幂等 `patch-gateway-crosssession.ps1`（字符串锚点、可 `--revert`），并让 `install.ps1` 调用它。
-- 建议补日志：`interaction replay` 打印 `session=`；门未通过时打印 `skipped (no mobile client)`。
-
-### 4. 产品功能（用户已点名）
-- **底部「生成物」按钮**：列本次会话产出文件 + 直接打开/下载；**只允许下载生成物，其他不下**。
-  协议已具备：`file-list` / `file-download-open` / `file-download-read`；打开走 `FileProvider` + `ACTION_VIEW`。
-- 助手消息里的 **markdown 表格**未渲染（当前按纯文本显示）。
-
-### 5. 性能与杂项
-- 网关日志里 `query ok: models` 每秒数十次 → 排查客户端是否在轮询模型列表。
-- 任务项渲染仍缺真实数据：宿主对移动端的 `tasks` 查询返回 `todos:null`（网关 `projection forwarded: key=todos` 在推事件）。
-- 版本命名倒挂：`v0.87`(code 17) 比 `v0.86.1/2/3/4`(18/19/20/21) 旧 → 统一走 `release.ps1`（versionCode 只增不减）。
+- **发版流程**：`pwsh -File .\release.ps1 -Version X.Y[.Z] -Notes "…"`（自动 +1 versionCode、写 `dist/version.json`、打 tag、刷 CDN）。
+- **网关升级后**：先检查 `lib\index.mjs` 是否还含 `hasAnyInteractionClient`；没有就重放补丁（P0 项落地后应自动）。
+- **未验证不得写成已修复**；环境造不出条件时如实标注"未验证"。
