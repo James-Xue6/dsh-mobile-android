@@ -1896,6 +1896,16 @@ public final class MainActivity extends Activity implements
             sb.append(planTodos);
         }
         convo.setPlan(sb.toString());
+        // 结构化渲染（完成=打钩+删除线置灰、进行中=旋转指示、待办=空心圈）
+        java.util.List<String[]> rows = new ArrayList<>();
+        if (lastTodos != null) {
+            for (int i = 0; i < lastTodos.length(); i++) {
+                org.json.JSONObject o = lastTodos.optJSONObject(i);
+                if (o == null) continue;
+                rows.add(new String[] { o.optString("content", ""), o.optString("status", "pending") });
+            }
+        }
+        convo.setPlanRich(planGoal, rows);
     }
 
     /** 兼容 todo/write 事件与 tasks 查询（都是 {todos:[...]}）。 */

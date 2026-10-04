@@ -729,6 +729,69 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
     }
 
+    /** 目标 / 任务的渲染数据（结构化，供"完成划掉、进行中转圈"用）。 */
+    private String planGoalText = "";
+    private String[] planTaskContents = new String[0];
+    private String[] planTaskStatuses = new String[0];
+    private int planSpinFrame = 0;
+    private static final String[] PLAN_SPIN = { "\u25D0", "\u25D3", "\u25D1", "\u25D2" };
+    private final android.os.Handler planSpinHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable planSpinTick = new Runnable() {
+        @Override public void run() {
+            planSpinFrame = (planSpinFrame + 1) % PLAN_SPIN.length;
+            renderPlanRich();
+            if (hasPlanInProgress()) planSpinHandler.postDelayed(this, 320L);
+        }
+    };
+    private boolean hasPlanInProgress() {
+        for (String s : planTaskStatuses) if ("in_progress".equals(s)) return true;
+        return false;
+    }
+
+    /** 结构化设置目标 / 任务：完成=打钩+删除线置灰，进行中=旋转指示，待办=空心圈。 */
+    public void setPlanRich(final String goal, final java.util.List<String[]> todos) {
+        postOnUi(() -> {
+            java.util.ArrayList<String> cs = new java.util.ArrayList<>();
+            java.util.ArrayList<String> ss = new java.util.ArrayList<>();
+            if (todos != null) for (String[] td : todos) {
+                if (td == null || td.length < 2) continue;
+                cs.add(td[0]); ss.add(td[1] == null ? "pending" : td[1]);
+            }
+            planGoalText = goal == null ? "" : goal;
+            planTaskContents = cs.toArray(new String[0]);
+            planTaskStatuses = ss.toArray(new String[0]);
+            renderPlanRich();
+            planSpinHandler.removeCallbacks(planSpinTick);
+            if (hasPlanInProgress()) planSpinHandler.postDelayed(planSpinTick, 320L);
+        });
+    }
+
+    /** 按状态拼装卡片文本（用 Spannable 给完成项加删除线+置灰）。 */
+    private void renderPlanRich() {
+        if (planView == null) return;
+        if (planGoalText.isEmpty() && planTaskContents.length == 0) {
+            planView.setVisibility(View.GONE);
+            return;
+        }
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        if (!planGoalText.isEmpty()) sb.append("\u76EE\u6807\uFF1A").append(planGoalText);
+        for (int i = 0; i < planTaskContents.length; i++) {
+            if (sb.length() > 0) sb.append((char) 10);
+            String st = planTaskStatuses[i];
+            boolean done = "completed".equals(st);
+            String icon = done ? "\u2713 " : ("in_progress".equals(st) ? (PLAN_SPIN[planSpinFrame] + " ") : "\u25CB ");
+            int start = sb.length();
+            sb.append(icon).append(planTaskContents[i] == null ? "" : planTaskContents[i]);
+            if (done) {
+                sb.setSpan(new android.text.style.StrikethroughSpan(), start, sb.length(), 0);
+                sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.INK_FAINT), start, sb.length(), 0);
+            }
+        }
+        planFullText = sb.toString();
+        planView.setText(sb);
+        planView.setVisibility(View.VISIBLE);
+    }
+
     /** 目标卡是否处于"展开（完整列表）"状态。 */
     private boolean planExpanded = false;
     /** 宿主当前的简洁模式（收起时用它决定留 1 行还是 8 行）。 */
