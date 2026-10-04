@@ -54,6 +54,13 @@ public final class GatewayClient {
         default void onModelSelected(JSONObject frame) { }
 
         /**
+         * 任务列表（PROTOCOL §6）：{@code {todos:[{content,status}]}}，status ∈
+         * completed / in_progress / pending；{@code todos:null} 表示该会话没写过任务。
+         * `tasks` 与 `tasks-updated` 共用这一个回调。
+         */
+        default void onTasks(JSONObject frame) { }
+
+        /**
          * 用量（PROTOCOL §5 context-usage）：
          * {@code {tokenUsage:{totals:{…}}, contextPressure:{contextWindow,pressureTokens,surfaceTokens}}}
          */
@@ -730,6 +737,9 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /** 任务列表基线（进会话时拉一次；之后由 tasks-updated 实时推）。 */
+    // requestTasks 在下方（原本就有），这里不再重复定义。
+
     public void requestHistory(String sessionId, Long beforeSeq, int historyFormatVersion) {
         try {
             JSONObject o = base("history");
@@ -1035,6 +1045,10 @@ public final class GatewayClient {
                 break;
             case "context-usage":
                 l.onContextUsage(f);
+                break;
+            case "tasks":
+            case "tasks-updated":
+                l.onTasks(f);
                 break;
             case "approval-resolved":
             case "question-resolved":

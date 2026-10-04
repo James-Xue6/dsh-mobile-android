@@ -194,6 +194,8 @@ public final class MainActivity extends Activity implements
     private org.json.JSONObject lastUsage = null;
     /** 当前思考等级（select-model 确认后写入；空 = 未知）。 */
     private String lastEffort = "";
+    /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
+    private org.json.JSONArray lastTodos = null;
 
     // ---------------------------------------------------------------- 通知（见 com.dsh.mobile.notify.Notifier）
     //
@@ -2475,6 +2477,7 @@ public final class MainActivity extends Activity implements
         pendingModelRequest = false;
         gw.requestModels(currentSessionId);
         gw.requestContextUsage(currentSessionId);   // 「用量」chip 的数据源
+        gw.requestTasks(currentSessionId);         // 「任务」chip 的基线（之后由 tasks-updated 推）
     }
 
     // ---- 思考等级 / 用量 / 项目（底部 chip 行的另外三枚）
@@ -2593,15 +2596,84 @@ public final class MainActivity extends Activity implements
         Toast.makeText(this, sb.length() == 0 ? "暂无用量数据" : sb.toString(), Toast.LENGTH_LONG).show();
     }
 
-    /** 点「项目」chip：把该会话工作区的完整路径摊开（切换工作区协议里没有，只做展示）。 */
+    /**
+     * 点「项目」chip：**与豆包同逻辑** —— 列出所有可创建会话的工作区，选一个就
+     * 直接在新工作区开一条对话（复用 {@link #onNewTaskHere}，它会把目标工作区挂到 pending，
+     * 等用户敲第一句时带着 workspaceId/cwd 发出，正好对应宿主 sessions.create）。
+     *
+     * <p>协议里**没有**「把已有会话挪到别的工作区」这种操作（工作区只在新建时确定），
+     * 所以这里给的是"换项目 = 在新项目里开新对话"，而不是原地切换。
+     */
     @Override
     public void onProjectTap() {
-        String path = convo == null ? "" : convo.projectPath();
-        if (path == null || path.isEmpty()) {
-            Toast.makeText(this, "这条会话没有工作目录信息", Toast.LENGTH_SHORT).show();
+        String curPath = convo == null ? "" : convo.projectPath();
+        final List<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
+        final Map<String, WorkspaceGroup> byKey = new HashMap<>();
+        String curKey = "";
+        for (Object o : buildRows()) {
+            if (!(o instanceof WorkspaceGroup)) continue;
+            WorkspaceGroup g = (WorkspaceGroup) o;
+            if (!g.canCreateSession()) continue;   // 无路径的组（IM / 其他）建不了会话
+            String key = pathKey(g.path);
+            opts.add(new com.dsh.mobile.ui.ModelSheet.Opt(key,
+                    g.label, g.count + " 个对话 · 点这里在新项目里开对话"));
+            byKey.put(key, g);
+            if (!curPath.isEmpty() && key.equals(pathKey(curPath))) curKey = key;
+        }
+        if (opts.isEmpty()) {
+            Toast.makeText(this, "还没有可用工作区（等会话列表刷新后再试)", Toast.LENGTH_SHORT).show();
             return;
         }
-        Toast.makeText(this, path, Toast.LENGTH_LONG).show();
+        com.dsh.mobile.ui.ModelSheet.showOptions(this, "切换项目",
+                "选中即在那个工作区新建对话", opts, curKey, key -> {
+                    WorkspaceGroup g = byKey.get(key);
+                    if (g != null) onNewTaskHere(g);
+                });
+    }
+
+    // ---- 任务列表（PROTOCOL §6 tasks / tasks-updated；只读展示）
+
+    /** 任务帧：刷「任务」chip 的进度。 */
+    @Override
+    public void onTasks(org.json.JSONObject frame) {
+        if (frame == null) return;
+        // 只认当前会话的（订阅期间也可能收到别的会话的更新）
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !currentSessionId.isEmpty() && !sid.equals(currentSessionId)) return;
+        lastTodos = frame.optJSONArray("todos");
+        // **必须继续喂给 applyTodos**：tasks / tasks-updated 以前是走 onOther 落到顶部
+        // 「目标 / 任务」提要卡的；现在这条 kind 有了专用分支，不显式转一次就会把那张卡
+        // 的更新路径截断（回归）。
+        applyTodos(lastTodos);
+        if (convo != null) {
+            int total = lastTodos == null ? 0 : lastTodos.length();
+            int done = 0;
+            for (int i = 0; i < total; i++) {
+                org.json.JSONObject t = lastTodos.optJSONObject(i);
+                if (t != null && "completed".equals(t.optString("status", ""))) done++;
+            }
+            convo.setTasksProgress(done, total);
+        }
+    }
+
+    /** 点「任务」chip：展开该会话的 todo 列表（只读；任务由 Agent 的 todo_write 维护）。 */
+    @Override
+    public void onTasksTap() {
+        if (lastTodos == null || lastTodos.length() == 0) {
+            Toast.makeText(this, "这条会话还没有任务列表", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final java.util.List<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
+        for (int i = 0; i < lastTodos.length(); i++) {
+            org.json.JSONObject t = lastTodos.optJSONObject(i);
+            if (t == null) continue;
+            String status = t.optString("status", "pending");
+            String mark = "completed".equals(status) ? "✓ 已完成"
+                    : ("in_progress".equals(status) ? "● 进行中" : "○ 待办");
+            opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("todo:" + i, t.optString("content", ""), mark));
+        }
+        com.dsh.mobile.ui.ModelSheet.showOptions(this, "任务列表",
+                "由 Agent 的 todo_write 维护（App 只读）", opts, "", id -> { });
     }
 
     /** token 数的可读写法（1.2k / 3.4M）。 */

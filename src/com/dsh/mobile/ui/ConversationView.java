@@ -54,8 +54,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onPickEffort();
         /** 点「用量」chip：看 token/上下文占用详情（context-usage）。 */
         void onUsageTap();
-        /** 点「项目」chip：展示该会话的工作区/项目完整路径。 */
+        /** 点「项目」chip：列出可创建会话的工作区，选中即在新工作区开对话（豆包同逻辑）。 */
         void onProjectTap();
+        /** 点「任务」chip：展开该会话的 todo 列表。 */
+        void onTasksTap();
         void onVoiceInput();
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
@@ -102,6 +104,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private TextView usageChip;
     /** 「项目」chip（当前会话的工作区/项目名）。 */
     private TextView projectChip;
+    /** 「任务」chip（该会话 todo 进度；无任务时隐藏）。 */
+    private TextView taskChip;
     /** 当前模型名（网关确认后写入；空 = 还没拿到）。 */
     private String modelLabel = "";
     private String effortLabel = "";
@@ -127,6 +131,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private static final float FADE_H = 132f;
     /** 列表底部留白的"呼吸量"（叠在悬浮层高度之上，见 bottomStack 的布局监听） */
     private int listBasePadBottom;
+    /** 「回到底部」按钮的布局参数（下边距要跟悬浮层高度走）。 */
+    private FrameLayout.LayoutParams toBottomFlp;
     /** 顶部「目标 / 任务」提要条 */
     private TextView planView;
     /**
@@ -347,12 +353,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         toBottom = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_arrow_down,
                 Ui.BRAND_FILL, Ui.ON_BRAND, 20f, 44f);
         toBottom.setElevation(Ui.dp(ctx, 6));
-        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(Ui.dp(ctx, 44), Ui.dp(ctx, 44));
-        flp.gravity = Gravity.BOTTOM | Gravity.END;
-        flp.rightMargin = Ui.dp(ctx, 14);
-        // 2026-10-04 悬浮输入条：按钮要浮在输入胶囊**之上**，所以下边距让开输入区高度
-        flp.bottomMargin = Ui.dp(ctx, 92);
-        toBottom.setLayoutParams(flp);
+        toBottomFlp = new FrameLayout.LayoutParams(Ui.dp(ctx, 44), Ui.dp(ctx, 44));
+        toBottomFlp.gravity = Gravity.BOTTOM | Gravity.END;
+        toBottomFlp.rightMargin = Ui.dp(ctx, 14);
+        // 下边距在「悬浮层高度确定后」由布局监听写成 stackH + 12dp ——
+        // 否则「N 子智能体」入口会把按钮盖住（2026-10-04 用户报的遮挡）。
+        toBottomFlp.bottomMargin = Ui.dp(ctx, 92);
+        toBottom.setLayoutParams(toBottomFlp);
         toBottom.setVisibility(GONE);
         toBottom.setOnClickListener(v -> {
             // 超长会话上 smoothScroll 要滚很久，这里直接跳到底，并立刻收起按钮
@@ -360,7 +367,6 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             atBottom = true;
             toBottom.setVisibility(GONE);
         });
-        listWrap.addView(toBottom);
 
         // ---- 悬浮舞台（2026-10-04 用户要求：输入条做成悬浮，文字从它后面穿过去）
         //
@@ -373,6 +379,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         stage.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         stage.addView(listWrap);
+        // 「回到底部」按钮改挂到舞台层（列表之上、悬浮层之下按添加顺序 == 悬浮层之上），
+        // 这样它的位置能跟着悬浮层高度走，不会被「N 子智能体」入口盖住。
+        stage.addView(toBottom, toBottomFlp);
 
         // 底部渐隐（2026-10-04 用户报「后面和前面重叠看不清楚」）：
         // 悬浮输入条下方必须让内容**淡出**，否则消息文字硬撞胶囊、两层字糊在一起。
@@ -403,10 +412,19 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             int h = v.getHeight();
             if (h <= 0) return;
             int want = h + listBasePadBottom;
-            if (want == list.getPaddingBottom()) return;
-            list.setPadding(list.getPaddingLeft(), list.getPaddingTop(),
-                    list.getPaddingRight(), want);
-            list.setClipToPadding(false);
+            if (want != list.getPaddingBottom()) {
+                list.setPadding(list.getPaddingLeft(), list.getPaddingTop(),
+                        list.getPaddingRight(), want);
+                list.setClipToPadding(false);
+            }
+            // 「回到底部」按钮也跟着抬到悬浮层上方（否则被「N 子智能体」入口盖住）
+            if (toBottomFlp != null) {
+                int mb = h + Ui.dp(ctx, 10);
+                if (toBottomFlp.bottomMargin != mb) {
+                    toBottomFlp.bottomMargin = mb;
+                    if (toBottom != null) toBottom.setLayoutParams(toBottomFlp);
+                }
+            }
         });
 
         // ---- 输入框上方：子智能体入口 + 只读说明
@@ -529,10 +547,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         effortChip = chip("思考", v -> { Ui.haptic(v); host.onPickEffort(); });
         // 用量（上下文占用；点一下看详情）
         usageChip = chip("用量", v -> { Ui.haptic(v); host.onUsageTap(); });
+        // 任务（该会话的 todo 列表；没有任务时整枚隐藏）
+        taskChip = chip("任务", v -> { Ui.haptic(v); host.onTasksTap(); });
         chipRow.addView(projectChip);
         chipRow.addView(modelChip);
         chipRow.addView(effortChip);
         chipRow.addView(usageChip);
+        chipRow.addView(taskChip);
         chipScroll.addView(chipRow);
         LinearLayout.LayoutParams csLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -581,6 +602,22 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
     /** 供宿主在用户点「项目」时取完整路径。 */
     public String projectPath() { return projectFullPath; }
+
+    /**
+     * 「任务」chip：传该会话的 todo 进度（已完成/总数）。
+     *
+     * @param done  已完成条数
+     * @param total 总条数；{@code 0} = 该会话没有任务列表 → 整枚隐藏（不占横滑空间）
+     */
+    public void setTasksProgress(int done, int total) {
+        if (taskChip == null) return;
+        if (total <= 0) {
+            taskChip.setVisibility(View.GONE);
+            return;
+        }
+        taskChip.setVisibility(View.VISIBLE);
+        taskChip.setText("任务 · " + done + "/" + total);
+    }
 
     public String draftText() { return input.getText().toString(); }
     public void setDraft(String s) { input.setText(s == null ? "" : s); }
@@ -1069,7 +1106,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         setBackgroundColor(Ui.BG);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
         if (modelChip != null) {
-            for (TextView c : new TextView[] { projectChip, modelChip, effortChip, usageChip }) {
+            for (TextView c : new TextView[] { projectChip, modelChip, effortChip, usageChip, taskChip }) {
                 if (c == null) continue;
                 c.setTextColor(Ui.INK_SUB);
                 c.setBackground(Ui.pill(Ui.CHIP_BG));   // chip 底色随主题
