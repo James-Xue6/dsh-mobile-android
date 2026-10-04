@@ -1,9 +1,9 @@
 {
-  "versionCode": 22,
-  "versionName": "0.86.5",
-  "notes": "连接生命周期专项修复：心跳25s->15s、后台判死75s->45s、前台判死50s->30s、短命罚时上限60s->30s、退避序列收紧；切回前台立刻存活检查(实测重连2.39s，改前41.96s)；内网死线路立即切公网(不再受\"有会话在跑\"限制)；Ui.CardBg 自绘渐变改为框架 GradientDrawable（根治全局灰化）",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.5/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.5/dist/dsh-mobile.apk",
+  "versionCode": 23,
+  "versionName": "0.86.6",
+  "notes": "修「切公网后聊天记录刷不出来」：重连后的 subscribe 会被\"全局视图窗口(空闲时长达60秒)\"挡下并存入 pendingResubscribe → 网关不推 session-snapshot → 会话空。新增 subscribeNow()（清 pendingResubscribe + 关闭窗口 + 立即发送），重连 READY 后改用它；另加安全网：本地原有内容而快照把列表清空时，立即补拉最新一页历史",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.6/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.6/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

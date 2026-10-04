@@ -2345,9 +2345,12 @@ public final class MainActivity extends Activity implements
             // （旧实现里 titleRequested 只进不出，丢了就再也不会重试）。
             resetTitleProbesForRetry();
             gw.requestSessions();
-            // 断线会丢掉网关侧的订阅，重连后必须重新订阅，否则当前会话不再实时更新
+            // 断线会丢掉网关侧的订阅，重连后必须重新订阅，否则当前会话不再实时更新。
+            // [切线路修复·2026-10-05] 用 subscribeNow：重连后的订阅是硬需求，
+            // 不能被"全局视图窗口"（空闲时长达 60s）挡成 pendingResubscribe ——
+            // 那样网关不会推 session-snapshot，用户看到的就是"切到公网后聊天记录刷不出来"。
             if (!currentSessionId.isEmpty()) {
-                gw.subscribe(currentSessionId);
+                gw.subscribeNow(currentSessionId);
                 gw.requestTasks(currentSessionId);
                 gw.requestGoal(currentSessionId);
             }
@@ -2679,6 +2682,12 @@ public final class MainActivity extends Activity implements
             if (nextBeforeSeq == null) nextBeforeSeq = oldNext;
         }
         if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
+        // [切线路修复·2026-10-05] 安全网：本地原本有内容、而这次快照把列表清空了
+        //（重连/切线路后网关给了空快照，或订阅被挡下导致只剩空基线）→ 立刻补拉最新一页，
+        // 不让界面停在"一片空白、聊天记录刷不出来"。分页状态已在上面保留，上滑仍能继续翻。
+        if (keepPaging && items.isEmpty() && !currentSessionId.isEmpty() && gw != null) {
+            gw.requestHistory(currentSessionId, null, historyFormatVersion);
+        }
     }
 
     @Override

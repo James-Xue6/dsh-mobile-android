@@ -992,6 +992,31 @@ public final class GatewayClient {
     public void unsubscribe() { sendRaw(base("unsubscribe")); }
 
     /**
+     * [切线路修复·2026-10-05] **重连后必须真的把订阅发出去** —— 不受"全局视图窗口"抑制。
+     *
+     * <p>用户实测：「切到公网后聊天记录刷不出来」。根因链：
+     * 线路切换 → 重连 → `onState(READY)` 里调 {@link #subscribe(String)} 重新订阅 →
+     * 但那一刻若正处在**全局视图窗口**内（空闲时窗口可长达 60s，见 openGlobalView 的
+     * {@code globalViewUntil = now + 60_000}），订阅会被挡成 {@code pendingResubscribe}
+     * **根本发不出去** → 网关不会推 `session-snapshot` → 会话里既没有历史也没有新消息，
+     * 界面看起来就是"聊天记录刷不出来"。
+     *
+     * <p>重连后的订阅是**硬需求**，优先级高于"省一点全局通道"：这里直接关掉窗口、
+     * 清掉挂起的重订阅，把 subscribe 立刻发出去。
+     */
+    public void subscribeNow(String sessionId) {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        pendingResubscribe = null;
+        globalViewUntil = 0L;          // 关掉窗口：保证这次订阅不会被挡
+        try {
+            JSONObject o = base("subscribe");
+            o.put("sessionId", sessionId);
+            o.put("assistantStream", true);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
      * 模型目录（PROTOCOL §8）：
      * 带 sessionId = 该会话的模型目录（含 current/routable/groups）；不带 = 全局目录。
      */
