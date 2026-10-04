@@ -80,6 +80,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private final TextView menuBtn;
     /** 悬浮「回到底部」按钮：滚上去看历史时出现 */
     private TextView toBottom;
+    /** 列表底部渐隐层：让消息文字在接近悬浮输入条前淡出（避免两层字重叠） */
+    private View bottomFade;
+    /** 底部渐隐层高度（dp）：够覆盖输入胶囊 + 一点呼吸区 */
+    private static final float FADE_H = 132f;
     /** 顶部「目标 / 任务」提要条 */
     private TextView planView;
     /**
@@ -322,9 +326,22 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         stage.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         stage.addView(listWrap);
+
+        // 底部渐隐（2026-10-04 用户报「后面和前面重叠看不清楚」）：
+        // 悬浮输入条下方必须让内容**淡出**，否则消息文字硬撞胶囊、两层字糊在一起。
+        // 这是原生能做到的"磨砂替身"——真·背景模糊只有独立窗口才能做（Dialog 那条路），
+        // 普通 View 无 API 可用。渐隐层在列表之上、输入区之下。
+        bottomFade = new View(ctx);
+        bottomFade.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_H)));
+        bottomFade.setBackground(buildFade(ctx));
+        FrameLayout.LayoutParams ffLp = (FrameLayout.LayoutParams) bottomFade.getLayoutParams();
+        ffLp.gravity = Gravity.BOTTOM;
+        stage.addView(bottomFade, ffLp);
+
         addView(stage);
 
-        // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap 之后，绘在上层
+        // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap / 渐隐之后，绘在最上层
         LinearLayout bottomStack = Ui.col(ctx);
         FrameLayout.LayoutParams bsLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
@@ -882,8 +899,28 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      * ChatAdapter.getView **每次都新建**（从不复用 convertView），
      * 所以 notifyDataSetChanged() 就足以让所有可见气泡换到新配色。
      */
+    /**
+     * 底部渐隐：透明 → 页面底色（三档，比两档更接近 iOS 的柔和曲线）。
+     *
+     * <p>为什么需要它：输入条是**悬浮**的，消息文字会和胶囊里的文字叠在一起（用户原话
+     * 「后面和前面重叠看不清楚了」）。原生没有"给普通 View 做背景模糊"的 API
+     * （{@code RenderEffect} 只能模糊控件自身；{@code applyWindowBlur} 只对独立窗口有效），
+     * 所以内容的"淡出"就是能做到的磨砂替身：越接近输入条越透明，不产生两层硬字。
+     */
+    private static android.graphics.drawable.Drawable buildFade(Context c) {
+        int clear = Ui.BG & 0x00FFFFFF;          // 同色、全透明
+        int half = clear | 0x99000000;           // 同色、60% —— 中段就开始压
+        android.graphics.drawable.GradientDrawable g =
+                new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[] { clear, half, Ui.BG });
+        g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+        return g;
+    }
+
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
+        if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
         // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
         if (barRow != null) barRow.setBackground(null);
         if (barLine != null) barLine.setBackgroundColor(Ui.HAIRLINE);
