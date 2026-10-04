@@ -70,6 +70,12 @@ public final class Notifier {
 
     // ---------------------------------------------------------------- 状态（进程级、不落盘）
     private static boolean channelsReady = false;
+    /** [M4] 最近一次通知发送失败原因（空 = 没失败过）；供设置页诊断显示。 */
+    private static volatile String lastPostError = "";
+    public static String lastPostError() { return lastPostError == null ? "" : lastPostError; }
+    /** [M4] 最近一次通知发送时间（毫秒），供诊断显示"最近一次提醒"。 */
+    private static volatile long lastPostAt = 0L;
+    public static long lastPostAt() { return lastPostAt; }
     /** App 是否在前台可见（MainActivity 的 onStart/onStop 维护）。 */
     private static boolean foreground = false;
     /** 人此刻正在看的会话 id（空 = 没在看任何会话）。 */
@@ -343,9 +349,10 @@ public final class Notifier {
                         .build());
             }
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(id, b.build());
-        } catch (Throwable ignored) {
-            // 通知失败绝不影响主流程（例如个别 ROM 把渠道禁了 / 图标资源异常）
+            if (nm != null) { nm.notify(id, b.build()); lastPostAt = System.currentTimeMillis(); }
+        } catch (Throwable t) {
+            // [M4] 失败不影响主流程，但必须可见，否则"收不到"无法定位。
+            lastPostError = "post 失败 id=" + id + " ch=" + channel + " : " + t.getClass().getSimpleName();
         }
     }
 
@@ -373,6 +380,6 @@ public final class Notifier {
     private static int idOf(int base, String sessionId) {
         if (sessionId == null || sessionId.isEmpty()) return base;
         int h = sessionId.hashCode() & 0x7FFFFFFF;
-        return base + (h % 200);
+        return base + (h % 4000);
     }
 }

@@ -469,6 +469,19 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onCreate(Bundle state) {
+        // [M1] 进程级通知钩子：Activity 被回收/划掉后进程仍由 KeepAliveService 保活，
+        // 这里让提问/审批照常弹提醒 —— 否则 GatewayClient 在 listener==null 时静默丢弃帧。
+        com.dsh.mobile.net.GatewayClient.bgInteractionHook = frame -> {
+            try {
+                String hs = frame.optString("sessionId", "");
+                boolean appr = "approval-requested".equals(frame.optString("kind", ""));
+                String hk = appr
+                        ? "approval:" + frame.optString("approvalId", frame.optString("rpcId", ""))
+                        : "question:" + frame.optString("rpcId", "");
+                com.dsh.mobile.notify.Notifier.pending(this, store, hs, hk,
+                        appr ? "有操作等你批准" : "有提问等你回答", !appr);
+            } catch (Throwable ignored) { }
+        };
         super.onCreate(state);
         // 截屏策略改为**用户可关的开关**（Store.allowScreenshot，默认 true）：
         //   - 默认不设 FLAG_SECURE：用户能截图/录屏，系统「最近任务」缩略图正常；

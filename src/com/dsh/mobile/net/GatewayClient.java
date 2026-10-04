@@ -147,6 +147,8 @@ public final class GatewayClient {
     private static final long GATEWAY_OFF_RETRY_MS = 300_000L;
 
     private volatile Listener listener;
+    /** [M1] 进程级通知钩子：Activity 不在时由它接管提问/审批的提醒（避免帧被静默丢弃）。 */
+    public static volatile java.util.function.Consumer<org.json.JSONObject> bgInteractionHook;
     private final Handler main = new Handler(Looper.getMainLooper());
     /** 代际：每次 open() 递增；旧连接的迟到回调据此丢弃，避免重连风暴。 */
     private volatile int generation = 0;
@@ -1141,7 +1143,14 @@ public final class GatewayClient {
             armReadyStable(ws);
             checkHello(f);   // 协议版本 / 能力校验：先算清楚再决定 READY 挂什么文案（评审 P1-16）
         }
-        if (l == null) return;
+        // [M1] Activity 已销毁（进程由 KeepAliveService 保活）时，帧不再被静默丢弃：
+        // 提问/审批交给进程级通知钩子，保证"后台/划掉界面"也能弹提醒。
+        if (l == null) {
+            if (bgInteractionHook != null && ("question-requested".equals(kind) || "approval-requested".equals(kind))) {
+                try { bgInteractionHook.accept(f); } catch (Throwable ignored) { }
+            }
+            return;
+        }
         switch (kind) {
             case "hello":
                 setState(State.READY, helloWarning.isEmpty() ? "已连接" : helloWarning);
@@ -1472,7 +1481,14 @@ public final class GatewayClient {
         String kind = f.optString("kind", "");
         if (kind.isEmpty()) return;
         Listener l = listener;
-        if (l == null) return;
+        // [M1] Activity 已销毁（进程由 KeepAliveService 保活）时，帧不再被静默丢弃：
+        // 提问/审批交给进程级通知钩子，保证"后台/划掉界面"也能弹提醒。
+        if (l == null) {
+            if (bgInteractionHook != null && ("question-requested".equals(kind) || "approval-requested".equals(kind))) {
+                try { bgInteractionHook.accept(f); } catch (Throwable ignored) { }
+            }
+            return;
+        }
         switch (kind) {
             case "approval-requested":
                 l.onApprovalRequested(f);
