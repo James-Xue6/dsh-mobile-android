@@ -50,6 +50,12 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
          * 目录回来后由宿主弹选择面板，选中再走 select-model。
          */
         void onPickModel();
+        /** 点「思考」chip：在当前模型的思考档位里挑一个（select-model 带 reasoningEffort）。 */
+        void onPickEffort();
+        /** 点「用量」chip：看 token/上下文占用详情（context-usage）。 */
+        void onUsageTap();
+        /** 点「项目」chip：展示该会话的工作区/项目完整路径。 */
+        void onProjectTap();
         void onVoiceInput();
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
@@ -90,8 +96,33 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private View bottomFade;
     /** 底部 chip 行的「模型」chip（显示当前模型名；点它拉模型目录）。 */
     private TextView modelChip;
+    /** 「思考」chip（当前模型的思考等级）。 */
+    private TextView effortChip;
+    /** 「用量」chip（上下文占用百分比）。 */
+    private TextView usageChip;
+    /** 「项目」chip（当前会话的工作区/项目名）。 */
+    private TextView projectChip;
     /** 当前模型名（网关确认后写入；空 = 还没拿到）。 */
     private String modelLabel = "";
+    private String effortLabel = "";
+    private String usageLabel = "";
+    private String projectLabel = "";
+    private String projectFullPath = "";
+
+    /** chip 的统一外观（胶囊 + 主题色在 applyTheme 里复刷）。 */
+    private TextView chip(String label, View.OnClickListener onClick) {
+        TextView t = Ui.text(ctx, label, Ui.S_CAP1, Ui.INK_SUB, true);
+        t.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
+        t.setBackground(Ui.pill(Ui.CHIP_BG));
+        t.setClickable(true);
+        Ui.tap(t);
+        t.setOnClickListener(onClick);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = Ui.dp(ctx, 8);   // chip 之间留 8dp，横滑时彼此分得开
+        t.setLayoutParams(lp);
+        return t;
+    }
     /** 底部渐隐层高度（dp）：够覆盖输入胶囊 + 一点呼吸区 */
     private static final float FADE_H = 132f;
     /** 列表底部留白的"呼吸量"（叠在悬浮层高度之上，见 bottomStack 的布局监听） */
@@ -490,13 +521,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         chipScroll.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);   // 与全 App 一致：不要 Android 越界光晕
         LinearLayout chipRow = Ui.row(ctx);
         chipRow.setPadding(Ui.dp(ctx, 0), 0, Ui.dp(ctx, 0), 0);
-        modelChip = Ui.text(ctx, "模型", Ui.S_CAP1, Ui.INK_SUB, true);
-        modelChip.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
-        modelChip.setBackground(Ui.pill(Ui.CHIP_BG));
-        modelChip.setClickable(true);
-        Ui.tap(modelChip);
-        modelChip.setOnClickListener(v -> { Ui.haptic(v); host.onPickModel(); });
+        // 项目（只读展示当前会话的工作区/项目名；点一下看完整路径）
+        projectChip = chip("项目", v -> { Ui.haptic(v); host.onProjectTap(); });
+        // 模型（点开模型目录）
+        modelChip = chip("模型", v -> { Ui.haptic(v); host.onPickModel(); });
+        // 思考等级（点开当前模型的思考档位）
+        effortChip = chip("思考", v -> { Ui.haptic(v); host.onPickEffort(); });
+        // 用量（上下文占用；点一下看详情）
+        usageChip = chip("用量", v -> { Ui.haptic(v); host.onUsageTap(); });
+        chipRow.addView(projectChip);
         chipRow.addView(modelChip);
+        chipRow.addView(effortChip);
+        chipRow.addView(usageChip);
         chipScroll.addView(chipRow);
         LinearLayout.LayoutParams csLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -518,10 +554,33 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
     /** 更新底部「模型」chip 的文案（网关确认选中后调用；label 为空则回落到「模型」）。 */
     public void setModelLabel(String label) {
-        if (modelChip == null) return;
         modelLabel = label == null ? "" : label;
-        modelChip.setText(modelLabel.isEmpty() ? "模型" : ("模型 · " + modelLabel));
+        if (modelChip != null) modelChip.setText(modelLabel.isEmpty() ? "模型" : ("模型 · " + modelLabel));
     }
+
+    /** 「思考」chip：当前思考等级（如 medium）。 */
+    public void setEffortLabel(String label) {
+        effortLabel = label == null ? "" : label;
+        if (effortChip != null) effortChip.setText(effortLabel.isEmpty() ? "思考" : ("思考 · " + effortLabel));
+    }
+
+    /** 「用量」chip：上下文占用（如 12%）。 */
+    public void setUsageLabel(String label) {
+        usageLabel = label == null ? "" : label;
+        if (usageChip != null) usageChip.setText(usageLabel.isEmpty() ? "用量" : ("用量 · " + usageLabel));
+    }
+
+    /** 「项目」chip：当前会话的工作区/项目名（完整路径留着点开后展示）。 */
+    public void setProjectLabel(String name, String fullPath) {
+        projectLabel = name == null ? "" : name;
+        projectFullPath = fullPath == null ? "" : fullPath;
+        if (projectChip != null) {
+            projectChip.setText(projectLabel.isEmpty() ? "项目" : ("项目 · " + projectLabel));
+        }
+    }
+
+    /** 供宿主在用户点「项目」时取完整路径。 */
+    public String projectPath() { return projectFullPath; }
 
     public String draftText() { return input.getText().toString(); }
     public void setDraft(String s) { input.setText(s == null ? "" : s); }
@@ -1010,8 +1069,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         setBackgroundColor(Ui.BG);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
         if (modelChip != null) {
-            modelChip.setTextColor(Ui.INK_SUB);
-            modelChip.setBackground(Ui.pill(Ui.CHIP_BG));                    // chip 底色随主题
+            for (TextView c : new TextView[] { projectChip, modelChip, effortChip, usageChip }) {
+                if (c == null) continue;
+                c.setTextColor(Ui.INK_SUB);
+                c.setBackground(Ui.pill(Ui.CHIP_BG));   // chip 底色随主题
+            }
         }
         // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
         if (barRow != null) barRow.setBackground(null);

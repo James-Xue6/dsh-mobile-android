@@ -190,6 +190,10 @@ public final class MainActivity extends Activity implements
     private org.json.JSONObject lastModels = null;
     /** true = 这次 models 请求是用户点了「模型」chip，回来了要弹选择面板。 */
     private boolean pendingModelRequest = false;
+    /** 最近一次的 context-usage 帧（「用量」chip 详情用）。 */
+    private org.json.JSONObject lastUsage = null;
+    /** 当前思考等级（select-model 确认后写入；空 = 未知）。 */
+    private String lastEffort = "";
 
     // ---------------------------------------------------------------- 通知（见 com.dsh.mobile.notify.Notifier）
     //
@@ -1284,6 +1288,7 @@ public final class MainActivity extends Activity implements
         // 通知这边：人在对话页 = 正在看这条会话（"正在看就不打扰"的判断依据）
         Notifier.setViewedSession(this, currentSessionId);
         // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
+        refreshProjectChip();   // 「项目」chip 先按会话 cwd 填上
         requestModelsQuietly();
     }
 
@@ -2411,6 +2416,12 @@ public final class MainActivity extends Activity implements
         org.json.JSONObject cur = frame.optJSONObject("current");
         if (cur != null && convo != null) {
             convo.setModelLabel(modelDisplayName(cur.optString("model", "")));
+            // 目录里若带当前思考等级就一并刷上（不带则保留上一次已知值）
+            String eff = cur.optString("reasoningEffort", "");
+            if (!eff.isEmpty()) {
+                lastEffort = eff;
+                convo.setEffortLabel(eff);
+            }
         }
         if (!pendingModelRequest) return;
         pendingModelRequest = false;
@@ -2463,6 +2474,159 @@ public final class MainActivity extends Activity implements
         if (!isOnline()) return;
         pendingModelRequest = false;
         gw.requestModels(currentSessionId);
+        gw.requestContextUsage(currentSessionId);   // 「用量」chip 的数据源
+    }
+
+    // ---- 思考等级 / 用量 / 项目（底部 chip 行的另外三枚）
+
+    /**
+     * 当前模型在目录里的条目（拿它的思考档位）。
+     *
+     * <p>provider 只在目录里非空时才参与匹配：不同 provider 下会有同名模型
+     * （本机实测 DeepSeek 与 DeepSeek Account 都提供 DeepSeek-V4-Pro），只按 id 匹到
+     * 第一个就够用——档位是同一份。
+     */
+    private org.json.JSONObject currentModelEntry() {
+        org.json.JSONObject models = lastModels;
+        if (models == null) return null;
+        org.json.JSONObject cur = models.optJSONObject("current");
+        String cm = cur == null ? "" : cur.optString("model", "");
+        String cp = cur == null ? "" : cur.optString("provider", "");
+        if (cm.isEmpty()) return null;
+        org.json.JSONArray groups = models.optJSONArray("groups");
+        if (groups == null) return null;
+        org.json.JSONObject fallback = null;
+        for (int i = 0; i < groups.length(); i++) {
+            org.json.JSONObject g = groups.optJSONObject(i);
+            if (g == null) continue;
+            org.json.JSONArray ms = g.optJSONArray("models");
+            if (ms == null) continue;
+            for (int j = 0; j < ms.length(); j++) {
+                org.json.JSONObject m = ms.optJSONObject(j);
+                if (m == null || !cm.equals(m.optString("id", ""))) continue;
+                if (!cp.isEmpty() && cp.equals(g.optString("id", ""))) return m;
+                if (fallback == null) fallback = m;
+            }
+        }
+        return fallback;
+    }
+
+    /** 点「思考」chip：在当前模型的思考档位里挑一个。 */
+    @Override
+    public void onPickEffort() {
+        if (currentSessionId == null || currentSessionId.isEmpty()) {
+            Toast.makeText(this, "先进入一条会话", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        org.json.JSONObject m = currentModelEntry();
+        org.json.JSONObject r = m == null ? null : m.optJSONObject("reasoning");
+        org.json.JSONArray efforts = r == null ? null : r.optJSONArray("efforts");
+        if (efforts == null || efforts.length() == 0) {
+            Toast.makeText(this, lastModels == null
+                            ? "还没拿到模型目录（等连上电脑端再试）"
+                            : "当前模型没有可选的思考等级",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final java.util.List<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
+        for (int i = 0; i < efforts.length(); i++) {
+            org.json.JSONObject e = efforts.optJSONObject(i);
+            if (e == null) continue;
+            String id = e.optString("id", "");
+            String name = e.optString("name", id);
+            if (id.isEmpty()) continue;
+            opts.add(new com.dsh.mobile.ui.ModelSheet.Opt(id, name, ""));
+        }
+        if (opts.isEmpty()) return;
+        org.json.JSONObject cur = lastModels.optJSONObject("current");
+        String curModel = cur == null ? "" : cur.optString("model", "");
+        com.dsh.mobile.ui.ModelSheet.showOptions(this, "思考等级",
+                "当前模型：" + modelDisplayName(curModel), opts, lastEffort,
+                id -> {
+                    org.json.JSONObject c2 = lastModels == null ? null : lastModels.optJSONObject("current");
+                    if (c2 == null) return;
+                    lastEffort = id;
+                    if (convo != null) convo.setEffortLabel(id);
+                    gw.selectModel(currentSessionId, c2.optString("provider", ""),
+                            c2.optString("model", ""), id);
+                });
+    }
+
+    /** 用量帧：算上下文占用百分比填到 chip 上。 */
+    @Override
+    public void onContextUsage(org.json.JSONObject frame) {
+        if (frame == null) return;
+        lastUsage = frame;
+        org.json.JSONObject cp = frame.optJSONObject("contextPressure");
+        if (cp == null || convo == null) return;
+        long window = cp.optLong("contextWindow", 0L);
+        long used = cp.optLong("pressureTokens", 0L) + cp.optLong("surfaceTokens", 0L);
+        if (window <= 0L) return;
+        int pct = (int) Math.round(100.0 * used / (double) window);
+        convo.setUsageLabel(pct + "%");
+    }
+
+    /** 点「用量」chip：把 token 与上下文占用的明细说清楚。 */
+    @Override
+    public void onUsageTap() {
+        org.json.JSONObject f = lastUsage;
+        if (f == null) {
+            Toast.makeText(this, "还没拿到用量（等连上电脑端再试）", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        org.json.JSONObject cp = f.optJSONObject("contextPressure");
+        org.json.JSONObject tu = f.optJSONObject("tokenUsage");
+        org.json.JSONObject totals = tu == null ? null : tu.optJSONObject("totals");
+        StringBuilder sb = new StringBuilder();
+        if (cp != null) {
+            long window = cp.optLong("contextWindow", 0L);
+            long used = cp.optLong("pressureTokens", 0L) + cp.optLong("surfaceTokens", 0L);
+            sb.append("上下文 ").append(fmtTokens(used)).append(" / ").append(fmtTokens(window));
+            if (window > 0) sb.append("（").append(Math.round(100.0 * used / window)).append("%）");
+        }
+        if (totals != null) {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append("累计输入 ").append(fmtTokens(totals.optLong("inputTokens", 0L)))
+              .append(" · 输出 ").append(fmtTokens(totals.optLong("outputTokens", 0L)))
+              .append(" · 缓存读 ").append(fmtTokens(totals.optLong("cacheReadTokens", 0L)));
+        }
+        Toast.makeText(this, sb.length() == 0 ? "暂无用量数据" : sb.toString(), Toast.LENGTH_LONG).show();
+    }
+
+    /** 点「项目」chip：把该会话工作区的完整路径摊开（切换工作区协议里没有，只做展示）。 */
+    @Override
+    public void onProjectTap() {
+        String path = convo == null ? "" : convo.projectPath();
+        if (path == null || path.isEmpty()) {
+            Toast.makeText(this, "这条会话没有工作目录信息", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(this, path, Toast.LENGTH_LONG).show();
+    }
+
+    /** token 数的可读写法（1.2k / 3.4M）。 */
+    private static String fmtTokens(long n) {
+        if (n >= 1_000_000L) return String.format(java.util.Locale.US, "%.1fM", n / 1_000_000.0);
+        if (n >= 1_000L) return String.format(java.util.Locale.US, "%.1fk", n / 1_000.0);
+        return String.valueOf(n);
+    }
+
+    /** 把当前会话的项目名/路径刷到 chip 上。 */
+    private void refreshProjectChip() {
+        if (convo == null) return;
+        String cwd = "";
+        for (SessionInfo s : sessions) {
+            if (s != null && s.id != null && s.id.equals(currentSessionId)) { cwd = s.cwd == null ? "" : s.cwd; break; }
+        }
+        if (cwd.isEmpty()) { convo.setProjectLabel("", ""); return; }
+        String norm = cwd.replace('\\', '/');
+        String name = workspaceTitleByPath.get(pathKey(cwd));
+        if (name == null || name.trim().isEmpty()) {
+            int i = norm.lastIndexOf('/');
+            name = i >= 0 && i + 1 < norm.length() ? norm.substring(i + 1) : norm;
+        }
+        if (name != null && name.length() > 18) name = name.substring(0, 17) + "…";
+        convo.setProjectLabel(name == null ? "" : name, cwd);
     }
 
     @Override
@@ -3717,6 +3881,11 @@ public final class MainActivity extends Activity implements
             if (!currentSessionId.isEmpty() && store != null && store.notifyEnabled()) {
                 Notifier.clearSession(this, currentSessionId);
             }
+            // **回合结束顺手刷新 chip**（2026-10-04 用户报「模型显示不对」）：模型/思考等级
+            // 在电脑端或宿主侧被改过时，App 只有重新拉目录才知道；挂在回合边界上，
+            // 显示就不会一直停在旧值。用量也在这时更新（token 统计刚结算）。
+            if (screen == Screen.CHAT) requestModelsQuietly();
+            refreshProjectChip();
         }
     }
 

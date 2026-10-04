@@ -42,7 +42,61 @@ public final class ModelSheet {
         void onPickModel(String provider, String model, String reasoningEffort);
     }
 
+    /** 通用单选（思考等级等）：回调被选中项的 id。 */
+    public interface OptionHost {
+        void onPickOption(String id);
+    }
+
+    /** 通用单选项（id 原样回传给服务端，label/detail 只用于显示）。 */
+    public static final class Opt {
+        public final String id, label, detail;
+        public Opt(String id, String label, String detail) {
+            this.id = id; this.label = label; this.detail = detail;
+        }
+    }
+
     private ModelSheet() { }
+
+    /**
+     * 通用单选底部面板：思考等级、以及将来「权限 / 技能」这类「一组选项里挑一个」的场景都用它。
+     *
+     * @param currentId 当前生效项（打勾）；可为空
+     */
+    public static void showOptions(Context ctx, String title, String sub,
+                                   List<Opt> options, String currentId, final OptionHost host) {
+        if (ctx == null || options == null) return;
+        final Dialog dlg = new Dialog(ctx);
+        LinearLayout box = Ui.sheetCard(ctx);
+        box.addView(Ui.grabber(ctx));
+        box.addView(Ui.text(ctx, title, Ui.S_TITLE3, Ui.INK, true));
+        if (sub != null && !sub.isEmpty()) {
+            TextView s = Ui.text(ctx, sub, Ui.S_FOOT, Ui.INK_SUB, false);
+            s.setPadding(0, Ui.dp(ctx, 4), 0, Ui.dp(ctx, 10));
+            box.addView(s);
+        }
+        LinearLayout rows = Ui.col(ctx);
+        for (final Opt o : options) {
+            boolean cur = o.id != null && o.id.equals(currentId);
+            rows.addView(row(ctx, dlg, o.label, o.detail, cur, () -> {
+                if (host != null) host.onPickOption(o.id);
+            }));
+        }
+        ScrollView sc = new MaxHeightScrollView(ctx);
+        sc.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        sc.addView(rows);
+        box.addView(sc);
+
+        TextView cancel = Ui.secondaryButton(ctx, "关闭");
+        cancel.setOnClickListener(v -> dlg.dismiss());
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(ctx, 10);
+        cancel.setLayoutParams(clp);
+        box.addView(cancel);
+
+        showSheet(dlg, box);
+    }
 
     public static void show(Context ctx, JSONObject models, Host host) {
         if (ctx == null || models == null) return;
@@ -151,6 +205,65 @@ public final class ModelSheet {
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         }
         dlg.show();
+    }
+
+    /** 弹窗窗口的统一收口（面板底不透明 + 遮罩 + **不挂窗口模糊**，见 Ui.sheetCard 注释）。 */
+    private static void showSheet(Dialog dlg, LinearLayout box) {
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dlg.setContentView(box);
+        dlg.setCanceledOnTouchOutside(true);
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT);
+            Ui.applyScreenshotPolicy(w);
+            w.setDimAmount(0.35f);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        dlg.show();
+    }
+
+    /** 一行（通用版）：点一下回调 onPick。 */
+    private static LinearLayout row(Context ctx, final Dialog dlg, String name, String detail,
+                                    boolean current, final Runnable onPick) {
+        LinearLayout r = Ui.row(ctx);
+        r.setMinimumHeight(Ui.dp(ctx, 56));
+        r.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 12), Ui.dp(ctx, 12));
+        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(ctx, 12),
+                current ? Ui.SELECT_BG : Ui.FIELD_BG);
+        Ui.tapRow(r, bg, Ui.PRESS);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dp(ctx, 3);
+        r.setLayoutParams(lp);
+
+        LinearLayout texts = Ui.col(ctx);
+        texts.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView t = Ui.text(ctx, name, Ui.S_BODY, Ui.INK, current);
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        texts.addView(t);
+        if (detail != null && !detail.isEmpty()) {
+            TextView d = Ui.text(ctx, detail, Ui.S_CAP1, Ui.INK_SUB, false);
+            d.setSingleLine(true);
+            d.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            d.setPadding(0, Ui.dp(ctx, 3), 0, 0);
+            texts.addView(d);
+        }
+        r.addView(texts);
+        if (current) {
+            r.addView(Ui.iconBox(ctx, com.dsh.mobile.R.drawable.ic_check,
+                    0x00000000, Ui.BRAND, 20f, 0f, 18f));
+        }
+        r.setClickable(true);
+        r.setOnClickListener(v -> {
+            Ui.haptic(v);
+            dlg.dismiss();
+            if (onPick != null) onPick.run();
+        });
+        return r;
     }
 
     /** 一行模型；当前项高亮 + 打勾。 */

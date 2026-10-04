@@ -53,6 +53,12 @@ public final class GatewayClient {
         /** 切换模型 / 思考等级的回执（{@code selected:{provider,model,reasoningEffort}}）。 */
         default void onModelSelected(JSONObject frame) { }
 
+        /**
+         * 用量（PROTOCOL §5 context-usage）：
+         * {@code {tokenUsage:{totals:{…}}, contextPressure:{contextWindow,pressureTokens,surfaceTokens}}}
+         */
+        default void onContextUsage(JSONObject frame) { }
+
         /** 因失败而安排重连时回调（用于自动切换内网/公网）。 */
         default void onReconnectScheduled(String reason) { }
 
@@ -715,6 +721,15 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /** 用量：token 统计 + 上下文占用（底部「用量」chip 的数据源）。 */
+    public void requestContextUsage(String sessionId) {
+        try {
+            JSONObject o = base("context-usage");
+            o.put("sessionId", sessionId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
     public void requestHistory(String sessionId, Long beforeSeq, int historyFormatVersion) {
         try {
             JSONObject o = base("history");
@@ -1017,6 +1032,9 @@ public final class GatewayClient {
                 break;
             case "select-model":
                 l.onModelSelected(f);
+                break;
+            case "context-usage":
+                l.onContextUsage(f);
                 break;
             case "approval-resolved":
             case "question-resolved":
