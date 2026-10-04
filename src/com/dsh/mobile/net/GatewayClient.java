@@ -211,14 +211,46 @@ public final class GatewayClient {
     private static final long CTL_REFRESH_MS = 30_000L;
     private volatile boolean ctlRefreshRunning = false;
     /** 只在第一次收到 split-channels 时启动；**任何地方都不清它**（自续期）。 */
+    private volatile Thread ctlRefreshThread;
+    /**
+     * 启动全局通道刷新线程（**独立守护线程 + sleep**）。
+     *
+     * <p>为什么不用 Handler：实测 Handler 版的 tick 从不触发（真机 App 内状态一直是
+     * "已发起连接（等握手）"，30s 后也没有任何重放），排查方向太多；改用最朴素、
+     * 最不依赖框架语义的"独立线程 + sleep"，只要 `wantConnected` 为真就周期性重开通道，
+     * 逼网关做一次全量不限会话的待处理交互重放。
+     */
     private void ensureCtlRefresh() {
-        if (ctlRefreshRunning) return;
-        ctlRefreshRunning = true;
-        controlHandler.removeCallbacks(controlRefresh);
-        controlHandler.postDelayed(controlRefresh, CTL_REFRESH_MS);
+        Thread cur = ctlRefreshThread;
+        if (cur != null && cur.isAlive()) return;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                while (wantConnected) {
+                    try { Thread.sleep(CTL_REFRESH_MS); } catch (InterruptedException e) { return; }
+                    if (!wantConnected) return;
+                    ctlStatus = "刷新 tick " + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                            .format(new java.util.Date());
+                    try {
+                        WsClient c = wsControl;
+                        wsControl = null;
+                        if (c != null) { try { c.close(1000, "refresh"); } catch (Throwable ignored) { } }
+                        controlRetryAt = 0L;
+                        openControlLane();
+                    } catch (Throwable ex) {
+                        rec("! 全局通道刷新异常: " + ex);
+                    }
+                }
+            }
+        }, "ctl-refresh");
+        t.setDaemon(true);
+        ctlRefreshThread = t;
+        t.start();
     }
     private final Runnable controlRefresh = new Runnable() {
         @Override public void run() {
+            // 探针：把"刷新到点"记进 App 内可见的 ctlStatus（荣耀 logcat 加密，只能走 UI 通道）
+            ctlStatus = "刷新 tick " + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                    .format(new java.util.Date()) + " want=" + wantConnected;
             // **先续期、再做活**：如果先做活，中途任何一次异常都会让续期语句执行不到，
             // 整条刷新链就永久断掉（Handler 不会自动重试）—— 这正是上一版"刷新不生效"的原因。
             if (wantConnected) controlHandler.postDelayed(this, CTL_REFRESH_MS);
