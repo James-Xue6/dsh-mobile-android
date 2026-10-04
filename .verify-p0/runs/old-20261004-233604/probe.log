@@ -1,0 +1,9 @@
+Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
+[+20ms wall=1791128164937] PROBE-START url=ws://127.0.0.1:3392/ws/mobile
+[+28ms wall=1791128164945] state=CONNECTING · 正在连接 ws://127.0.0.1:3392/ws/mobile
+[+65ms wall=1791128164982] state=AUTHENTICATING · 已连接，等待握手
+[+106ms wall=1791128165023] paired
+[+106ms wall=1791128165023] state=READY · 已连接
+[+107ms wall=1791128165024] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+3108ms wall=1791128168025] FG-CHECK callAt=1791128168024 invoked=false 旧版没有 foregroundLivenessCheck（切回前台什么都不做）
+[+95015ms wall=1791128259932] PROBE-END

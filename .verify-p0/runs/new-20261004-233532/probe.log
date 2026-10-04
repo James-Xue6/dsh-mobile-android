@@ -1,0 +1,17 @@
+Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
+[+19ms wall=1791128132771] PROBE-START url=ws://127.0.0.1:3391/ws/mobile
+[+62ms wall=1791128132814] state=CONNECTING · 正在连接电脑…
+[+105ms wall=1791128132857] state=AUTHENTICATING · 已连接，等待握手
+[+109ms wall=1791128132861] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+136ms wall=1791128132888] state=READY · 已连接
+[+137ms wall=1791128132889] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+3145ms wall=1791128135897] FG-CHECK callAt=1791128135891 invoked=true returned=false
+[+5645ms wall=1791128138397] state=CONNECTING · 连接已失效，正在重连
+[+5646ms wall=1791128138398] state=CONNECTING · 正在连接电脑…
+[+5652ms wall=1791128138404] state=AUTHENTICATING · 已连接，等待握手
+[+5654ms wall=1791128138406] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+5685ms wall=1791128138437] state=READY · 已连接
+[+5685ms wall=1791128138437] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+25014ms wall=1791128157766] PROBE-END

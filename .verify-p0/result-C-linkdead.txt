@@ -1,0 +1,27 @@
+== P0-2 验证 tag=C-linkdead fault=silent out=F:\AI\程序开发\dsh-mobile-android\.verify-p0\out-new ==
+Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
+[+18ms wall=1791128672857] PROBE-START url=ws://127.0.0.1:3403/ws/mobile
+[+61ms wall=1791128672900] state=CONNECTING · 正在连接电脑…
+[+101ms wall=1791128672940] state=AUTHENTICATING · 已连接，等待握手
+[+105ms wall=1791128672944] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+133ms wall=1791128672972] state=READY · 已连接
+[+134ms wall=1791128672973] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+1004ms wall=1791128673843] LINKDED t=1000ms state=READY lastInboundAgoMs=870 linkDead(30s)=false linkDead(60s)=false
+[+3137ms wall=1791128675976] FG-CHECK callAt=1791128675975 skipped=true（模拟改前：切回前台不做任何存活检查）
+[+35001ms wall=1791128707840] LINKDED t=35000ms state=READY lastInboundAgoMs=34870 linkDead(30s)=true linkDead(60s)=false
+[+45105ms wall=1791128717944] state=CONNECTING · 连接已失效，正在重连
+[+45112ms wall=1791128717951] state=CONNECTING · 和电脑断开了，正在重连…（第 1 次，2s 后重试）
+[+46001ms wall=1791128718840] LINKDED t=46000ms state=CONNECTING lastInboundAgoMs=-1 linkDead(30s)=true linkDead(60s)=true
+[+47113ms wall=1791128719952] state=CONNECTING · 正在连接电脑…
+[+47116ms wall=1791128719955] state=AUTHENTICATING · 已连接，等待握手
+[+47120ms wall=1791128719959] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+47149ms wall=1791128719988] state=READY · 已连接
+[+47149ms wall=1791128719988] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+52012ms wall=1791128724851] PROBE-END
+
+----- 模拟网关看到的连接（每条 upgrade = 一次 client connected）-----
+  upgrade  t=2026/10/4 15:44:32
+  upgrade  t=2026/10/4 15:45:19
+runDir=F:\AI\程序开发\dsh-mobile-android\.verify-p0\runs\C-linkdead-20261004-234432

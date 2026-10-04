@@ -1,0 +1,13 @@
+{"t":"2026-10-04T15:36:04.980Z","dir":"upgrade","ok":true,"authenticated":{"pair":true,"token":null,"deviceId":"jvm-fg-probe"}}
+{"t":"2026-10-04T15:36:04.984Z","dir":"out","frame":{"kind":"session-archives","archivedSessionIds":[]}}
+{"t":"2026-10-04T15:36:04.985Z","dir":"out","frame":{"kind":"session-queues","queues":{}}}
+{"t":"2026-10-04T15:36:04.986Z","dir":"out","frame":{"kind":"paired","token":"mock-device-token-0001","device":{"id":"jvm-fg-probe","name":"mock","createdAt":1791128164986,"lastSeenAt":1791128164986,"online":true,"connections":1},"gatewayId":"mock-gateway","gatewayName":"mock"}}
+{"t":"2026-10-04T15:36:04.987Z","note":"FAULT silent: hello(仍会发)后完全静默，不回 pong、不应答"}
+{"t":"2026-10-04T15:36:05.017Z","dir":"out","frame":{"kind":"hello","protocol":3,"dshVersion":"0.2.0-rc.2(mock)","historyFormatVersion":4,"authenticated":true,"port":3392,"clients":1,"gatewayId":"mock-gateway","gatewayName":"mock","capabilities":["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]}}
+{"t":"2026-10-04T15:36:29.985Z","dir":"in","frame":{"type":"ping"}}
+{"t":"2026-10-04T15:36:29.987Z","dir":"in","frame":{"type":"ping"},"note":"FAULT silent: 收到但不回任何帧"}
+{"t":"2026-10-04T15:36:54.985Z","dir":"in","frame":{"type":"ping"}}
+{"t":"2026-10-04T15:36:54.988Z","dir":"in","frame":{"type":"ping"},"note":"FAULT silent: 收到但不回任何帧"}
+{"t":"2026-10-04T15:37:19.986Z","dir":"in","frame":{"type":"ping"}}
+{"t":"2026-10-04T15:37:19.989Z","dir":"in","frame":{"type":"ping"},"note":"FAULT silent: 收到但不回任何帧"}
+{"t":"2026-10-04T15:37:40.238Z","dir":"socket","event":"closed"}

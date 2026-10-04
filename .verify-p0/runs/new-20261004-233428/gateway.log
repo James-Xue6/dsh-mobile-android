@@ -1,0 +1,24 @@
+mock gateway on ws://0.0.0.0:3391/ws/mobile  fault=silent  host=127.0.0.1
+PAIRING_STRING=eyJ2ZXJzaW9uIjoyLCJwdWJsaWNVcmwiOiJ3czovLzEyNy4wLjAuMTozMzkxL3dzL21vYmlsZSIsInBhaXJpbmdDb2RlIjoibW9ja3BhaXJjb2RlMDAwMSIsImV4cGlyZXNBdCI6MTc5MTEzMTY2ODcwMywiZ2F0ZXdheUlkIjoibW9jay1nYXRld2F5IiwiZW5kcG9pbnRzIjpbIndzOi8vMTI3LjAuMC4xOjMzOTEvd3MvbW9iaWxlIl19
+token=mock-device-token-0001  deviceId=mock-device-uuid-0001
+已写入 pairing.txt（无换行，可直接粘贴/生成二维码）
+提示：此配对串只适合 App 与网关同机（JVM harness）。跑模拟器请加 --host 10.0.2.2，真机请填电脑局域网 IP。
+{"t":"2026-10-04T15:34:28.965Z","dir":"upgrade","ok":true,"authenticated":{"pair":true,"token":null,"deviceId":"jvm-fg-probe"}}
+{"t":"2026-10-04T15:34:28.970Z","dir":"out","frame":{"kind":"session-archives","archivedSessionIds":[]}}
+{"t":"2026-10-04T15:34:28.971Z","dir":"out","frame":{"kind":"session-queues","queues":{}}}
+{"t":"2026-10-04T15:34:28.972Z","dir":"out","frame":{"kind":"paired","token":"mock-device-token-0001","device":{"id":"jvm-fg-probe","name":"mock","createdAt":1791128068972,"lastSeenAt":1791128068972,"online":true,"connections":1},"gatewayId":"mock-gateway","gatewayName":"mock"}}
+{"t":"2026-10-04T15:34:28.973Z","note":"FAULT silent: hello(仍会发)后完全静默，不回 pong、不应答"}
+{"t":"2026-10-04T15:34:29.005Z","dir":"out","frame":{"kind":"hello","protocol":3,"dshVersion":"0.2.0-rc.2(mock)","historyFormatVersion":4,"authenticated":true,"port":3391,"clients":1,"gatewayId":"mock-gateway","gatewayName":"mock","capabilities":["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]}}
+{"t":"2026-10-04T15:34:32.013Z","dir":"in","frame":{"type":"ping"}}
+{"t":"2026-10-04T15:34:32.015Z","dir":"in","frame":{"type":"ping"},"note":"FAULT silent: 收到但不回任何帧"}
+{"t":"2026-10-04T15:34:34.514Z","dir":"in","close":{"code":1011,"reason":"前台恢复探测超时"}}
+{"t":"2026-10-04T15:34:34.517Z","dir":"socket","event":"closed"}
+{"t":"2026-10-04T15:34:36.523Z","dir":"upgrade","ok":true,"authenticated":{"pair":true,"token":null,"deviceId":"jvm-fg-probe"}}
+{"t":"2026-10-04T15:34:36.526Z","dir":"out","frame":{"kind":"session-archives","archivedSessionIds":[]}}
+{"t":"2026-10-04T15:34:36.527Z","dir":"out","frame":{"kind":"session-queues","queues":{}}}
+{"t":"2026-10-04T15:34:36.528Z","dir":"out","frame":{"kind":"paired","token":"mock-device-token-0001","device":{"id":"jvm-fg-probe","name":"mock","createdAt":1791128076528,"lastSeenAt":1791128076528,"online":true,"connections":1},"gatewayId":"mock-gateway","gatewayName":"mock"}}
+{"t":"2026-10-04T15:34:36.529Z","note":"FAULT silent: hello(仍会发)后完全静默，不回 pong、不应答"}
+{"t":"2026-10-04T15:34:36.550Z","dir":"out","frame":{"kind":"hello","protocol":3,"dshVersion":"0.2.0-rc.2(mock)","historyFormatVersion":4,"authenticated":true,"port":3391,"clients":1,"gatewayId":"mock-gateway","gatewayName":"mock","capabilities":["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]}}
+{"t":"2026-10-04T15:34:51.525Z","dir":"in","frame":{"type":"ping"}}
+{"t":"2026-10-04T15:34:51.529Z","dir":"in","frame":{"type":"ping"},"note":"FAULT silent: 收到但不回任何帧"}
+{"t":"2026-10-04T15:34:59.181Z","dir":"socket","event":"closed"}

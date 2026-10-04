@@ -113,12 +113,20 @@ public final class GatewayClient {
             {"goals", "目标面板"},
             {"session-cancel", "停止回合"},
     };
-    private static final long PING_INTERVAL_MS = 25_000L;
     /**
-     * 假连接判定阈值：连续 3 个 ping 周期（75s）没有收到任何入站帧（含 pong / 服务端 ping）
-     * 就认为链路已死。手机侧仍显示"已连接"但对端早就不在了，是评审 P0-1 的核心症状。
+     * 心跳周期（[连接生命周期专项·2026-10-04] 25s → 15s）。
+     *
+     * <p>用户报「长时间不动一直显示连接中」：25s 一个周期意味着判死最慢要 75s，
+     * 而且中途掉线的连接会一直"看着像活着"。15s 让判死窗口收紧到 45s，
+     * 同时仍在移动网络的正常抖动范围内（3 个周期都收不到任何入站帧才判死）。
      */
-    private static final long STALE_INBOUND_MS = 75_000L;
+    private static final long PING_INTERVAL_MS = 15_000L;
+    /**
+     * 假连接判定阈值（[专项] 75s → 45s = 3 个 15s 周期）：连续 3 个 ping 周期没有收到
+     * 任何入站帧（含 pong / 服务端 ping）就认为链路已死。手机侧仍显示"已连接"但对端
+     * 早就不在了，是评审 P0-1 的核心症状。
+     */
+    private static final long STALE_INBOUND_MS = 45_000L;
     /**
      * 假连接判定的容差。lastInboundAt 已改到「握手成功后」置位（见 WsClient.run），
      * 它与 ping 的固定 25s 网格之间只剩毫秒级先后差，而收到 hello 时还会再刷新一次 ——
@@ -145,6 +153,23 @@ public final class GatewayClient {
      * 所以间隔拉长、wantConnected 保持 true（评审 P1-4 回归修复）。
      */
     private static final long GATEWAY_OFF_RETRY_MS = 300_000L;
+
+    // ------------------------------------------------------------ 前台恢复存活检查（P0-2）
+    //
+    // 症状：切后台再回来，socket 已被系统掐死（进程被冻结 / 射频休眠 / NAT 表过期），
+    // App 自己不知道，仍按 15s 一个 ping 周期等满 45s（STALE_INBOUND_MS）才判死；
+    // 更糟的是重连还可能撞在最长 30s 的退避上 —— 用户看到的就是"回来半天连不上"。
+    // 修法：回前台立刻判一次，不等 45s；并重置退避，用户主动切回来不该等退避。
+    /**
+     * 前台恢复判死的入站帧阈值（[专项] 50s → 30s = 2 个 15s 周期）。
+     * 正常连接 15s 一个 ping 周期必有 pong 回来，超过 30s（两个周期）没收到任何入站帧
+     * 就按"已死"处理 —— 用户切回来时立刻重连，不等 STALE_INBOUND_MS。
+     */
+    private static final long FG_STALE_INBOUND_MS = 30_000L;
+    /** 前台恢复探测：补发一次 ping 后等这么久还没有新入站帧就直接重连。 */
+    private static final long FG_PROBE_TIMEOUT_MS = 2_500L;
+    /** 前台恢复检查的最小间隔：onStart / onResume 会连着调，1.5s 内只做一次。 */
+    private static final long FG_CHECK_MIN_GAP_MS = 1_500L;
 
     private volatile Listener listener;
     /** [M1] 进程级通知钩子：Activity 不在时由它接管提问/审批的提醒（避免帧被静默丢弃）。 */
@@ -187,8 +212,16 @@ public final class GatewayClient {
     private static final long READY_STABLE_MS = 120_000L;
     /** 存活不足这个时长的连接算"短命"，按次数罚时（退避上限 BACKOFF_CEILING_MS）。 */
     private static final long SHORT_LIVED_MS = 5_000L;
-    /** 短命连接的退避上限：60s（普通失败仍按 15s 封顶，不牵连正常重连）。 */
-    private static final long BACKOFF_CEILING_MS = 60_000L;
+    /**
+     * 短命连接的退避上限（[连接生命周期专项·2026-10-04] 60s → 30s）。
+     *
+     * <p>真机实测（网关日志 id=44~50 等）：存在大量"连上 1~30 秒就断"的短命连接，
+     * 每次都记一次罚分 → 罚时按 800·2^(n+shortLived) 一路爬到 60s 封顶 →
+     * 用户看到的就是「长时间不动一直显示连接中」（其实是在等 60s 退避）。
+     * 收到 30s 封顶：保留"病态网关要降温"的作用，又不让用户等一分钟以上。
+     * 普通失败路径仍按 15s 封顶，不受此值牵连。
+     */
+    private static final long BACKOFF_CEILING_MS = 30_000L;
     /** 短命连接累计次数；READY 稳定存活 READY_STABLE_MS 后清零。 */
     private final AtomicInteger shortLivedCount = new AtomicInteger(0);
     /** "READY 稳定存活"计时任务（到点才清零退避）。 */
@@ -300,6 +333,11 @@ public final class GatewayClient {
     /** 握手看门狗任务：进了 AUTHENTICATING 后 10s 内没等到 hello 就断开重连。 */
     private Runnable handshakeWatchdog;
 
+    /** 前台恢复的 ping 探测任务（P0-2）：2.5s 内没等到新入站帧就重连。 */
+    private Runnable fgProbeTask;
+    /** 上一次前台存活检查的时刻，用来给 onStart/onResume 的连击去重。 */
+    private volatile long lastFgCheckAt;
+
     private boolean trustAllCerts = false;
 
     public GatewayClient(Listener listener) { this.listener = listener; }
@@ -369,6 +407,7 @@ public final class GatewayClient {
         stopPing();
         stopHandshakeWatchdog();
         stopReadyStable();
+        stopFgProbe();
         main.removeCallbacks(reconnectTask);
         WsClient c = ws;
         ws = null;
@@ -393,8 +432,8 @@ public final class GatewayClient {
 
     /**
      * 「链路还活着」的判据：最近一次收到任何入站帧距今不超过这么久。
-     * 正常连接每 25s 一个 ping 周期必有 pong 回来，30s 足够宽松；
-     * 但电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 75s 都还是 READY，
+     * 正常连接每 15s 一个 ping 周期必有 pong 回来，30s（两个周期）足够宽松；
+     * 但电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 45s 都还是 READY，
      * 光看 state 会把帧送进黑洞（评审 P0-3 / P1 盲区收口）。
      */
     private static final long CAN_SEND_FRESH_MS = 30_000L;
@@ -404,7 +443,7 @@ public final class GatewayClient {
      * 除了 ws 非空且未关闭，还要求已经握手完成（READY）：重连窗口里 ws 可能已存在但
      * 还没拿回 hello，这时 sendText 会被静默丢进未就绪的写队列 —— 正是要修的那种"谎报"。
      * 另外要求「最近 CAN_SEND_FRESH_MS 内有入站帧」：READY 只说明握手成功过，
-     * 半开链路（对端网卡关掉、隧道断掉）在 75s 假连接判定触发之前仍是 READY。
+     * 半开链路（对端网卡关掉、隧道断掉）在 45s 假连接判定触发之前仍是 READY。
      */
     public boolean canSend() {
         WsClient c = ws;
@@ -423,6 +462,117 @@ public final class GatewayClient {
      */
     public boolean backoffAtMax() { return reconnectAttempt.get() >= BACKOFF_MAX_ATTEMPTS; }
 
+    // ------------------------------------------------------------ 前台恢复 / 链路死活判定（P0-2 · P0-1 共用）
+
+    /** 距上次收到任何入站帧的毫秒数；-1 = 没有可用连接 / 从未收到过。 */
+    public long lastInboundAgoMs() {
+        WsClient c = ws;
+        if (c == null || c.isClosed()) return -1L;
+        long last = c.lastInboundAt();
+        if (last <= 0) return -1L;
+        return System.currentTimeMillis() - last;
+    }
+
+    /**
+     * 链路是不是**确定已经死了**（P0-1 用来区分「死」与「慢」）。
+     *
+     * <p>三条判据任一成立就是死：
+     * ① 没有连接对象 / socket 已关 / 从未收到过入站帧；
+     * ② 连接状态不是 READY（握手失败、鉴权失败、socket 已断）；
+     * ③ 距上次入站帧超过 {@code thresholdMs}。
+     *
+     * <p>第 ③ 条专治"半开链路"：TCP 不会立刻 FIN，state 还是 READY，但一个 ping 周期都没有
+     * 回音 —— 这种"界面写着已连接、其实早就死了"正是用户实测报的那个 bug。有它才能把
+     * 「内网已死」和「内网只是慢」分开，前者不必再等"回合结束"。
+     */
+    public boolean linkDead(long thresholdMs) {
+        WsClient c = ws;
+        if (c == null || c.isClosed()) return true;
+        if (state != State.READY) return true;
+        long last = c.lastInboundAt();
+        if (last <= 0) return true;
+        return System.currentTimeMillis() - last > thresholdMs;
+    }
+
+    /** 用默认阈值（与前台恢复同一档：30s = 2 个 15s 心跳周期）判死活。 */
+    public boolean linkDead() { return linkDead(FG_STALE_INBOUND_MS); }
+
+    /**
+     * 切回前台时立刻做一次存活检查（P0-2）。**不再等 45s 的假连接判定。**
+     *
+     * <p>三条路：
+     * <ul>
+     *   <li>socket 非就绪 / 距上次入站帧 &gt; 30s → 立刻重连，并清零退避
+     *       （用户主动切回来不该再等最长 30s 的退避）；</li>
+     *   <li>链路看着新鲜 → 补发一次 ping，{@value #FG_PROBE_TIMEOUT_MS}ms 内没有新入站帧就重连
+     *       （对付"后台被冻结、回来时 socket 其实已死、但 lastInboundAt 还很新"的窗口）；</li>
+     *   <li>压根不希望连接（用户已断开 / 没配对）→ 什么都不做。</li>
+     * </ul>
+     *
+     * @return true = 这一次已经发起重连；false = 未重连（可能已排了探测，也可能不需要）
+     */
+    public boolean foregroundLivenessCheck() {
+        if (!wantConnected || manualClose) return false;
+        if (url.isEmpty()) return false;
+        long now = System.currentTimeMillis();
+        if (now - lastFgCheckAt < FG_CHECK_MIN_GAP_MS) return false;   // onStart/onResume 连击去重
+        lastFgCheckAt = now;
+        WsClient c = ws;
+        boolean ready = (state == State.READY) && c != null && !c.isClosed();
+        long ago = lastInboundAgoMs();
+        if (!ready || ago < 0 || ago > FG_STALE_INBOUND_MS) {
+            rec("前台恢复：链路已死（socket=" + (c == null ? "null" : (c.isClosed() ? "closed" : "open"))
+                    + " state=" + state + " 距上次入站=" + (ago < 0 ? "无" : (ago / 1000) + "s")
+                    + "）→ 立刻重连（P0-2）");
+            reconnectAttempt.set(0);        // 用户主动切回前台：不等 30s 退避
+            shortLivedCount.set(0);
+            retryNow();
+            return true;
+        }
+        armFgProbe(c);
+        return false;
+    }
+
+    /**
+     * 前台恢复的 ping 探测：现在补发一个 ping；{@value #FG_PROBE_TIMEOUT_MS}ms 后这条连接
+     * 若一个入站帧都没新增，说明它只是"看着活着"，直接关掉走既有重连。
+     * 关码用 1011（服务端遭遇意外情况），与假连接判定保持同一套语义。
+     */
+    private void armFgProbe(final WsClient conn) {
+        stopFgProbe();
+        final int gen = generation;
+        final long sentAt = System.currentTimeMillis();
+        fgProbeTask = new Runnable() {
+            @Override public void run() {
+                fgProbeTask = null;
+                if (gen != generation) return;              // 已经换代
+                if (ws != conn || conn == null || conn.isClosed()) return;
+                if (state != State.READY) return;
+                if (conn.lastInboundAt() > sentAt) return;  // 探测期间收到了帧 → 链路是活的
+                rec("前台恢复：探测 ping " + (FG_PROBE_TIMEOUT_MS / 1000) + "s 内无任何入站帧 → 重连（P0-2）");
+                reconnectAttempt.set(0);
+                shortLivedCount.set(0);
+                setState(State.CONNECTING, "连接已失效，正在重连");
+                // 直接重开，**不走 onClosed → scheduleReconnect 那一轮退避**：用户是自己切回前台的，
+                // 不该再等。open() 会 generation++，旧连接迟到的 onClosed 会被丢弃
+                // （gen != generation 直接 return），不会变成两次重连。
+                open();
+            }
+        };
+        try {
+            JSONObject o = new JSONObject();
+            o.put("type", "ping");
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+        main.postDelayed(fgProbeTask, FG_PROBE_TIMEOUT_MS);
+    }
+
+    private void stopFgProbe() {
+        Runnable r = fgProbeTask;
+        fgProbeTask = null;
+        if (r != null) main.removeCallbacks(r);
+    }
+
     /**
      * 网络变化时补一次重连，**不重置退避**（评审 P1-9）。
      *
@@ -430,7 +580,7 @@ public final class GatewayClient {
      * 来得很频繁）退避就永远停在最小值，等于把自动退避废掉。
      *
      * state==READY 时也允许调用，因为 WiFi→4G 之后旧 socket 看着还活着（TCP 不会立刻
-     * FIN），实际已经发不出帧，只能干等 75s 假连接判定；主动重开一条能立刻恢复。
+     * FIN），实际已经发不出帧，只能干等 45s 假连接判定；主动重开一条能立刻恢复。
      * 调用方负责节流（MainActivity 用 lastNetReconnectAt）。
      */
     public void retryNow() {
@@ -448,6 +598,7 @@ public final class GatewayClient {
         stopPing();
         stopHandshakeWatchdog();
         stopReadyStable();
+        stopFgProbe();
         WsClient c = ws;
         ws = null;
         if (c != null) c.close(1000, "bye");
@@ -465,6 +616,7 @@ public final class GatewayClient {
         stopPing();
         stopHandshakeWatchdog();
         stopReadyStable();
+        stopFgProbe();
         main.removeCallbacks(reconnectTask);
         openedAtMs = System.currentTimeMillis();
         helloAtMs = 0;
@@ -625,7 +777,8 @@ public final class GatewayClient {
         final Listener l2 = listener;
         if (l2 != null) main.post(() -> l2.onReconnectScheduled(detail));
         int n = reconnectAttempt.incrementAndGet();
-        long delay = Math.min(15000L, 800L * (1L << Math.min(n, 4)));
+        // [专项] 2 / 4 / 8 / 16→15 / 15…（把 800ms 基数抬到 1000ms，序列更贴近用户能感知的档位）
+        long delay = Math.min(15000L, 1000L * (1L << Math.min(n, 4)));
         if (delay < minDelayMs) delay = minDelayMs;
         // 短命连接罚时（评审 P1-2）：网关"接受连接后立刻关"时，光靠 hello 不清零还不够
         // —— 指数只爬到 12.8s 就封顶。这里按累计短命次数继续放大，封顶 60s，
@@ -697,7 +850,7 @@ public final class GatewayClient {
 
     /**
      * 起一个 10s 的握手看门狗：到点还没 READY（仍是 AUTHENTICATING）就按「正常关闭」断开，
-     * 由 onClosed 接管重连。之所以不用 75s 的假连接判定替代：服务端若在回 pong，
+     * 由 onClosed 接管重连。之所以不用 45s 的假连接判定替代：服务端若在回 pong，
      * lastInboundAt 会一直被刷新，那条判定永远不会触发。
      */
     private void armHandshakeWatchdog(final int gen, final WsClient client) {

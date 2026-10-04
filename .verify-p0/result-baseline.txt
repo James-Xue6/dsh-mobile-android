@@ -1,0 +1,26 @@
+== P0-2 验证 tag=baseline fault=silent out=F:\AI\程序开发\dsh-mobile-android\.verify-p0\out-new ==
+Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
+[+26ms wall=1791128288231] PROBE-START url=ws://127.0.0.1:3393/ws/mobile
+[+78ms wall=1791128288283] state=CONNECTING · 正在连接电脑…
+[+119ms wall=1791128288324] state=AUTHENTICATING · 已连接，等待握手
+[+121ms wall=1791128288326] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+157ms wall=1791128288362] state=READY · 已连接
+[+158ms wall=1791128288363] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+3159ms wall=1791128291364] FG-CHECK callAt=1791128291363 skipped=true（模拟改前：切回前台不做任何存活检查）
+[+45123ms wall=1791128333328] state=CONNECTING · 连接已失效，正在重连
+[+45131ms wall=1791128333336] state=CONNECTING · 和电脑断开了，正在重连…（第 1 次，2s 后重试）
+[+47132ms wall=1791128335337] state=CONNECTING · 正在连接电脑…
+[+47135ms wall=1791128335340] state=AUTHENTICATING · 已连接，等待握手
+[+47137ms wall=1791128335342] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+47169ms wall=1791128335374] state=READY · 已连接
+[+47169ms wall=1791128335374] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+92137ms wall=1791128380342] state=CONNECTING · 连接已失效，正在重连
+[+92138ms wall=1791128380343] state=CONNECTING · 和电脑断开了，正在重连…（第 2 次，4s 后重试）
+[+95018ms wall=1791128383223] PROBE-END
+
+----- 模拟网关看到的连接（每条 upgrade = 一次 client connected）-----
+  upgrade  t=2026/10/4 15:38:08
+  upgrade  t=2026/10/4 15:38:55
+runDir=F:\AI\程序开发\dsh-mobile-android\.verify-p0\runs\baseline-20261004-233807

@@ -386,6 +386,18 @@ public final class MainActivity extends Activity implements
      */
     private boolean pendingAutoFailover = false;
     /**
+     * P0-1：刚刚因为「内网死了」切到公网，等新连接 READY 时补一句「已切到公网」。
+     * 只活在内存里，纯提示用。
+     */
+    private boolean wanSwitchPending = false;
+    /**
+     * P0-1「死 / 慢」分界：距上次收到任何入站帧超过这么久，就认定这条线路**已经死了**，
+     * 不必再等「有活跃会话时先不切」那条规则，也不等 6.5s 兜底窗口。
+     * 心跳周期 15s（GatewayClient.PING_INTERVAL_MS），正常连接每周期必有 pong 回来，
+     * 30s（两个周期）足够宽松；与 {@code GatewayClient.FG_STALE_INBOUND_MS} 同一档，语义统一。
+     */
+    private static final long LAN_DEAD_INBOUND_MS = 30_000L;
+    /**
      * 最近一次真正拿去连接的地址：连上以后「显示的是哪条线路」就以它为准
      * （退避窗口到期、自动档的预测可能已经改回内网，但这条连接还在用公网 ——
      * 显示的必须和实际用的一致）。只放内存，不落盘、不进日志。
@@ -791,7 +803,7 @@ public final class MainActivity extends Activity implements
      *  - 非 READY：只在「已经失败」或「自动重连的退避已经顶格」时才补。照旧写法
      *    （无条件 connect()）网络一抖动退避就永远停在最小值，重连风暴反而是自己制造的。
      *  - READY 且**网络句柄真的换了**：旧 socket 看着还活着（TCP 不会立刻 FIN），
-     *    实际已发不出帧，不补就要干等 75s 假连接判定（评审 P1-9）。
+     *    实际已发不出帧，不补就要干等 45s 假连接判定（评审 P1-9）。
      * 两条路都走 retryNow()（保留退避），不再用 connect()。
      */
     private void retryIfWanted(boolean networkHandleChanged) {
@@ -868,6 +880,47 @@ public final class MainActivity extends Activity implements
     }
 
     /**
+     * P0-1 的「内网健康哨兵」的轮询间隔。5s 一次纯内存判据（读几个 volatile 字段），
+     * 不做任何 I/O，开销可以忽略；配合 30s 的入站帧阈值，最迟 ≈35s 就能发现半开链路。
+     */
+    private static final long LAN_HEALTH_TICK_MS = 5_000L;
+    /** 内网健康哨兵的当前排程（null = 没排）。 */
+    private Runnable lanHealthTask;
+
+    /**
+     * P0-1：READY 之后 {@link #autoLanFailoverTask} 已经被撤掉（它只管"压根连不上"），
+     * 于是"连上了、然后内网悄悄死掉"这条路上**没有任何定时检查** —— 只能等 GatewayClient
+     * 的 45s 假连接判定；有活跃会话时更是干等回合结束（用户实测的真 bug）。
+     *
+     * <p>这里补一个 5s 一次的健康检查：自动档 + 当前实际走内网时，一旦
+     * {@link #isLanLinkDead()} 成立（socket 断了 / 状态非 READY / 距上次入站帧 &gt; 30s）
+     * 就立刻切公网 —— 死了不受"有正在跑的会话"限制，也不等 6.5s 兜底窗口。
+     */
+    private void armLanHealth() {
+        cancelLanHealth();
+        if (gw == null || store == null) return;
+        if (!store.isAutoMode()) return;                       // 手动档：绝不自动切
+        if (!LanAddress.isUsableLanUrl(store.lanUrl())) return;
+        if (store.wanUrl().isEmpty()) return;                  // 没有公网可切，哨兵没有意义
+        lanHealthTask = () -> {
+            lanHealthTask = null;
+            if (gw == null || store == null) return;
+            if (!gw.wantConnected()) return;
+            if (!store.isAutoMode() || store.usingWan()) return;
+            if (lastConnectUrl.isEmpty() || !isLanUrl(lastConnectUrl)) return;
+            if (isLanLinkDead() && autoSwitchToWan("不可用")) return;   // 切走了：交给 onState(READY) 重新武装
+            armLanHealth();                                     // 还活着 / 没切动：继续守着
+        };
+        uiHandler.postDelayed(lanHealthTask, LAN_HEALTH_TICK_MS);
+    }
+
+    private void cancelLanHealth() {
+        Runnable r = lanHealthTask;
+        lanHealthTask = null;
+        if (r != null) uiHandler.removeCallbacks(r);
+    }
+
+    /**
      * 自动档下把线路从「内网」切到「公网」（唯一允许自动切的方向）。
      *
      * <p>为什么不切回去：自动档选内网的前提是「连着 WiFi 且内网地址可用」，这两条一变
@@ -884,7 +937,19 @@ public final class MainActivity extends Activity implements
         if (store.usingWan()) return false;                    // 已经在公网，没有可切的
         if (store.wanUrl().isEmpty()) return false;
         if (!LanAddress.isUsableLanUrl(store.lanUrl())) return false;
-        if (running) {
+        // ---- P0-1 修复：先把「内网已死」和「内网只是慢」分开
+        //
+        // 旧行为：只要 running（有活跃会话）就一律推迟到回合结束再切。内网 socket 已经断了
+        // 的时候也照推迟 —— 用户看到的就是「内网连不上；有正在进行的会话，先不切线路」，
+        // 而那个会话可能几十分钟都不结束，于是几十分钟都连不上（用户实测的真 bug）。
+        //
+        // 新行为：
+        //   · 内网**确定已死**（socket 已断 / 握手失败 / 距上次入站帧 > 30s）→ 立即切，
+        //     不受「正在跑的会话」限制。内容不会丢：回合跑在电脑端，App 只是收不到推送，
+        //     重连后照常 subscribe + 让网关重放（见 onState(READY) 的订阅与重放路径）。
+        //   · 内网**还能用、只是表现差** → 保留旧规则，等这一回合结束再切，绝不打断。
+        boolean dead = isLanLinkDead();
+        if (running && !dead) {
             // 需求：有活跃会话时不中途切换。记下来，这一回合结束后立刻切（见 setRunning）。
             if (!pendingAutoFailover) {
                 pendingAutoFailover = true;
@@ -898,12 +963,47 @@ public final class MainActivity extends Activity implements
         pendingAutoFailover = false;
         cancelAutoLanFailover();
         Store.noteLanFailure();                                // 退避窗口：60s 内自动档不再首选内网
-        Toast.makeText(this, "内网" + why + "，自动改用公网…", Toast.LENGTH_SHORT).show();
+        // P0-1 要求「给用户明确状态」：死了就说"不可用，正在切"，慢才说"超时/连不上"。
+        Toast.makeText(this, dead ? "内网不可用，正在切公网…" : "内网" + why + "，自动改用公网…",
+                Toast.LENGTH_SHORT).show();
+        wanSwitchPending = true;                               // READY 时补一句「已切到公网」
         lastConnectUrl = store.url();
         gw.setTrustAllCerts(store.insecureTls());
         gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
         refreshRouteUI();
         return true;
+    }
+
+    /**
+     * P0-1：这条内网链路是不是**已经死了**（而不是"慢"）。
+     *
+     * <p>判据全部交给 {@link GatewayClient#linkDead(long)}：socket 没了/已关、状态不是 READY
+     * （握手失败、鉴权失败、socket 已断）、或距上次入站帧超过 {@link #LAN_DEAD_INBOUND_MS}。
+     * 第 ③ 条专治半开链路 —— TCP 不会立刻 FIN，state 还是 READY，界面还写着"已连接"。
+     *
+     * <p>只看**当前实际在用的那条地址**：已经跑在公网上的连接不算"内网死了"，那种情况由
+     * {@link #failoverUsed} 与 {@link Store#usingWan()} 去挡，不能把公网的问题算到内网头上。
+     */
+    private boolean isLanLinkDead() {
+        if (gw == null) return true;                            // 连接对象都没了，等同已死
+        if (isWanUrl(lastConnectUrl) && gw.state() == GatewayClient.State.READY) return false;
+        return gw.linkDead(LAN_DEAD_INBOUND_MS);
+    }
+
+    /**
+     * P0-1：READY 的内网链路**刚刚掉了**（READY → 非 READY）—— 这是"死"，不是"慢"。
+     *
+     * <p>不必等 {@link #AUTO_LAN_FAILOVER_MS}（6.5s）那道超时兜底，也不必等回合结束，
+     * 直接切公网。只认"当前确实在用内网 + 自动档 + 有公网地址 + 切得动"这几种情况，
+     * 其余一律交给既有逻辑（手动档绝不自动切、已经在公网就没有可切的）。
+     */
+    private void maybeImmediateLanFailover() {
+        if (gw == null || store == null) return;
+        if (!store.isAutoMode() || store.usingWan()) return;
+        if (store.wanUrl().isEmpty()) return;
+        if (lastConnectUrl.isEmpty() || !isLanUrl(lastConnectUrl)) return;
+        if (!LanAddress.isUsableLanUrl(store.lanUrl())) return;
+        autoSwitchToWan("断开");
     }
 
     /** 回合结束（或有明确结论不再 running）时，补执行被推迟的线路切换。 */
@@ -981,6 +1081,8 @@ public final class MainActivity extends Activity implements
         // [M2] 界面没了：让 KeepAliveService 知道"现在轮到它兜底"（进程被回收后重建时，
         // 服务会在没有界面的情况下把连接重新建起来）。
         if (LIVE == this) LIVE = null;
+        cancelLanHealth();       // P0-1 哨兵：Activity 销毁了就别再持有它
+        cancelAutoLanFailover();
         // 连接是进程级的：Activity 销毁（重建/任务切换）只解绑监听，不断开连接。
         if (gw != null && gw.listener() == this) gw.setListener(null);
         if (netCallback != null) {
@@ -1037,6 +1139,23 @@ public final class MainActivity extends Activity implements
         // 回到前台：不再需要"别的会话跑完了"的轮询（人就在看列表），
         // 通知栏里那条「进行中」也一并撤掉。
         uiHandler.removeCallbacks(bgSessionsPoll);
+        // P0-2：切回前台立刻做一次存活检查 —— socket 已被系统掐死时不能等 45s 的假连接判定；
+        // 链路看着新鲜也补发一次 ping 探测（2.5s 无新入站帧就直接重连）。
+        // onResume 紧随 onStart 调用，GatewayClient 内部有 1.5s 去重，不会重复探测。
+        checkForegroundLiveness();
+    }
+
+    /**
+     * P0-2：把「回前台立刻查连接死活」收口成一个入口，onStart / onResume 都调它。
+     *
+     * <p>为什么要两个都调：锁屏/解锁走 onPause→onStop→onStart→onResume，HOME 键切回也是；
+     * 但有些厂商 ROM 只给 onResume（不经过 onStop）的路径，漏一边就会漏掉检查。
+     * 真正的去重与判死逻辑在 {@link GatewayClient#foregroundLivenessCheck()} 里（1.5s 去重）。
+     */
+    private void checkForegroundLiveness() {
+        if (gw == null || store == null) return;
+        if (!gw.wantConnected()) return;
+        gw.foregroundLivenessCheck();
     }
 
     @Override
@@ -1049,6 +1168,8 @@ public final class MainActivity extends Activity implements
         applyScreenshotPolicy();
         // 回前台重新武装标题重试扫描（onStop 里把它撤了）；没有待办时 armTitleSweep 自己会空转返回。
         armTitleSweep();
+        // P0-2：与 onStart 同一入口（内部去重），保证只走 onResume 的 ROM 路径也查一次。
+        checkForegroundLiveness();
     }
 
     /**
@@ -1530,9 +1651,9 @@ public final class MainActivity extends Activity implements
      * （{@link GatewayClient.State#READY}）。断线 / 从未配对 / 电脑端网关被关掉 => 离线。
      *
      * 这里额外要求 canSend()（最近 30s 内收到过入站帧）：
-     * 半开链路（对端网卡关掉、隧道断掉）在 75s 假连接判定触发前 state 仍是 READY，
+     * 半开链路（对端网卡关掉、隧道断掉）在 45s 假连接判定触发前 state 仍是 READY，
      * 只看 state 会把"其实已经发不出帧"显示成在线 —— 那正是用户明确不要的假在线。
-     * 正常连接每 25s 一个 ping/pong（网关 lib/index.mjs:2896 收到 ping 回 pong），
+     * 正常连接每 15s 一个 ping/pong（网关 lib/index.mjs:2896 收到 ping 回 pong），
      * 30s 窗口稳得住。
      */
     private boolean isOnline() {
@@ -2168,6 +2289,19 @@ public final class MainActivity extends Activity implements
         if (st != GatewayClient.State.READY) {
             failInFlightDownloads("连接已断开");
             cancelFailoverReset();   // 掉线就撤掉"稳定计时"，别让它替新连接解禁（评审 P1-16）
+            cancelLanHealth();       // 掉线了：健康哨兵由下一次 READY 重新武装
+            // P0-1：内网 socket 刚刚**确定断掉**（READY → 非 READY）→ 立刻切公网。
+            // 这是"死"不是"慢"：不等 6.5s 超时兜底，也不受"有正在跑的会话"限制
+            // （回合跑在电脑端，重连后照常 subscribe + 网关重放，内容不丢）。
+            //
+            // 只认链路级失败（CONNECTING/DISCONNECTED/FAILED）：GATEWAY_OFF（电脑端网关没开）
+            // 与 UNAUTHORIZED（令牌失效）换线路也治不好，切过去只会对着公网再撞一次，
+            // 还会把"网关没开 / 请重新配对"这种明确结论覆盖成含糊的重连提示。
+            if (prevState == GatewayClient.State.READY
+                    && st != GatewayClient.State.GATEWAY_OFF
+                    && st != GatewayClient.State.UNAUTHORIZED) {
+                maybeImmediateLanFailover();
+            }
             // 掉线时在途的分页请求的响应永远不会来了：必须复位在途标记，
             // 否则重连后上滑加载更早历史会被 loadingMore 永久挡住。
             clearLoadMoreInFlight();
@@ -2183,6 +2317,14 @@ public final class MainActivity extends Activity implements
             // 把内网退避续期 —— 这就是「连通后记住当前用哪条」，下次重连不会又白试一次内网（防乒乓）。
             cancelAutoLanFailover();
             pendingAutoFailover = false;
+            armLanHealth();          // P0-1：连上了也继续守着内网死活（半开链路专用）
+            // P0-1 要求「给用户明确状态」：因为内网死了切过来的，连上了就补一句「已切到公网」。
+            if (wanSwitchPending) {
+                wanSwitchPending = false;
+                if (isWanUrl(lastConnectUrl)) {
+                    Toast.makeText(this, "已切到公网", Toast.LENGTH_SHORT).show();
+                }
+            }
             if (store.isAutoMode() && NetStatus.wifi() && isWanUrl(lastConnectUrl)) Store.noteLanFailure();
             refreshRouteUI();
             // 重连后看门狗要撤（避免按钮永久卡 ■），但"运行中"标记不能无条件复位（评审 N1）：
@@ -4475,7 +4617,7 @@ public final class MainActivity extends Activity implements
     }
 
     // ---- 审批/提问的"回执看门狗"（评审 P0-3 补齐）
-    // canSend() 只保证 state==READY；电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 75s
+    // canSend() 只保证 state==READY；电脑端关掉网卡时 TCP 不会立刻 FIN，state 最长 45s
     // 都还是 READY → 卡片被乐观标成「✓ 已批准」，帧其实进了黑洞。
     // 网关对 approval-response / question-answer 都有回执帧（approval-resolved /
     // question-response，见 tools/mock-gateway.mjs 的对应分支），所以等不到回执就把卡片
@@ -4938,7 +5080,7 @@ public final class MainActivity extends Activity implements
             return;
         }
         // 半开链路防护（评审 P1-12 同族）：TCP 还活着但网关侧早已关闭时，state 仍是 READY、
-        // isOnline() 也过（pong 只是 75s 判死窗口内没跑满），此时 sendMessage 的帧会进黑洞
+        // isOnline() 也过（pong 只是 45s 判死窗口内没跑满），此时 sendMessage 的帧会进黑洞
         // ——用户看到输入框清空就以为发出去了，实际消息丢失（模拟器实测复现：网关日志里
         // 没有对应 prompt 记录）。canSend() 要求 30s 内收到过入站帧，能挡住这一类。
         if (!gw.canSend()) {

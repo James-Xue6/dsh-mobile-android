@@ -1,0 +1,18 @@
+Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+[+23ms wall=1791128068879] PROBE-START url=ws://127.0.0.1:3391/ws/mobile
+[+64ms wall=1791128068920] state=CONNECTING �� �������ӵ��ԡ�
+[+111ms wall=1791128068967] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[+116ms wall=1791128068972] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+150ms wall=1791128069006] state=READY �� ������
+[+151ms wall=1791128069007] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+3158ms wall=1791128072014] FG-CHECK callAt=1791128072008 invoked=true returned=false
+[+5657ms wall=1791128074513] state=CONNECTING �� ������ʧЧ����������
+[+5663ms wall=1791128074519] state=CONNECTING �� �͵��ԶϿ��ˣ��������������� 1 �Σ�2s �����ԣ�
+[+7664ms wall=1791128076520] state=CONNECTING �� �������ӵ��ԡ�
+[+7667ms wall=1791128076523] state=AUTHENTICATING �� �����ӣ��ȴ�����
+[+7672ms wall=1791128076528] paired
+LOG/DSH-Control: hello caps=[images, split-channels, assistant-stream-v1, projection-baseline, session-cancel, session-archive, history-format-version, session-create, file-downloads, session-rename, queue-control, commands, tasks, goals]
+[+7695ms wall=1791128076551] hello caps=["split-channels","assistant-stream-v1","history-format-version","projection-baseline","images","session-create","commands","tasks","goals","session-cancel","queue-control","session-archive","session-rename","file-downloads"]
+[+7695ms wall=1791128076551] state=READY �� ������
+[+30016ms wall=1791128098872] PROBE-END

@@ -6,7 +6,9 @@
     pwsh -File .\pc-plugin\install.ps1 -Profile desktop     # 指定 profile
 
 它会做四件事：
- 1. 把 pc-plugin\dsh-mobile-access 复制到 ~/.dsh/local-plugins/dsh-mobile-access（旧目录先备份）
+ 1. 把 pc-plugin\dsh-mobile-access 复制到 ~/.dsh/local-plugins/dsh-mobile-access
+    （旧目录与任何同名残留先挪到 ~/.dsh/backups/ —— **不留在 local-plugins 里**，
+      否则 DSH 会扫到第二个同名插件，用户看到"两个插件"甚至渲染到旧版面板）
  2. 把安装包 dist\dsh-mobile.apk 放进插件目录的 app\（面板据此提供「扫码下载 App」）
  3. 在目标 profile 的 package.json 里登记依赖与 bundle
     （dsh-plugin-mobile-gateway 只登记依赖；它的宿主行由本插件的 cordis.patch.yml 挂载，
@@ -26,6 +28,10 @@ $dshHome = Join-Path $env:USERPROFILE '.dsh'
 $profileDir = Join-Path $dshHome "profiles\$Profile"
 $pluginSrc = Join-Path $PSScriptRoot 'dsh-mobile-access'
 $pluginDst = Join-Path $dshHome 'local-plugins\dsh-mobile-access'
+# [P1 修复] 插件目录的备份统一放这里，**绝不放 local-plugins\**：
+# 那个目录会被 DSH 当插件来源扫描，里面留一份 dsh-mobile-access.bak-install-*（package.json
+# 的 name 同样是 dsh-mobile-access）就会变成"两个插件"，用户还可能看到旧版面板。
+$backupDir = Join-Path $dshHome 'backups'
 $apkSrc = Join-Path $repoRoot 'dist\dsh-mobile.apk'
 $pluginName = 'dsh-mobile-access'
 $gatewayName = 'dsh-plugin-mobile-gateway'
@@ -44,12 +50,20 @@ if (-not (Test-Path $profileDir)) { throw "找不到 profile 目录：$profileDi
 
 # ---------------------------------------------------------------- 1. 复制插件
 Write-Host "`n[1/4] 复制插件到 local-plugins" -ForegroundColor Cyan
-if (Test-Path $pluginDst) {
-  $bak = "$pluginDst.bak-install-$(Get-Date -Format yyyyMMdd-HHmmss)"
-  Move-Item $pluginDst $bak
-  Warn "已存在旧插件，备份为：$bak"
+# 先把 local-plugins\ 里所有 dsh-mobile-access* 残留（旧的正式目录 + 历史 .bak-install-*）
+# 统一挪到 ~/.dsh/backups/。为什么必须挪走而不是原地改名：
+# 原地改名后目录里的 package.json 仍然写着 name = dsh-mobile-access，DSH 扫描时
+# 会把它当成第二个同名插件 → 用户看到"两个插件"，甚至渲染的是旧版面板。
+New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+$pluginRoot = Split-Path $pluginDst -Parent
+New-Item -ItemType Directory -Force -Path $pluginRoot | Out-Null
+$stale = @(Get-ChildItem -Path $pluginRoot -Directory -Filter "$pluginName*" -ErrorAction SilentlyContinue)
+foreach ($d in $stale) {
+  $dest = Join-Path $backupDir ($d.Name + '.' + (Get-Date -Format yyyyMMdd-HHmmss))
+  Move-Item $d.FullName $dest
+  Warn "移走同名残留：local-plugins\$($d.Name)  ->  $dest"
 }
-New-Item -ItemType Directory -Force -Path (Split-Path $pluginDst -Parent) | Out-Null
+if ($stale.Count -eq 0) { Info "local-plugins 下没有同名残留" }
 Copy-Item $pluginSrc $pluginDst -Recurse -Force
 Ok "已复制 -> $pluginDst"
 
@@ -113,16 +127,31 @@ if (-not $pkg.dependencies.PSObject.Properties[$pluginName]) {
 # 只把本插件登记为 bundle：dsh-plugin-mobile-gateway 现在由本插件自己的
 # cordis.patch.yml 挂载（id: mobile-gateway），这里不再把它塞进 bundles；
 # 已经装过旧版的要把残留项摘掉，否则同一个行会被两个 bundle 层各插一次。
-$bundles = @($pkg.dsh.profile.bundles)
+#
+# [P1 修复] 追加前**先查重**：同一项在 bundles 里出现两次，DSH 会把同一个插件加载两遍
+# （本机实测过 "dsh-mobile-access" 出现 2 次的报告）。这里顺手做归一化（去空白、丢空项）
+# 并对整表去重，把已经存在的重复项一起修掉。
+$bundles = @($pkg.dsh.profile.bundles | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
+$beforeCount = $bundles.Count
+$bundles = @($bundles | Select-Object -Unique)
+if ($bundles.Count -lt $beforeCount) { Warn "bundles 里有 $($beforeCount - $bundles.Count) 个重复项，已去掉" }
 if ($bundles -notcontains $pluginName) { $bundles += $pluginName; Ok "bundles + $pluginName" }
-else { Info "bundles 已有 $pluginName" }
+else { Info "bundles 已有 $pluginName（查重通过，不重复追加）" }
 if ($bundles -contains $gatewayName) {
   $bundles = @($bundles | Where-Object { $_ -ne $gatewayName })
   Ok "bundles - $gatewayName（改由本插件的 patch 挂载，避免重复行）"
 }
-$pkg.dsh.profile.bundles = $bundles
+$pkg.dsh.profile.bundles = @($bundles)
 $pkg | ConvertTo-Json -Depth 20 | Set-Content $pkgPath -Encoding utf8
 Ok "package.json 已更新（备份：package.json.bak-install）"
+# 落盘后复核：只看"没报错"不算验证 —— bundles 写坏了会直接把 DSH 卡在启动
+$verify = @((Get-Content $pkgPath -Raw | ConvertFrom-Json).dsh.profile.bundles)
+$dup = @($verify | Group-Object | Where-Object { $_.Count -gt 1 })
+if ($dup.Count -gt 0) { throw "package.json 里 bundles 仍有重复项：$($dup.Name -join ', ')" }
+if (@($verify | Where-Object { $_ -eq $pluginName }).Count -ne 1) {
+  throw "package.json 里 $pluginName 在 bundles 中出现次数不是 1"
+}
+Ok "复核通过：bundles 无重复，$pluginName 恰好 1 次（共 $($verify.Count) 项）"
 
 # ---------------------------------------------------------------- 4. 补网关配置
 Write-Host "`n[4/4] 补 mobile-gateway 配置（lanPort 3091）" -ForegroundColor Cyan
@@ -152,6 +181,22 @@ if ($patch -match 'id:\s*mobile-gateway') {
   Ok "cordis.patch.yml 已追加配置（备份：cordis.patch.yml.bak-install）"
 }
 
+# ---------------------------------------------------------------- 附：local-plugins 残留体检
+# 「两个插件 / 老界面」的根因就是这里留着 dsh-mobile-access.bak-install-*。
+# 本脚本 [1/4] 已经自动把它们挪走了；这一段是落盘后的复核 + 手动清理指引。
+Write-Host "`n[附] 检查 local-plugins 下的同名残留" -ForegroundColor Cyan
+$leftover = @(Get-ChildItem -Path $pluginRoot -Directory -Filter "$pluginName*" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -ne $pluginDst })
+if ($leftover.Count -eq 0) {
+  Ok "local-plugins 下只剩一个 $pluginName（没有 .bak-install-* 残留）"
+} else {
+  Warn "local-plugins 下仍有同名目录：$($leftover.Name -join ', ')"
+  Warn "  手动清理（挪到备份目录，不要直接删）："
+  foreach ($d in $leftover) {
+    Warn "    Move-Item '$($d.FullName)' '$backupDir\$($d.Name).manual'"
+  }
+}
+
 # ---------------------------------------------------------------- 完成
 Write-Host "`n=== 安装完成 ===" -ForegroundColor Cyan
 Write-Host @"
@@ -165,6 +210,10 @@ Write-Host @"
        网关开关、公网隧道、已配对设备与吊销都在下面的「高级设置」里（默认收起）
        · 设置 → 通用 →「手机接入」现在只做跳转，不再重复一份功能
   3. 若面板提示网关不可用，确认 dsh-plugin-mobile-gateway 已装且已重启
+  4. 若曾经看到"两个插件 / 老界面"：那是 local-plugins 里留了 .bak-install-* 残留。
+     本脚本 [1/4] 已自动挪到 $backupDir；想手动再清一遍就照 [附] 那段打印的命令做
+     （把 <残留目录名> 换成实际名字，挪走而不是删除）：
+       Move-Item "$pluginRoot\<残留目录名>" "$backupDir\<残留目录名>.manual"
 "@
 
 # ---------------------------------------------------------------- 附：网关面板补丁

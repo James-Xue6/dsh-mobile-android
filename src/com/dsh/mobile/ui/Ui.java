@@ -1334,6 +1334,39 @@ public final class Ui {
         /** 只圆上两角（底部弹窗 / sheet 用）。返回 this 便于链式写。 */
         public CardBg topOnly(boolean v) { this.topOnly = v; return this; }
 
+        // [灰化根治·2026-10-05] 框架渐变卡体（按尺寸缓存重建）。
+        //
+        // 背景：自绘 `drawPath` + `LinearGradient` 在**超高卡片**上会被整片压暗成灰色 ——
+        // 真机逐像素证据（荣耀 PGT-AN10）：设计色 #FBFAFE = (251,250,254)，
+        // 实测卡片内部 (185,183,193)（-26%），且只在最外侧露 ~8px 正常色带；
+        // 同一坐标改用框架 GradientDrawable 后回到 (251,250,254) ✓。
+        // 上一轮只把提问卡/审批卡换成 Ui.cardGrad()，其它 CardBg 使用者（子智能体卡、
+        // 文件卡、工具卡、sheet、chip 胶囊…）仍会灰化 —— 这里**从组件层根治**，
+        // 所有调用点自动受益，无需逐个改。
+        private android.graphics.drawable.GradientDrawable gd;
+        private float gdW = -1f, gdH = -1f;
+
+        private void ensureGd(float w, float h) {
+            if (gd != null && gdW == w && gdH == h) return;
+            android.graphics.drawable.GradientDrawable g =
+                    new android.graphics.drawable.GradientDrawable();
+            if (topOnly) {
+                g.setCornerRadii(new float[] { radius, radius, radius, radius, 0f, 0f, 0f, 0f });
+            } else {
+                g.setCornerRadius(radius);
+            }
+            if (grad != null && grad.length >= 2) {
+                g.setOrientation(android.graphics.drawable.GradientDrawable.Orientation.TL_BR);
+                g.setColors(grad);
+            } else {
+                g.setColor(fill);
+            }
+            g.setStroke(Math.max(1, (int) Math.ceil(stroke)), line);
+            gd = g;
+            gdW = w;
+            gdH = h;
+        }
+
         @Override
         public void draw(android.graphics.Canvas cv) {
             android.graphics.Rect b = getBounds();
@@ -1347,20 +1380,13 @@ public final class Ui {
                     : new float[] { radius, radius, radius, radius, radius, radius, radius, radius },
                     android.graphics.Path.Direction.CW);
 
-            // ① 卡体：渐变版用「左上 → 右下」对角渐变（Sadees 奶白卡），玻璃版用半透明填充。
-            //    shader 不能常驻成员里——CardBg 在主题切换时是重建的，但同一实例会被
-            //    复用到不同尺寸的 View 上，Draw 的 bounds 每帧都可能变，必须按当帧 bounds 建。
-            p.setStyle(android.graphics.Paint.Style.FILL);
-            if (grad != null && w > 0f && h > 0f) {
-                p.setShader(new android.graphics.LinearGradient(
-                        0f, 0f, w, h,
-                        grad[0], grad[grad.length - 1],
-                        android.graphics.Shader.TileMode.CLAMP));
-            } else {
-                p.setShader(null);
-                p.setColor(fill);
-            }
-            cv.drawPath(shape, p);
+            // ① 卡体 + 发丝描边：**交给框架 GradientDrawable**（[灰化根治·2026-10-05]）
+            //    自绘 drawPath+shader 在超高卡片上会整片压暗成灰（见 ensureGd 注释）。
+            //    shape 仍保留，供 ②④ 的边缘叠层裁剪使用。
+            ensureGd(w, h);
+            gd.setBounds(b.left + (int) inset, b.top + (int) inset,
+                    b.right - (int) inset, b.bottom - (int) inset);
+            gd.draw(cv);
 
             // ② 左侧 3dp 强调条（被卡片圆角裁掉才不露方角）
             if (android.graphics.Color.alpha(accent) != 0 && barW > 0f) {
@@ -1371,12 +1397,7 @@ public final class Ui {
                 cv.restore();
             }
 
-            // ③ 发丝描边（原有能力：让边缘不发虚）
-            p.setStyle(android.graphics.Paint.Style.STROKE);
-            p.setStrokeWidth(stroke);
-            p.setShader(null);
-            p.setColor(line);
-            cv.drawPath(shape, p);
+            // ③ 发丝描边：已由 ensureGd 里的 setStroke 负责（原来在这里自绘一遍）。
 
             // ④ 顶部高光边 + 底部微暗（液态玻璃的关键：玻璃的"反光棱"）。
             //

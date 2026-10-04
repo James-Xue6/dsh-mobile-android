@@ -1,0 +1,5 @@
+mock gateway on ws://0.0.0.0:3391/ws/mobile  fault=silent  host=127.0.0.1
+PAIRING_STRING=eyJ2ZXJzaW9uIjoyLCJwdWJsaWNVcmwiOiJ3czovLzEyNy4wLjAuMTozMzkxL3dzL21vYmlsZSIsInBhaXJpbmdDb2RlIjoibW9ja3BhaXJjb2RlMDAwMSIsImV4cGlyZXNBdCI6MTc5MTEzMTY1NDc5OCwiZ2F0ZXdheUlkIjoibW9jay1nYXRld2F5IiwiZW5kcG9pbnRzIjpbIndzOi8vMTI3LjAuMC4xOjMzOTEvd3MvbW9iaWxlIl19
+token=mock-device-token-0001  deviceId=mock-device-uuid-0001
+已写入 pairing.txt（无换行，可直接粘贴/生成二维码）
+提示：此配对串只适合 App 与网关同机（JVM harness）。跑模拟器请加 --host 10.0.2.2，真机请填电脑局域网 IP。
