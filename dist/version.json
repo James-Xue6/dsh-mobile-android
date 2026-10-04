@@ -1,9 +1,9 @@
 {
-  "versionCode": 15,
-  "versionName": "0.85",
-  "notes": "目标卡改顶部浮动层(与输入框对称/点开就地展开/顶部渐隐)；任务项状态渲染(打钩划掉/转动/空心圈)；修点不开、灰底黑框、无卡时误渐隐、历史翻页被重连重置、带图消息文字竖排、排队修改无反应、助手消息图片不显示；跨会话提醒走通知栏(周期重连)+多项诊断",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.85/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.85/dist/dsh-mobile.apk",
+  "versionCode": 16,
+  "versionName": "0.86",
+  "notes": "修「人在这条会话里就收不到通知栏」：提问/审批改为高优先级，即使在看的会话也弹通知；重连不再重置历史分页",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

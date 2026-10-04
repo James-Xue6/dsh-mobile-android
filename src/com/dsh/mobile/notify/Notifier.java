@@ -290,6 +290,10 @@ public final class Notifier {
         if (!notificationsAllowed(ctx)) return false;
         if (!transactional && store.notifyOnlyPending()) return false;
         // 人正在看这条会话 → 不发（卡片就摆在眼前，通知是纯打扰）
+        // **提问/审批是高优先级**：即使用户正看着这条会话也要弹通知栏 ——
+        // 用户实测反馈："我就停在这一条对话里，是靠通知才知道有提问的"。
+        // 只有低优先级的静默通知（进行中等）才做"人在看就不打扰"的抑制。
+        if (transactional) return true;
         return !(foreground && sessionId != null && sessionId.equals(viewedSession));
     }
 
