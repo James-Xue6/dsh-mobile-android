@@ -285,7 +285,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 可点开看全文（原先 8 行封顶 + 省略号且不可点，用户报"显示有问题、点不开看全部"）
         planView.setClickable(true);
         Ui.tap(planView);
-        planView.setOnClickListener(v -> { Ui.haptic(v); host.onOpenPlan(); });
+        // **就地向下展开**（点一下放大、再点收起）——不是底部弹窗、也不是系统弹窗
+        planView.setOnClickListener(v -> { Ui.haptic(v); togglePlanExpand(); });
         addView(planView);
 
         // ---- 分页状态行：正在加载更早 / 加载失败可重试（点一下 = 重新请求）
@@ -725,6 +726,23 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
     }
 
+    /** 目标卡是否处于"展开（完整列表）"状态。 */
+    private boolean planExpanded = false;
+    /** 宿主当前的简洁模式（收起时用它决定留 1 行还是 8 行）。 */
+    private boolean planCompactMode = false;
+
+    /** 就地展开 / 收起目标卡：展开时显示完整任务列表（往下长出来），收起时回到 1 行摘要。 */
+    public void togglePlanExpand() {
+        if (planView == null) return;
+        planExpanded = !planExpanded;
+        planView.setMaxLines(planExpanded ? 12 : (planCompactMode ? 1 : 8));
+        planView.setEllipsize(planExpanded ? null : android.text.TextUtils.TruncateAt.END);
+        planView.setText(planFullText);
+        if (planView.getParent() instanceof android.view.View) {
+            ((android.view.View) planView.getParent()).requestLayout();
+        }
+    }
+
     /** 点「目标 / 任务」卡片时用：取全文。 */
     public String planFullText() { return planFullText; }
 
@@ -848,6 +866,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
         planView.setMaxLines(compact ? 1 : 8);
         planFullText = planText == null ? "" : planText;
+        planCompactMode = compact;
         planView.setText(compact ? compactPlan(planText) : planText);
         planView.setVisibility(VISIBLE);
     }
