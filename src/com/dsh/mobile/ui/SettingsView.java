@@ -96,7 +96,10 @@ public final class SettingsView extends LinearLayout {
         TextView back = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_chevron_left,
                 android.graphics.Color.TRANSPARENT, Ui.BRAND, 20f, 36f);
         back.setContentDescription("返回");
-        back.setOnClickListener(v -> host.onBack());
+        back.setOnClickListener(v -> {
+            Ui.haptic(v);          // 后退轻震动（与会话页一致）
+            host.onBack();
+        });
         bar.addView(back);
         TextView barTitle = Ui.text(ctx, "连接设置", Ui.S_HEAD, Ui.INK, true);
         barTitle.setPadding(Ui.dp(ctx, 4), 0, 0, 0);

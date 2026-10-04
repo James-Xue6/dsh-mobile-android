@@ -84,6 +84,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private View bottomFade;
     /** 底部渐隐层高度（dp）：够覆盖输入胶囊 + 一点呼吸区 */
     private static final float FADE_H = 132f;
+    /** 列表底部留白的"呼吸量"（叠在悬浮层高度之上，见 bottomStack 的布局监听） */
+    private int listBasePadBottom;
     /** 顶部「目标 / 任务」提要条 */
     private TextView planView;
     /**
@@ -159,7 +161,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 android.graphics.Color.TRANSPARENT, Ui.BRAND, 20f, 36f);
         backBtn = back;
         back.setContentDescription("任务列表");
-        back.setOnClickListener(v -> host.onOpenTasks());
+        back.setOnClickListener(v -> {
+            Ui.haptic(v);          // 后退给一次轻震动（用户要求的质感反馈）
+            host.onOpenTasks();
+        });
         bar.addView(back);
 
         LinearLayout titles = Ui.col(ctx);
@@ -236,8 +241,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         list.setDivider(null);
         list.setDividerHeight(0);
         list.setCacheColorHint(0);
-        // 底部多留 92dp：输入区现在是**悬浮层**（盖在列表上），没有这段内边距时
-        // 最后一条消息会被胶囊永久压住读不全（clipToPadding=false 让它仍能滚上去）。
+        // 底部先给 92dp 占位：输入区是**悬浮层**（盖在列表上），最终留白由 bottomStack 的
+        // 布局监听按它的实际高度动态覆盖（见下方 addOnLayoutChangeListener）——「N 子智能体」
+        // 入口出现时悬浮层会变高，固定留白不够会把最后一条消息压住。
         list.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 92));
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
@@ -347,6 +353,20 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         bsLp.gravity = Gravity.BOTTOM;
         stage.addView(bottomStack, bsLp);
+
+        // **底部留白按悬浮层实际高度算（2026-10-04 用户报「子智能体这条把最下面的字挡住了」）**：
+        // 固定 92dp 只够输入胶囊；「N 子智能体」入口出现时悬浮层会高出一截，最后一条消息
+        // 就被压在入口条下面。这里监听悬浮层高度，动态把列表底部内边距跟上去（+12dp 呼吸）。
+        listBasePadBottom = Ui.dp(ctx, 12);
+        bottomStack.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int h = v.getHeight();
+            if (h <= 0) return;
+            int want = h + listBasePadBottom;
+            if (want == list.getPaddingBottom()) return;
+            list.setPadding(list.getPaddingLeft(), list.getPaddingTop(),
+                    list.getPaddingRight(), want);
+            list.setClipToPadding(false);
+        });
 
         // ---- 输入框上方：子智能体入口 + 只读说明
         //

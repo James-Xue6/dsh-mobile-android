@@ -802,6 +802,21 @@ public final class Ui {
     /** 按压反馈（按钮默认 0.97 的缩放）。 */
     public static void tap(View v) { tap(v, 0.97f); }
 
+    /**
+     * 轻触觉反馈（2026-10-04 用户要求「后退加一下震动，增加使用质感」）。
+     *
+     * <p>用框架自带的 {@link android.view.HapticFeedbackConstants#VIRTUAL_KEY}，不引入
+     * Vibrator 权限也不需要任何第三方库。**故意不带 FLAG_IGNORE_GLOBAL_SETTING**：
+     * 用户在系统里关掉"触摸振动"时就该安静 —— 尊重系统设置比"一定要震"重要。
+     * 设备没有振动器 / 系统拒绝时静默跳过，绝不影响点击本身。
+     */
+    public static void haptic(View v) {
+        if (v == null) return;
+        try {
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+        } catch (Throwable ignored) { }
+    }
+
     /** 每个父容器上的 {@link TouchDelegateGroup}（键是父容器本身；弱引用，容器回收后自动消失）。 */
     private static final java.util.WeakHashMap<android.view.ViewGroup, TouchDelegateGroup>
             TOUCH_DELEGATES = new java.util.WeakHashMap<>();
@@ -1874,13 +1889,30 @@ public final class Ui {
      */
     public static LinearLayout sheetCard(Context c) {
         LinearLayout box = col(c);
-        // Sadees：弹窗体 = 奶白渐变（浅 #FBFAFE→#EFEDF7 / 深 #1C1B22→#141318）+ 32dp 上圆角。
-        // 每次打开弹窗都会重新调本方法，读到的就是当前主题的 token，不需要 applyTheme。
-        box.setBackground(new CardBg(dp(c, R_SHEET),
-                new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE,
-                0x00000000, 0f).topOnly(true));
+        // **2026-10-04 真机实测修「滑动后弹窗变半透明」**（用户三次反馈，numpy 差分定位）：
+        // 旧版用自绘 CardBg 当面板底，在带 FLAG_BLUR_BEHIND 的 Dialog 窗口里，滑动使窗口内容
+        // 重绘后**面板底那一层整个没被画出来** —— 只剩行卡片和按钮，背后聊天文字整片透上来。
+        // 换成框架标准的 GradientDrawable（纯色不透明 + 上两角圆角），走系统优化路径，
+        // 不再出现"父层底丢失"。颜色用 SURFACE（各主题档里的不透明卡片色）。
+        box.setBackground(sheetBg(c));
         box.setPadding(dp(c, M_CARD_PAD), dp(c, 8), dp(c, M_CARD_PAD), dp(c, 14));
         return box;
+    }
+
+    /**
+     * 底部弹窗的底：**纯色不透明** + 只圆上两角（iOS bottom sheet 制式）。
+     *
+     * <p>用系统 {@link GradientDrawable} 而不是自绘 {@link CardBg}：后者在这个
+     * 「透明窗口 + 背景模糊 + 内容滚动」的组合下被实测出"底丢失"（见 {@link #sheetCard}）。
+     */
+    public static GradientDrawable sheetBg(Context c) {
+        float r = dp(c, R_SHEET);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.RECTANGLE);
+        g.setColor(SURFACE);
+        // 顺序：左上x,y 右上x,y 右下x,y 左下x,y —— 下两角为 0（贴着屏幕下缘）
+        g.setCornerRadii(new float[] { r, r, r, r, 0f, 0f, 0f, 0f });
+        return g;
     }
 
     /**

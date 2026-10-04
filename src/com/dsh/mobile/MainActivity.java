@@ -1231,6 +1231,10 @@ public final class MainActivity extends Activity implements
     @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
+        // 系统返回（手势/导航键）：也给一次轻震动 —— 与页内左上角「‹」的反馈一致
+        try { getWindow().getDecorView()
+                .performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); }
+        catch (Throwable ignored) { }
         handleBackKey();
     }
 

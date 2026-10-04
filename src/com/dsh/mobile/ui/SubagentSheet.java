@@ -114,9 +114,11 @@ public final class SubagentSheet {
             Ui.applyScreenshotPolicy(w);
             w.setDimAmount(0.35f);
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            // 液态玻璃：底部弹窗背后做**真模糊**（API 31+；窗口底是透明的，模糊才看得见）。
-            // ROM 关掉模糊时什么都不会发生 —— 面板本身是 88~90% 不透明的厚玻璃，照常可读。
-            Ui.applyWindowBlur(w, 24f);
+            // **不要给这个弹窗挂窗口背景模糊（2026-10-04 真机实测）**：
+            // 旧版加了 FLAG_BLUR_BEHIND + setBackgroundBlurRadius，配合"透明窗口底 + 面板自绘底"
+            // 在滑动后会出现**面板底整层丢失**（背后聊天文字透上来、看起来"一滑动就变色"）。
+            // 去掉模糊后遮罩仍在，视觉几乎无差别，但不再触发那条有问题的窗口合成路径。
+            // 面板本身是不透明的（Ui.sheetCard），可读性不受影响。
         }
         dlg.show();
     }
