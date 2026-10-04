@@ -156,7 +156,10 @@ public final class ChatAdapter extends BaseAdapter {
     // ------------------------------------------------------------ 用户
 
     private View userBubble(ChatItem it) {
-        LinearLayout wrap = Ui.row(ctx);
+        // **必须竖排**：外层容器若是横向（Ui.row），图片会按 maxBubble 占满整行，
+        // 文字气泡只剩不到一个字的宽度 → 每个字独占一行，看起来就是"一条竖排长条、
+        // 占满整屏"（真机截图实测：`[图片]我需要制作一个dsh插件…` 竖着排成一条）。
+        LinearLayout wrap = Ui.col(ctx);
         wrap.setPadding(0, Ui.dp(ctx, 5), 0, Ui.dp(ctx, 5));
         wrap.setGravity(Gravity.END);
 
