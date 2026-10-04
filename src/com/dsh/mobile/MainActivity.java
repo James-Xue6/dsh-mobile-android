@@ -203,10 +203,10 @@ public final class MainActivity extends Activity implements
             // **已回退"周期强制重连"**：它会让会话列表被 snapshot 反复重置，导致
             // 「往上滑加载历史」失效（用户实测：之前的内容读不出来）。跨会话提醒改用
             // 空闲期保持未订阅（Connection 未过滤）的路线，不再动连接。
-            if (gw != null && gw.wantsGlobalLane() && !currentSessionId.isEmpty()) {
-                gw.refreshGlobalView(currentSessionId, running);
-            }
-            globalLaneHandler.postDelayed(this, 20_000L);
+            // **已停用（重要）**：unsubscribe 会切断当前会话的 follow → session-snapshot 不再到达
+            // → hasMore/nextBeforeSeq 取不到 → 「往上滑加载更早历史」失效（用户实测两次）。
+            // 因此恢复"始终订阅当前会话"：跨会话提醒这条不再用客户端 hack，改由电脑端插件解决。
+            globalLaneHandler.postDelayed(this, 60_000L);
         }
     };
     /** 当前会话的 todo 列表（tasks / tasks-updated 的最新值，「任务」chip 与面板的数据源）。 */
