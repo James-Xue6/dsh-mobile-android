@@ -102,6 +102,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private TextView toBottom;
     /** 列表底部渐隐层：让消息文字在接近悬浮输入条前淡出（避免两层字重叠） */
     private View bottomFade;
+    /** [P0 修复] 悬浮舞台与底部悬浮层：用来算"卡片真正看得见的区域"。 */
+    private View stageView;
+    private View bottomStackView;
     /** 底部 chip 行的「模型」chip（显示当前模型名；点它拉模型目录）。 */
     private TextView modelChip;
     /** 「思考」chip（当前模型的思考等级）。 */
@@ -135,8 +138,34 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         t.setLayoutParams(lp);
         return t;
     }
-    /** 底部渐隐层高度（dp）：够覆盖输入胶囊 + 一点呼吸区 */
-    private static final float FADE_H = 132f;
+    /**
+     * 底部渐隐层在悬浮层之上**额外**多盖的一小段（dp）。
+     *
+     * <p>[P0 修复·灰框] 改前这里是固定 132dp 的层高：底部渐隐从屏幕底往上铺 462px，
+     * 卡片一滚进这个区间就像被一块灰幕盖住（用户两次反馈"渐变太大""一滑动就有灰框"）。
+     * 现在层高改为**跟随底部悬浮层实测高度 + 这一小段余量**，渐隐只作用在输入区正上方。
+     */
+    private static final float FADE_MARGIN_DP = 18f;
+    /**
+     * 底部渐隐层的高度上限（相对本 View 高度）。
+     *
+     * <p>双保险：即使悬浮层异常变高，渐隐也不会盖住列表的中上部（30% 屏高 ≈ 一段窄带）。
+     */
+    private static final float FADE_MAX_RATIO = 0.30f;
+    /**
+     * [P0 修复·输入胶囊] 输入框最多显示的行数，超出由 EditText 内部滚动。
+     *
+     * <p>用户报「输入字符一多，键盘上方那个一圈灰色的胶囊被撑成一大块灰框」。
+     * 行数上限 + {@link MaxHeightEditText} 的像素级硬上限，两道一起保证胶囊高度有界。
+     */
+    private static final int INPUT_MAX_LINES = 5;
+    /**
+     * [P0 修复] 底部悬浮输入区最多能吃掉的高度比例（相对 ConversationView 高度）。
+     *
+     * <p>悬浮层高度会被同步成列表底部留白；如果输入区无限长高，消息区就被挤没了。
+     * 45% 是"胶囊最多 5 行 + chip 行"的富余量，超过就由胶囊内部滚动兜住。
+     */
+    private static final float BOTTOM_STACK_MAX_RATIO = 0.45f;
     /** 列表底部留白的"呼吸量"（叠在悬浮层高度之上，见 bottomStack 的布局监听） */
     private int listBasePadBottom;
     /** 「回到底部」按钮的布局参数（下边距要跟悬浮层高度走）。 */
@@ -400,6 +429,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         //   · 输入区（子智能体入口 + 输入胶囊）作为**悬浮层**贴在舞台底部；
         //   · 列表加 92dp 底部内边距，最后一条消息仍能滚到胶囊上方读全。
         FrameLayout stage = new FrameLayout(ctx);
+        stageView = stage;
         stage.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         stage.addView(listWrap);
@@ -413,8 +443,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 普通 View 无 API 可用。渐隐层在列表之上、输入区之下。
         if (listBasePadTop == 0) listBasePadTop = Ui.dp(ctx, 12);
         bottomFade = new View(ctx);
+        // [P0 修复·灰框] 初始只给"余量"那么高；真实高度在下面 bottomStack 的布局监听里
+        // 按悬浮层实测高度动态设置（悬浮层多高，渐隐就多高 + FADE_MARGIN_DP）。
         bottomFade.setLayoutParams(new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_H)));
+                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_MARGIN_DP)));
         bottomFade.setBackground(buildFade(ctx));
         FrameLayout.LayoutParams ffLp = (FrameLayout.LayoutParams) bottomFade.getLayoutParams();
         ffLp.gravity = Gravity.BOTTOM;
@@ -427,6 +459,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         pendingBar = Ui.text(ctx, "", Ui.S_CAP2, Ui.INK, true);
         pendingBar.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10));
         pendingBar.setBackground(Ui.round(0, Ui.SELECT_BG));
+        // [P0 修复·顶部灰条] 最多 2 行 + 省略号：改前是 wrap_content 无上限，
+        // 长标题会把这条灰条撑成一大块灰框；改后高度 = min(2 行, 内容)。
+        pendingBar.setMaxLines(2);
+        pendingBar.setEllipsize(android.text.TextUtils.TruncateAt.END);
         pendingBar.setVisibility(GONE);
         pendingBar.setClickable(true);
         Ui.tap(pendingBar);
@@ -470,7 +506,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
 
         // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap / 渐隐之后，绘在最上层
-        LinearLayout bottomStack = Ui.col(ctx);
+        //
+        // [P2 修复] 换成**高度封顶**的容器：改前只封了"列表底部留白"（封错了对象），
+        // 悬浮层本身仍可无限长高 → 最后一条消息被永久压在它下面（留白不够、又滚不上来）。
+        // 现在直接封悬浮层：最多占父容器（stage）高度的 BOTTOM_STACK_MAX_RATIO。
+        // gravity=BOTTOM + clipChildren=true → 超高时裁掉**顶部**（待发送条 / 子智能体入口
+        // 先让位），底部输入胶囊永远留在屏幕内。
+        MaxHeightLinearLayout bottomStack = new MaxHeightLinearLayout(ctx);
+        bottomStackView = bottomStack;
+        bottomStack.setOrientation(LinearLayout.VERTICAL);
+        bottomStack.setGravity(Gravity.BOTTOM);
+        bottomStack.setClipChildren(true);
+        bottomStack.setMaxHeightRatio(BOTTOM_STACK_MAX_RATIO);
         FrameLayout.LayoutParams bsLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         bsLp.gravity = Gravity.BOTTOM;
@@ -479,6 +526,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // **底部留白按悬浮层实际高度算（2026-10-04 用户报「子智能体这条把最下面的字挡住了」）**：
         // 固定 92dp 只够输入胶囊；「N 子智能体」入口出现时悬浮层会高出一截，最后一条消息
         // 就被压在入口条下面。这里监听悬浮层高度，动态把列表底部内边距跟上去（+12dp 呼吸）。
+        // 悬浮层自身已被上面封顶，所以留白天然有界（不需要再单独封留白）。
         listBasePadBottom = Ui.dp(ctx, 12);
         bottomStack.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = v.getHeight();
@@ -488,6 +536,19 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 list.setPadding(list.getPaddingLeft(), list.getPaddingTop(),
                         list.getPaddingRight(), want);
                 list.setClipToPadding(false);
+            }
+            // [P0 修复·灰框] 底部渐隐只盖"悬浮层 + 一小段余量"，不再固定 132dp。
+            // 改前：固定 462px 的灰幕铺在列表下部，卡片滚进这个区间就整片发灰
+            //（用户报"一滑动就有灰框"）。改后：层高跟随悬浮层实测高度，且封顶 30% 屏高。
+            if (bottomFade != null) {
+                int fadeH = h + Ui.dp(ctx, FADE_MARGIN_DP);
+                int vh = getHeight();
+                if (vh > 0) fadeH = Math.min(fadeH, (int) (vh * FADE_MAX_RATIO));
+                android.view.ViewGroup.LayoutParams flp = bottomFade.getLayoutParams();
+                if (flp != null && flp.height != fadeH) {
+                    flp.height = fadeH;
+                    bottomFade.setLayoutParams(flp);
+                }
             }
             // 「回到底部」按钮也跟着抬到悬浮层上方（否则被「N 子智能体」入口盖住）
             if (toBottomFlp != null) {
@@ -550,7 +611,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         inputBar.setElevation(Ui.dp(ctx, 3f));   // 悬浮输入条也该有影子（不透明胶囊，安全）
         inputBar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6));
 
-        input = new EditText(ctx);
+        // [P0 修复·输入胶囊] 用带**像素级硬上限**的 EditText：maxLines 只约束行数，
+        // 这里再封一道实测高度上限，任何情况下胶囊都不会被文字撑成一大块
+        // （用户报「输入字符一多就变成一个巨大的灰框」）。超出部分由 EditText 内部滚动。
+        final MaxHeightEditText inputEt = new MaxHeightEditText(ctx);
+        input = inputEt;
         input.setHint("给 Agent 派个任务…");
         input.setTextSize(Ui.S_BODY);
         input.setHintTextColor(Ui.INK_FAINT);
@@ -560,11 +625,16 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_ENTER_ACTION);
-        input.setMaxLines(5);
+        input.setMaxLines(INPUT_MAX_LINES);
         input.setMinLines(1);
         LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         input.setLayoutParams(ilp);
+        // 硬上限 = 5 行文字高 + 上下内边距（paddingTop/Bottom 各 11dp）。改前：只有 maxLines(5)
+        // 一道软约束；改后：onMeasure 里夹住测量高度，超出即内部滚动（高度不会再涨）。
+        // [P2 修复] 传的是**行数**而不是算好的像素：上限在每次测量时按当次字号/行距现算，
+        // 用户改系统字体大小（manifest 声明 fontScale 不重建 Activity）后依然恰好是 5 行。
+        inputEt.setMaxHeightLines(INPUT_MAX_LINES);
 
         pick = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_plus,
                 Ui.CHIP_BG, Ui.INK_SUB, 18f, 34f);
@@ -1350,8 +1420,110 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      * 这里在"原本就贴底"时补一次滚动。用户手动翻看历史（atBottom=false）时不打扰。
      */
     public void onWindowInsetsChanged() {
-        if (!atBottom) return;
-        scrollToBottom();
+        // [P0 修复·体验] 焦点在**卡片内的输入框**时，只保证那个输入框可见，
+        // [用户点名·2026-10-04] 键盘弹起时**只滚外层列表**：把焦点所在的整张卡抬到
+        // "可视区 bottom"（= 键盘上沿与底部悬浮层上沿取小）之上；
+        // **绝不触碰卡片内容区的滚动偏移** —— 用户原话「你就不让他乱滚回去不就行了」。
+        // 键盘收起时不滚动（保持原位）。
+        final android.view.View f = findFocusedCardInput();
+        if (f == null) {
+            if (!atBottom) return;
+            scrollToBottom();
+            return;
+        }
+        final android.view.View card = findListItemAncestor(f);
+        if (card == null) return;
+        card.post(() -> {
+            try {
+                int[] cl = new int[2];
+                card.getLocationOnScreen(cl);
+                int cardBottom = cl[1] + card.getHeight();
+                int visibleBottom = visibleContentBottomOnScreen();
+                int dy = cardBottom - visibleBottom;
+                if (dy > 0) list.smoothScrollBy(dy, 160);   // 只动外层列表
+            } catch (Throwable ignored) { }
+        });
+    }
+
+    /** 焦点视图所在的那张"列表 item"（ListView 的直接子 View）。 */
+    private android.view.View findListItemAncestor(android.view.View v) {
+        android.view.View cur = v;
+        android.view.ViewParent p = v == null ? null : v.getParent();
+        while (p != null) {
+            if (p == list) return cur;
+            if (!(p instanceof android.view.View)) return null;
+            cur = (android.view.View) p;
+            p = p.getParent();
+        }
+        return null;
+    }
+
+    /**
+     * 用户真正看得见的区域下沿（屏幕坐标）= min(本 View 底部, 底部悬浮层上沿)。
+     *
+     * <p>本 View 的底部已经等于键盘上沿（根容器把 IME 高度加进了底部内边距）；
+     * 而悬浮层盖在列表下半截上，所以两者取小才是"看得见"的底线。
+     */
+    private int visibleContentBottomOnScreen() {
+        int[] loc = new int[2];
+        getLocationOnScreen(loc);
+        int bottom = loc[1] + getHeight();
+        try {
+            if (bottomStackView != null && bottomStackView.getHeight() > 0) {
+                int[] bl = new int[2];
+                bottomStackView.getLocationOnScreen(bl);
+                bottom = Math.min(bottom, bl[1]);
+            }
+        } catch (Throwable ignored) { }
+        return bottom;
+    }
+
+    /**
+     * [P0 修复] 卡片**真正看得见**的最大高度 = 列表可视高度 − 底部悬浮层高度。
+     *
+     * <p>ListView 一直铺到屏幕底、下半截被悬浮层（输入胶囊那一条）盖住；卡片若只按
+     * ListView 高度封顶，键盘弹起后输入框与按钮都会落到悬浮层下面（用户报"要手动滑下来"）。
+     * `MaxHeightScrollView` 在测量时按这个值（再扣掉按钮行）封顶，保证整张卡都露在可视区里。
+     */
+    public int usableCardHeightPx() {
+        try {
+            int stageH = stageView == null ? 0 : stageView.getHeight();
+            int bsH = bottomStackView == null ? 0 : bottomStackView.getHeight();
+            if (stageH <= 0) return 0;
+            return Math.max(0, stageH - bsH);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 焦点输入框所在的"卡片内容区"（MaxHeightScrollView）；没有则返回 null。 */
+    private android.view.View findCardScrollableAncestor(android.view.View v) {
+        android.view.ViewParent p = v == null ? null : v.getParent();
+        while (p != null) {
+            if (p instanceof MaxHeightScrollView) return (android.view.View) p;
+            p = p.getParent();
+        }
+        return null;
+    }
+
+    /**
+     * 找出"当前获得焦点、且位于消息列表内"的输入框（卡片里的回答框）。
+     *
+     * <p>主输入框（悬浮胶囊）不在 ListView 里，走不到这里 —— 对它的焦点不做任何滚动干预。
+     */
+    private android.view.View findFocusedCardInput() {
+        try {
+            android.view.View rootView = getRootView();
+            if (rootView == null || list == null) return null;
+            android.view.View f = rootView.findFocus();
+            if (!(f instanceof android.widget.EditText) || !f.isShown()) return null;
+            android.view.ViewParent p = f.getParent();
+            while (p != null) {
+                if (p == list) return f;
+                p = p.getParent();
+            }
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     /**
@@ -1385,7 +1557,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      */
     private static android.graphics.drawable.Drawable buildFade(Context c) {
         int clear = Ui.BG & 0x00FFFFFF;          // 同色、全透明
-        int half = clear | 0x99000000;           // 同色、60% —— 中段就开始压
+        // [P0 修复·灰框] 中段从 60% 降到 40%：改前"中段就开始压"，配上 132dp 的层高，
+        // 观感就是一块盖住列表的灰幕。层高已经大幅收窄，这里再让中段轻一点。
+        int half = clear | 0x66000000;           // 同色、40%
         android.graphics.drawable.GradientDrawable g =
                 new android.graphics.drawable.GradientDrawable(
                         android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,

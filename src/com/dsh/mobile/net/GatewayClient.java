@@ -149,6 +149,23 @@ public final class GatewayClient {
     private volatile Listener listener;
     /** [M1] 进程级通知钩子：Activity 不在时由它接管提问/审批的提醒（避免帧被静默丢弃）。 */
     public static volatile java.util.function.Consumer<org.json.JSONObject> bgInteractionHook;
+
+    /**
+     * [P1 修复] 应用级 Context：**只**用于"没有监听者时"把连接状态转给
+     * {@link com.dsh.mobile.notify.Notifier#onGatewayState}（常驻通知的文案与前台服务开关）。
+     *
+     * <p>改前 {@link #setState} 在 {@code listener == null} 时直接 return：M1-only 路径
+     * （没有界面、只有后台服务）下 Notifier 永远收不到状态变化，断线后常驻通知仍写着
+     * "已连接电脑 · 保持后台接收"（用户以为在收，其实早断了）。
+     *
+     * <p>这里**只存 application context**，绝不持有 Activity/Service 实例。
+     */
+    private static volatile android.content.Context appCtx;
+
+    /** 由 MainActivity / KeepAliveService 在启动时灌入（内部强制转成 application context）。 */
+    public static void setAppContext(android.content.Context c) {
+        if (c != null) appCtx = c.getApplicationContext();
+    }
     private final Handler main = new Handler(Looper.getMainLooper());
     /** 代际：每次 open() 递增；旧连接的迟到回调据此丢弃，避免重连风暴。 */
     private volatile int generation = 0;
@@ -737,7 +754,18 @@ public final class GatewayClient {
     private void setState(State s, String detail) {
         state = s;
         final Listener l = listener;
-        if (l == null) return;
+        if (l == null) {
+            // [P1 修复] 没有监听者（只有后台服务 / M1-only 路径）时，也必须把状态送给
+            // Notifier，否则常驻通知的文案永远停在"已连接"、前台服务该起也起不来。
+            // 只传布尔，不碰界面；Notify 内部幂等。
+            final android.content.Context c = appCtx;
+            if (c != null) {
+                try {
+                    com.dsh.mobile.notify.Notifier.onGatewayState(c, s == State.READY);
+                } catch (Throwable ignored) { }
+            }
+            return;
+        }
         main.post(() -> {
             Listener cur = listener;
             if (cur == l) cur.onState(s, detail);

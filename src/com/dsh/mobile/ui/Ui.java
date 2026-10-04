@@ -713,6 +713,29 @@ public final class Ui {
     }
 
     /**
+     * 框架版「渐变卡底」：圆角 + 奶白对角渐变 + 发丝描边（不用自绘 Path）。
+     *
+     * <p><b>为什么需要它（2026-10-04 真机实测，荣耀 PGT-AN10，逐像素取证）</b>：
+     * 自绘 {@link CardBg} 的**渐变卡体**在**超高卡片**上会把整片卡体渲染成灰色 ——
+     * 设计色 {@code SURFACE_G1 #FBFAFE} 只在卡片最外侧露出约 8px 窄带，
+     * 卡片内部整片被压成 ≈(185,183,193)（-26% 亮度）且呈自上而下平滑渐变；
+     * 底部渐隐层边界处无颜色跳变（已排除 bottomFade）。换成框架 GradientDrawable
+     * （本方法）后同一坐标实测 (251,250,254) ✓。短卡片上 CardBg 正常，
+     * 因此本方法只用于"内容可能被撑很长"的卡片（提问卡 / 审批卡）。
+     *
+     * <p>与 CardBg 的差别：不含左侧 3dp 强调条与顶部棱光/底部暗线（那些同样依赖自绘 Path）。
+     */
+    public static android.graphics.drawable.GradientDrawable cardGrad(int radiusPx, int strokePx, int lineColor) {
+        android.graphics.drawable.GradientDrawable g =
+                new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        new int[] { SURFACE_G1, SURFACE_G2 });
+        g.setCornerRadius(radiusPx);
+        if (strokePx > 0) g.setStroke(strokePx, lineColor);
+        return g;
+    }
+
+    /**
      * 顶部栏的圆形图标按钮：36dp 圆形触区 + 居中字形，带 iOS 按压反馈
      * （按下整颗变淡缩一点，抬起回弹）。
      */

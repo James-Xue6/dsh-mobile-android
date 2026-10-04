@@ -62,6 +62,23 @@ public final class ChatAdapter extends BaseAdapter {
     // 这里用一对版本号把这件事变成可自检的：每次换数据 dataVersion++，
     // 每次通知把 notifiedVersion 对齐到 dataVersion。二者不等 = 存在中间态（打日志，不崩溃）。
     private static final String TAG = "ChatAdapter";
+    /**
+     * [P0 修复] 提问卡 / 审批卡的高度上限（相对屏幕高度）。
+     *
+     * <p>改前：卡片直接挂在 wrap 上，高度 = 内容高度（无上限），选项/问题/理由一多就
+     * 被撑成一大块灰框（用户报「一圈灰色的容器占掉大半个屏幕、把对话内容盖住」）。
+     * 改后：卡片最高 55% 屏高，超出部分在卡片内部滚动（内容不丢，仍可读可点）。
+     */
+    private static final float CARD_MAX_SCREEN_RATIO = 0.55f;
+    /**
+     * [P0 修复·C] 卡片内容区还不得超过**所在 ListView 实时高度**的这个比例。
+     *
+     * <p>只按屏高封顶在键盘弹起时会失效：窗口变矮而卡片仍按整屏算 → 卡片比"列表可见高度"
+     * 还高，用户滚到列表底部也看不到内容区底部（用户报「看不到输入的内容」）。
+     * 0.45 给底部按钮行 + 悬浮输入区留出空间。
+     */
+    private static final float CARD_MAX_LIST_RATIO = 0.45f;
+
     /** 列表内容被整体替换的次数。 */
     private int dataVersion = 0;
     /** 最后一次 notifyDataSetChanged() 时的数据版本；-1 = 还没通知过。 */
@@ -423,6 +440,64 @@ public final class ChatAdapter extends BaseAdapter {
         return wrap;
     }
 
+    // ------------------------------------------------------------ 卡片内容区封顶
+
+    /**
+     * [已按用户要求撤回·2026-10-04] 独立全屏输入页（Dialog）已删除。
+     *
+     * <p>用户原话：「删除了独立的输入也，完全没必要吧，你就不让他乱滚回去不就行了」
+     * —— 输入回到卡片内联 EditText，键盘弹起时只由外层列表保证"卡片可见"，
+     * 不再触碰卡片内容区的滚动（见 ConversationView.onWindowInsetsChanged）。
+     */
+
+    /**
+     * [P0-1 修复] 把卡片的**内容区**包一层高度封顶的 ScrollView，再挂回卡片本体。
+     *
+     * <p>改前：整个 card（含底部「批准一次 / 拒绝」「提交 / 跳过」按钮）被塞进 ScrollView，
+     * 而外层是原生 ListView（竖向滑动被 ListView 抢走）→ 内容超 55% 屏高时按钮被推出可视区
+     * 且滚不出来，**用户无法批准/提交**（真机实测：长卡片时底部按钮被截掉、点不到）。
+     *
+     * <p>改后：只有**内容区**滚动，按钮固定在卡片底部、永远可达。
+     * 卡片整体高度 = 内容区(≤ {@link #CARD_MAX_SCREEN_RATIO} 屏高) + 按钮行高度。
+     * 内容本来就矮时测量高度不变（视觉与改动前一致）。
+     */
+    private void addScrollableBody(LinearLayout card, LinearLayout body, ChatItem it) {
+        MaxHeightScrollView sc = new MaxHeightScrollView(ctx);
+        sc.setMaxHeightPx(cardBodyMaxPx());
+        // [用户点名·2026-10-04] **内容区高度必须稳定，不能跟随键盘/列表高度变化**。
+        // 之前让它跟随 ListView 实时高度 → 键盘弹起时内容区变矮，用户刚滚到的输入框
+        // 又被挤出可视区（"乱滚回去"）。现在内容区只按屏高封顶：键盘弹起时它不变，
+        // 用户的滚动位置保持有效；只由外层列表负责"把这张卡抬到键盘之上"。
+        sc.setClipToPadding(false);
+        sc.setVerticalScrollBarEnabled(false);
+        sc.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
+        sc.addView(body, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+        card.addView(sc, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        // [P0 修复·A] 内容区滚动位置跨重绑保留：改前每次重绑都新建 ScrollView → scrollY 归零，
+        // 用户刚滚到底部填答案，一次刷新/键盘弹起就把它弹回顶部（"看不到输入的内容"）。
+        // 顺序：先排定滚动恢复，再让调用方恢复文本 —— 恢复文本会触发一次布局，
+        // 滚动放在 post 里执行，确保在文本落地之后再定位。
+        final int restoreY = it == null ? 0 : it.cardScrollY;
+        if (restoreY > 0) {
+            sc.post(() -> {
+                try { sc.scrollTo(0, restoreY); } catch (Throwable ignored) { }
+            });
+        }
+        final ChatItem owner = it;
+        sc.setOnScrollChangeListener((v, scrollX, scrollY, oldX, oldY) -> {
+            if (owner != null) owner.cardScrollY = scrollY;
+        });
+    }
+
+    /** 卡片**内容区**的高度上限 = 屏幕高的 55%（底部按钮行不受此限，始终可见）。 */
+    private int cardBodyMaxPx() {
+        return (int) (ctx.getResources().getDisplayMetrics().heightPixels * CARD_MAX_SCREEN_RATIO);
+    }
+
     // ------------------------------------------------------------ 审批卡
 
     private View approvalCard(ChatItem it) {
@@ -432,33 +507,39 @@ public final class ChatAdapter extends BaseAdapter {
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         // Sadees 引用卡：奶白渐变体（Ui.card）+ 左上「"」淡色大引号装饰 + 橙色强调条
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
-                Ui.LINE, Ui.WARN, Ui.dp(ctx, 3f)));
+        // [灰框修复] 见下方 cardGrad 说明：不用自绘 CardBg（超高卡片会被整片压暗成灰）
+        // [灰框修复] 用框架版渐变卡底，不用自绘 CardBg：真机实测（荣耀 PGT-AN10）自绘
+        // Path 的渐变卡体在超高卡片上会把整片卡体渲染成灰色（设计色 #FBFAFE 只在最外侧
+        // 露 ~8px，内部整片 ≈(185,183,193)）。同一位置换成 cardGrad 后实测 (251,250,254) ✓。
+        card.setBackground(Ui.cardGrad(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
         card.setElevation(Ui.dp(ctx, 2f));
         card.setLayoutParams(Ui.fill());
-        card.addView(Ui.quoteMark(ctx));
+        // [P0-1] body = 会滚动的内容区；底部按钮行不进这里（见方法尾部的 addScrollableBody）
+        LinearLayout body = Ui.col(ctx);
+        body.addView(Ui.quoteMark(ctx));
 
         TextView title = Ui.text(ctx, "需要你的批准", Ui.S_HEAD, Ui.INK, true);
-        card.addView(title);
+        body.addView(title);
 
         TextView tool = Ui.text(ctx, "工具：" + (it.toolName.isEmpty() ? "未知" : it.toolName), Ui.S_FOOT, Ui.BRAND, false);
         tool.setPadding(0, Ui.dp(ctx, 5), 0, 0);
         tool.setTypeface(android.graphics.Typeface.MONOSPACE);
-        card.addView(tool);
+        body.addView(tool);
 
         if (it.reason != null && !it.reason.trim().isEmpty()) {
             TextView r = Ui.text(ctx, it.reason, Ui.S_FOOT, Ui.INK_SUB, false);
             r.setPadding(0, Ui.dp(ctx, 5), 0, 0);
-            card.addView(r);
+            body.addView(r);
         }
 
         if (it.sendError != null && !it.sendError.isEmpty()) {
             TextView warn = Ui.text(ctx, "⚠ " + it.sendError, Ui.S_FOOT, Ui.ERR, false);
             warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
-            card.addView(warn);
+            body.addView(warn);
         }
 
+        // [P0-1] 按钮行由这里收集，最后挂在**滚动区之外**（卡片底部），保证永远可见可点
+        LinearLayout actionsBox = null;
         if (it.resolved) {
             String label;
             if ("allowed-once".equals(it.resolvedOutcome)) label = "✓ 已批准";
@@ -467,13 +548,13 @@ public final class ChatAdapter extends BaseAdapter {
             else label = "已由其他端处理";
             TextView done = Ui.text(ctx, label, Ui.S_FOOT, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 9), 0, 0);
-            card.addView(done);
+            body.addView(done);
         } else if (it.pendingConfirm) {
             // 已发出、还没等到电脑端回执：不显示 ✓（回执没到就可能是进了黑洞），
             // 也不显示按钮（避免重复提交）（评审 P0-3）。
             TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", Ui.S_FOOT, Ui.INK_SUB, true);
             waiting.setPadding(0, Ui.dp(ctx, 9), 0, 0);
-            card.addView(waiting);
+            body.addView(waiting);
         } else {
             LinearLayout actions = Ui.row(ctx);
             actions.setLayoutParams(Ui.fill());
@@ -495,8 +576,10 @@ public final class ChatAdapter extends BaseAdapter {
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actions.addView(deny);
 
-            card.addView(actions);
+            actionsBox = actions;
         }
+        addScrollableBody(card, body, it);
+        if (actionsBox != null) card.addView(actionsBox);   // 按钮在滚动区之外：永远可达
         wrap.addView(card);
         return wrap;
     }
@@ -510,14 +593,18 @@ public final class ChatAdapter extends BaseAdapter {
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         // Sadees 引用卡：奶白渐变体（Ui.card）+ 左上「"」淡色大引号装饰 + 紫色强调条
-        card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
-                Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
+        // [灰框修复] 见下方 cardGrad 说明：不用自绘 CardBg（超高卡片会被整片压暗成灰）
+        // [灰框修复] 用框架版渐变卡底，不用自绘 CardBg：真机实测（荣耀 PGT-AN10）自绘
+        // Path 的渐变卡体在超高卡片上会把整片卡体渲染成灰色（设计色 #FBFAFE 只在最外侧
+        // 露 ~8px，内部整片 ≈(185,183,193)）。同一位置换成 cardGrad 后实测 (251,250,254) ✓。
+        card.setBackground(Ui.cardGrad(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
         card.setElevation(Ui.dp(ctx, 2f));
         card.setLayoutParams(Ui.fill());
-        card.addView(Ui.quoteMark(ctx));
+        // [P0-1] body = 会滚动的内容区（问题、选项、补充输入…）；底部按钮行不进这里
+        LinearLayout body = Ui.col(ctx);
+        body.addView(Ui.quoteMark(ctx));
 
-        card.addView(Ui.text(ctx, "Agent 在等你的回答", Ui.S_HEAD, Ui.INK, true));
+        body.addView(Ui.text(ctx, "Agent 在等你的回答", Ui.S_HEAD, Ui.INK, true));
 
         final JSONArray qs = it.questions == null ? new JSONArray() : it.questions;
         List<String> ids = new ArrayList<>();
@@ -534,17 +621,17 @@ public final class ChatAdapter extends BaseAdapter {
             if (!header.isEmpty()) {
                 TextView h = Ui.text(ctx, header, Ui.S_FOOT, Ui.INK_FAINT, false);
                 h.setPadding(0, Ui.dp(ctx, 8), 0, 0);
-                card.addView(h);
+                body.addView(h);
             }
             TextView qt = Ui.text(ctx, q.optString("question", ""), Ui.S_HEAD, Ui.INK, true);
             qt.setPadding(0, Ui.dp(ctx, 4), 0, 0);
-            card.addView(qt);
+            body.addView(qt);
 
             String detail = q.optString("detail", "");
             if (!detail.isEmpty()) {
                 TextView d = Ui.text(ctx, detail, Ui.S_FOOT, Ui.INK_SUB, false);
                 d.setPadding(0, Ui.dp(ctx, 2), 0, 0);
-                card.addView(d);
+                body.addView(d);
             }
 
             boolean multi = q.optBoolean("multiSelect", false);
@@ -565,8 +652,9 @@ public final class ChatAdapter extends BaseAdapter {
                     options.addView(optionRow(it, qid, label, desc, multi, options));
                 }
             }
-            card.addView(options);
+            body.addView(options);
 
+            // [用户点名：撤回独立输入页，改回内联输入]
             EditText custom = new EditText(ctx);
             custom.setHint(multi ? "也可补充输入…" : "或直接输入回答…");
             custom.setTextSize(Ui.S_CALLOUT);
@@ -579,32 +667,44 @@ public final class ChatAdapter extends BaseAdapter {
             custom.setMaxLines(4);
             String t = it.typed.get(qid);
             if (t != null) custom.setText(t);
+            // [草稿修复] 边打边写回模型：getView 每次绑定都新建这张卡，
+            // 只在提交时写回会让"重绑即丢字"。
+            final String qidForWatch = qid;
+            custom.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    it.typed.put(qidForWatch, s == null ? "" : s.toString());
+                }
+            });
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             clp.topMargin = Ui.dp(ctx, 6);
             custom.setLayoutParams(clp);
             customs.add(custom);
-            card.addView(custom);
+            body.addView(custom);
         }
 
         if (it.sendError != null && !it.sendError.isEmpty()) {
             TextView warn = Ui.text(ctx, "⚠ " + it.sendError, Ui.S_FOOT, Ui.ERR, false);
             warn.setPadding(0, Ui.dp(ctx, 8), 0, 0);
-            card.addView(warn);
+            body.addView(warn);
         }
 
+        // [P0-1] 按钮行由这里收集，最后挂在**滚动区之外**（卡片底部），保证永远可见可点
+        LinearLayout actionsBox = null;
         if (it.resolved) {
             String label;
             if ("answered".equals(it.resolvedOutcome)) label = "✓ 已回答";
             else label = "已取消 / 已由其他端处理";
             TextView done = Ui.text(ctx, label, Ui.S_FOOT, Ui.INK_SUB, true);
             done.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-            card.addView(done);
+            body.addView(done);
         } else if (it.pendingConfirm) {
             // 与审批卡一致：回执没到就不显示 ✓、也不显示按钮（评审 P0-3）。
             TextView waiting = Ui.text(ctx, "已发送，等待电脑确认…", Ui.S_FOOT, Ui.INK_SUB, true);
             waiting.setPadding(0, Ui.dp(ctx, 10), 0, 0);
-            card.addView(waiting);
+            body.addView(waiting);
         } else {
             LinearLayout actions = Ui.row(ctx);
             actions.setLayoutParams(Ui.fill());
@@ -669,8 +769,10 @@ public final class ChatAdapter extends BaseAdapter {
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actions.addView(skip);
 
-            card.addView(actions);
+            actionsBox = actions;
         }
+        addScrollableBody(card, body, it);
+        if (actionsBox != null) card.addView(actionsBox);   // 按钮在滚动区之外：永远可达
         wrap.addView(card);
         return wrap;
     }

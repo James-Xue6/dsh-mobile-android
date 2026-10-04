@@ -18,7 +18,8 @@ import com.dsh.mobile.Store;
  *   <li><b>任务完成</b> —— 会话的回合结束（turn/end 或会话列表里 running 由真变假）；</li>
  *   <li><b>需要处理</b> —— 网关推来审批/提问（高优先级、可弹横幅、有声音/震动）；</li>
  *   <li><b>进行中</b> —— 会话在跑，且人不在看它（低优先级、静默、同一会话更新同一条）；</li>
- *   <li><b>后台可达</b> —— {@link KeepAliveService} 用同一条「进行中」渠道挂常驻通知。</li>
+ *   <li><b>后台可达</b> —— {@link KeepAliveService} 用**独立的**「后台保持接收」渠道挂常驻通知
+ *       （[收尾1] 原来借用「进行中」渠道：用户一关「进行中」就顺带失去后台保活）。</li>
  * </ol>
  *
  * <h3>三条硬规则（踩过的坑）</h3>
@@ -48,16 +49,22 @@ public final class Notifier {
     public static final String CH_SERVICE = "dsh_service";
     /** 「任务完成」：回合结束 / 任务跑完。默认优先级 —— 有声音但不弹横幅。 */
     public static final String CH_DONE = "dsh_done";
-    /** 「进行中」：正在执行的状态 + 前台服务常驻通知。低优先级、静默。 */
+    /** 「进行中」：正在执行的状态。低优先级、静默。 */
     public static final String CH_RUNNING = "dsh_running";
 
     /** 前台服务常驻通知的固定 id。 */
     public static final int ID_SERVICE = 9001;
 
-    // 三类通知的 id 基数：彼此拉开，避免同一会话的三类通知互相顶掉
-    private static final int ID_DONE_BASE = 9100;
-    private static final int ID_PENDING_BASE = 9400;
-    private static final int ID_RUNNING_BASE = 9700;
+    // 三类通知的 id 基数：彼此拉开 10000，且每类占满 4000 的哈希槽位（见 idOf 的 % 4000），
+    // 区间互不重叠。
+    //
+    // [P1 修复] 改前是 9100 / 9400 / 9700，而 idOf 取模 4000 → 三类区间实际互相覆盖
+    // （9100+0..3999 与 9400+0..3999 大面积重叠），同一条会话的"进行中"可能把"需要处理"
+    // 顶掉；test() 的 id（PENDING_BASE+999=10399）也落进了"任务完成"的区间。
+    // 改后：10000 / 20000 / 30000，各自 4000 槽位完全隔离。
+    private static final int ID_DONE_BASE = 10000;
+    private static final int ID_PENDING_BASE = 20000;
+    private static final int ID_RUNNING_BASE = 30000;
 
     /**
      * 深链 extra：点通知要进入的会话、以及要滚到的那张卡（审批/提问卡的 key）。
@@ -122,6 +129,12 @@ public final class Notifier {
                 CH_SERVICE, "后台保持接收", NotificationManager.IMPORTANCE_LOW));
         nm.createNotificationChannel(done);
         nm.createNotificationChannel(running);
+        // [P1 修复] 删掉旧渠道 dsh_pending（与 dsh_pending_v2 同名「需要处理」）。
+        // 留着它只会在系统通知设置里多出一条同名渠道，用户很容易改错那一条（改了旧的、
+        // 新的仍然是低重要性）。删除是幂等的，重复调用无副作用。
+        try {
+            nm.deleteNotificationChannel("dsh_pending");
+        } catch (Throwable ignored) { }
         channelsReady = true;
     }
 
@@ -267,7 +280,10 @@ public final class Notifier {
     public static Notification serviceNotification(Context ctx) {
         init(ctx);
         String text = connected ? "已连接电脑 · 保持后台接收" : "等待连接 · 保持后台接收";
-        return new Notification.Builder(ctx, CH_RUNNING)
+        // [收尾1] 常驻通知走**独立渠道** CH_SERVICE，不再借用「进行中」CH_RUNNING：
+        // 渠道重要性由用户掌管（Android 语义下 App 改不回去），用户一旦把「进行中」关掉，
+        // 借同一条渠道的常驻通知会一起消失 → 前台服务形同虚设、后台提醒彻底断掉。
+        return new Notification.Builder(ctx, CH_SERVICE)
                 .setSmallIcon(R.drawable.ic_notify_dsh)
                 .setContentTitle("DSH 掌上通")
                 .setContentText(text)
@@ -276,6 +292,24 @@ public final class Notifier {
                 .setShowWhen(false)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .build();
+    }
+
+    /**
+     * 「需要处理」渠道当前的重要性（-1 = 渠道还没建/查不到）。
+     *
+     * <p>设置页的自查行据此判断"系统有没有把它降级"：低于 {@code IMPORTANCE_HIGH}
+     * 就不会弹横幅，用户"收不到提醒"十有八九是这里被改过（真机实测 dsh_pending 被降成 3）。
+     */
+    public static int pendingChannelImportance(Context ctx) {
+        try {
+            init(ctx);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return -1;
+            NotificationChannel ch = nm.getNotificationChannel(CH_PENDING);
+            return ch == null ? -1 : ch.getImportance();
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     // ---------------------------------------------------------------- 内部
@@ -349,7 +383,17 @@ public final class Notifier {
                         .build());
             }
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) { nm.notify(id, b.build()); lastPostAt = System.currentTimeMillis(); }
+            if (nm != null) {
+                nm.notify(id, b.build());
+                lastPostAt = System.currentTimeMillis();
+                // [P1 修复] 成功就清空失败原因：改前 lastPostError 一旦写上就永不清除，
+                // 设置页诊断会一直显示一条早已恢复的旧错误。
+                lastPostError = "";
+            } else {
+                // [P1 修复] nm == null 也要留痕：改前这个分支静默返回，
+                // 诊断里看起来"一切正常"，实际一条都没发出去。
+                lastPostError = "post 失败 id=" + id + " ch=" + channel + " : NotificationManager 不可用";
+            }
         } catch (Throwable t) {
             // [M4] 失败不影响主流程，但必须可见，否则"收不到"无法定位。
             lastPostError = "post 失败 id=" + id + " ch=" + channel + " : " + t.getClass().getSimpleName();
@@ -381,5 +425,30 @@ public final class Notifier {
         if (sessionId == null || sessionId.isEmpty()) return base;
         int h = sessionId.hashCode() & 0x7FFFFFFF;
         return base + (h % 4000);
+    }
+
+    // ---------------------------------------------------------------- 卡片 key（全仓唯一实现）
+
+    /**
+     * 审批卡 key：`approval:<approvalId>`，**approvalId 为空时退回 rpcId**。
+     *
+     * <p>[P1 修复] 改前这条规则在三个地方各写了一遍，其中
+     * `MainActivity` 的 M1 钩子与 `KeepAliveService` 用的是
+     * `frame.optString("approvalId", rpcId)` —— 它只在 approvalId **缺失**时才回退，
+     * 而真实帧里 approvalId 常是**空串**（字段在、值为空）→ 两处算出的 key 与界面建档
+     * （`approvalId.isEmpty() ? rpcId : approvalId`）不一致，通知去重失效、点通知也滚不到那张卡。
+     * 现在三处（界面建档 / M1 钩子 / 后台监听者）都走这一个方法，规则不可能再漂。
+     */
+    public static String approvalKey(org.json.JSONObject frame) {
+        if (frame == null) return "";
+        String approvalId = frame.optString("approvalId", "");
+        String rpcId = frame.optString("rpcId", "");
+        return "approval:" + (approvalId.isEmpty() ? rpcId : approvalId);
+    }
+
+    /** 提问卡 key：`question:<rpcId>`（与 {@link #approvalKey} 同一处实现，防止再漂）。 */
+    public static String questionKey(org.json.JSONObject frame) {
+        if (frame == null) return "";
+        return "question:" + frame.optString("rpcId", "");
     }
 }

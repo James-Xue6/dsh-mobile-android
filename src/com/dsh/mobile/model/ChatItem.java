@@ -81,6 +81,15 @@ public final class ChatItem {
     /** 提问卡片的用户选择状态（跨 ListView 回收保留）。 */
     public final java.util.HashMap<String, java.util.LinkedHashSet<String>> picked = new java.util.HashMap<>();
     public final java.util.HashMap<String, String> typed = new java.util.HashMap<>();
+    /**
+     * 提问/审批卡**内容区**的滚动偏移（跨 ListView 重绑保留）。
+     *
+     * <p>[P0 修复·2026-10-04 用户报「输入法顶起来后看不到输入的内容、还丢内容」]
+     * 卡片每次重绑都是**新建**的 View，内容区 ScrollView 的 scrollY 随之归零 ——
+     * 用户刚滚到底部去填答案，一次刷新/键盘弹起就把它弹回顶部，输入框当场看不见。
+     * 这里把偏移存进模型，绑定后恢复。
+     */
+    public int cardScrollY = 0;
 
     public static ChatItem of(int kind, String key, String text) {
         ChatItem it = new ChatItem();

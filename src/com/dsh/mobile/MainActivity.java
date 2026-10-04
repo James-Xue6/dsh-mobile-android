@@ -79,6 +79,18 @@ public final class MainActivity extends Activity implements
     private static final boolean ALLOW_TEST_PAIRING_INTENT = false;
 
     /**
+     * [自测·临时] M1 注入入口（只在本次 P0 自测时打开，交付版必须为 false）：
+     *   adb shell am start -n com.dsh.mobile/.MainActivity -e dshTestFrame '{"kind":"question-requested",...}'
+     * 收到后把监听者摘掉，再把这条帧喂进 **真实生产分支**
+     * （GatewayClient.dispatch → listener==null → bgInteractionHook），用来验证
+     * 「Activity 不在时提问/审批仍能弹通知」。
+     *
+     * <p>⚠️ 必须保持 false：MainActivity 是 exported="true" 的，本机任意 App 都能用这条命令
+     * 伪造一条提醒（与上面 pairing 是同一类注入面，评审 P0-4）。
+     */
+    private static final boolean ALLOW_TEST_FRAME_INTENT = false;
+
+    /**
      * 三级屏：我的设备（启动页）/ 对话页 / 设置页。
      * 会话列表不再是独立的第三块全屏页 —— 它是对话页上从左侧滑出的抽屉（豆包式），
      * 所以没有 LIST 这个"屏"了（旧代码的 Screen.LIST 已去掉）。
@@ -88,6 +100,64 @@ public final class MainActivity extends Activity implements
 
     /** 进程级共享的网关客户端：Activity 重建不应打断连接。 */
     private static GatewayClient SHARED_GW;
+
+    /**
+     * [M2] 进程里此刻活着的 Activity（null = 只有 {@link com.dsh.mobile.notify.KeepAliveService}
+     * 在跑，没有界面）。
+     *
+     * <p>为什么要有它：进程被系统回收后由 START_STICKY 拉起来的服务，{@code onCreate} 不会跑，
+     * 于是 {@link #SHARED_GW} 从来没被创建过 —— 服务在跑、通知栏挂着"保持后台接收"，
+     * 但一条事件都收不到（后台永久静默）。服务据此判断"该不该由我兜底建连接"：
+     * 有界面时连接由 Activity 负责，服务绝不插手（不抢监听者、不重复建连）。
+     */
+    private static volatile MainActivity LIVE;
+
+    /** [M2] 进程里此刻有没有活着的界面（供 KeepAliveService 判断要不要自建连接）。 */
+    public static boolean hasLiveActivity() { return LIVE != null; }
+
+    /**
+     * [M2] 进程级网关实例的**唯一创建点**：Activity 与 KeepAliveService 共用同一个实例
+     * （"不重复创建"这条纪律就落在这里）。
+     *
+     * @param preferred 期望安装的监听者；null = 只取实例、不动监听者
+     * @param force     true = 无条件把监听者换成 preferred。Activity 启动时必须为 true：
+     *                  进程可能先被服务拉起来（那时挂着后台监听者），界面一起来就得抢回监听权，
+     *                  否则界面收不到任何帧。服务侧传 false，绝不抢 Activity 的监听权。
+     */
+    public static synchronized GatewayClient sharedGateway(GatewayClient.Listener preferred, boolean force) {
+        if (SHARED_GW == null) SHARED_GW = new GatewayClient(preferred);
+        else if (preferred != null && (force || SHARED_GW.listener() == null)) {
+            SHARED_GW.setListener(preferred);
+        }
+        return SHARED_GW;
+    }
+
+    /**
+     * [M2] 用给定 Store 里的地址与令牌连接 —— {@link #connectNow()} 与
+     * {@link com.dsh.mobile.notify.KeepAliveService} 共用**同一套**取参与明文校验，
+     * 后台路径不会另写一份连接参数。
+     *
+     * @return false = 还没配对 / 地址令牌为空（调用方安静放弃，不报错）
+     */
+    public static boolean connectWith(Store s, GatewayClient g) {
+        if (s == null || g == null) return false;
+        String url = s.url();
+        String token = s.token();
+        if (url.isEmpty() || token.isEmpty()) return false;
+        g.setTrustAllCerts(s.insecureTls());
+        g.connect(url, token, s.deviceId(), s.deviceName());
+        return true;
+    }
+
+    /** [M2] 无 Activity 时（KeepAliveService）：现读一份 Store 再走 {@link #connectWith}。 */
+    public static boolean connectFromStore(android.content.Context ctx, GatewayClient g) {
+        if (ctx == null || g == null) return false;
+        try {
+            return connectWith(new Store(ctx), g);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     private Store store;
     private GatewayClient gw;
@@ -469,20 +539,39 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onCreate(Bundle state) {
-        // [M1] 进程级通知钩子：Activity 被回收/划掉后进程仍由 KeepAliveService 保活，
-        // 这里让提问/审批照常弹提醒 —— 否则 GatewayClient 在 listener==null 时静默丢弃帧。
-        com.dsh.mobile.net.GatewayClient.bgInteractionHook = frame -> {
-            try {
-                String hs = frame.optString("sessionId", "");
-                boolean appr = "approval-requested".equals(frame.optString("kind", ""));
-                String hk = appr
-                        ? "approval:" + frame.optString("approvalId", frame.optString("rpcId", ""))
-                        : "question:" + frame.optString("rpcId", "");
-                com.dsh.mobile.notify.Notifier.pending(this, store, hs, hk,
-                        appr ? "有操作等你批准" : "有提问等你回答", !appr);
-            } catch (Throwable ignored) { }
-        };
+        // [M1] 进程级通知钩子的安装**已下移**到 store / Notifier 初始化之后（见下方
+        // "M1 钩子安装"）。[P0-2 修复] 改前它写在这里（super.onCreate 之前），有两个缺陷：
+        //   ① lambda 捕获了 this（Activity）与 store —— 载体是 GatewayClient 的**静态**字段，
+        //      全仓没有置空时机，已销毁的 Activity + 整棵 View 树被静态引用钉死（而
+        //      KeepAliveService 又让进程长期存活）；
+        //   ② 那时 store 还是 null，钩子第一次被调用会 NPE 被 catch 吞掉 —— 静默丢一条提醒。
         super.onCreate(state);
+        // [自测·临时] 见 ALLOW_TEST_FRAME_INTENT 的注释。交付版这一整块必须删掉 / 保持 false。
+        if (ALLOW_TEST_FRAME_INTENT) {
+            final String tf = getIntent() == null ? null : getIntent().getStringExtra("dshTestFrame");
+            if (tf != null && !tf.trim().isEmpty()) {
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                    try {
+                        org.json.JSONObject f = new org.json.JSONObject(tf);
+                        // ① 先把监听者摘掉 —— 这就是"Activity 被回收/划掉、进程被服务保活"那一刻的状态
+                        gw.setListener(null);
+                        // ② 走**真实生产分支**：GatewayClient.dispatch(kind, frame) → l==null → bgInteractionHook
+                        java.lang.reflect.Method m = GatewayClient.class.getDeclaredMethod(
+                                "dispatch", String.class, org.json.JSONObject.class);
+                        m.setAccessible(true);
+                        m.invoke(gw, f.optString("kind", ""), f);
+                    } catch (Throwable t) {
+                        // 反射失败（不该发生）时退回直接调钩子，至少验证钩子本身
+                        try {
+                            if (com.dsh.mobile.net.GatewayClient.bgInteractionHook != null) {
+                                com.dsh.mobile.net.GatewayClient.bgInteractionHook.accept(new org.json.JSONObject(tf));
+                            }
+                        } catch (Throwable ignored) { }
+                    }
+                }, 1500L);
+            }
+        }
+
         // 截屏策略改为**用户可关的开关**（Store.allowScreenshot，默认 true）：
         //   - 默认不设 FLAG_SECURE：用户能截图/录屏，系统「最近任务」缩略图正常；
         //   - 只有用户在设置页关掉「允许截屏」时才设上（此时本 App 内容截图变黑）。
@@ -493,14 +582,38 @@ public final class MainActivity extends Activity implements
         themeMode = store.themeMode();
         applyThemeEverywhere();
         applyScreenshotPolicy();
-        if (SHARED_GW == null) SHARED_GW = new GatewayClient(this);
-        else SHARED_GW.setListener(this);
-        gw = SHARED_GW;
-
+        // [M2] 走唯一创建点：进程可能先被 KeepAliveService 拉起来（此时实例上挂着后台监听者），
+        // force=true 把监听权抢回界面，否则界面一帧都收不到。
+        gw = sharedGateway(this, true);
+        LIVE = this;
         // 通知：建三个渠道（幂等）+ 对齐"人此刻在看哪条会话"（冷启动还没进任何会话）。
         // 渠道必须在任何一条通知之前建好，否则 Android 8+ 直接丢弃。
         Notifier.init(this);
         Notifier.setViewedSession(this, "");
+
+        // ---- [M1 钩子安装] 进程级通知钩子：Activity 被回收/划掉后进程仍由 KeepAliveService
+        // 保活，这里让提问/审批照常弹提醒 —— 否则 GatewayClient 在 listener==null 时静默丢弃帧。
+        //
+        // [P0-2 修复] 两条纪律：
+        //   ① **绝不捕获 Activity**：钩子的载体是 GatewayClient 的静态字段，全仓没有"置空"
+        //      时机（onDestroy 只解绑 listener）。一旦 lambda 捕获 this，已销毁的 Activity
+        //      和它整棵 View 树就被静态引用钉死（KeepAliveService 又让进程长期存活）。
+        //      这里用 getApplicationContext() + 独立 Store（进程级，不指向界面）。
+        //   ② **时机在 store / Notifier 之后**：store 已初始化，Notifier 渠道已建好，
+        //      钩子第一次被调用不会再 NPE 静默丢提醒。
+        final android.content.Context appCtx = getApplicationContext();
+        final Store hookStore = new Store(appCtx);
+        GatewayClient.setAppContext(appCtx);
+        GatewayClient.bgInteractionHook = frame -> {
+            try {
+                String hs = frame.optString("sessionId", "");
+                boolean appr = "approval-requested".equals(frame.optString("kind", ""));
+                // [P1 修复] key 走 Notifier 的唯一实现（与界面建档/深链同规则）
+                String hk = appr ? Notifier.approvalKey(frame) : Notifier.questionKey(frame);
+                Notifier.pending(appCtx, hookStore, hs, hk,
+                        appr ? "有操作等你批准" : "有提问等你回答", !appr);
+            } catch (Throwable ignored) { }
+        };
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Ui.BG);
@@ -721,8 +834,9 @@ public final class MainActivity extends Activity implements
         if (url.isEmpty() || token.isEmpty()) return;
         pendingAutoFailover = false;
         lastConnectUrl = url;
-        gw.setTrustAllCerts(store.insecureTls());
-        gw.connect(url, token, store.deviceId(), store.deviceName());
+        // [M2] 取参与连接收口到静态入口 connectWith()：KeepAliveService 在没有界面时
+        // 走的是同一个方法，后台路径不会另写一份连接参数（也不会漏掉明文校验）。
+        connectWith(store, gw);
         armAutoLanFailover(url);
         refreshRouteUI();
     }
@@ -864,6 +978,9 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onDestroy() {
+        // [M2] 界面没了：让 KeepAliveService 知道"现在轮到它兜底"（进程被回收后重建时，
+        // 服务会在没有界面的情况下把连接重新建起来）。
+        if (LIVE == this) LIVE = null;
         // 连接是进程级的：Activity 销毁（重建/任务切换）只解绑监听，不断开连接。
         if (gw != null && gw.listener() == this) gw.setListener(null);
         if (netCallback != null) {
@@ -1735,16 +1852,16 @@ public final class MainActivity extends Activity implements
 
     /** 审批帧对应的卡片 key：与 onApprovalRequested 建档、与历史 approval/asked 同一把键。 */
     private static String approvalKey(JSONObject frame) {
-        if (frame == null) return "";
-        String approvalId = frame.optString("approvalId", "");
-        String rpcId = frame.optString("rpcId", "");
-        return "approval:" + (approvalId.isEmpty() ? rpcId : approvalId);
+        // [P1 修复] 规则收归 Notifier 的唯一实现：改前这条规则在本文件 + KeepAliveService
+        // + M1 钩子里各写了一遍，其中两处把"approvalId 为空串"当成"字段缺失"，
+        // 算出的 key 与建档不一致（去重失效 + 点通知滚不到卡）。语义保持不变：
+        // approvalId 为空则退回 rpcId。
+        return com.dsh.mobile.notify.Notifier.approvalKey(frame);
     }
 
     /** 提问帧对应的卡片 key。 */
     private static String questionKey(JSONObject frame) {
-        if (frame == null) return "";
-        return "question:" + frame.optString("rpcId", "");
+        return com.dsh.mobile.notify.Notifier.questionKey(frame);
     }
 
     /**
@@ -3033,8 +3150,9 @@ public final class MainActivity extends Activity implements
         cancelSendWatchdog();   // 网关还能推审批 = 连接是活的
         String rpcId = frame.optString("rpcId", "");
         String approvalId = frame.optString("approvalId", "");
-        // 与历史事件 approval/asked 用同一把键（approvalId），避免同一条审批出现两张卡
-        String key = "approval:" + (approvalId.isEmpty() ? rpcId : approvalId);
+        // 与历史事件 approval/asked 用同一把键（approvalId），避免同一条审批出现两张卡。
+        // [P1 修复] 走 Notifier 的唯一实现（与 M1 钩子 / 后台监听者 / 深链同规则）。
+        String key = com.dsh.mobile.notify.Notifier.approvalKey(frame);
         ChatItem it = byKey.get(key);
         if (it == null) {
             it = ChatItem.of(ChatItem.APPROVAL, key, "");
