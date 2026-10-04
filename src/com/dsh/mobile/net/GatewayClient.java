@@ -169,6 +169,21 @@ public final class GatewayClient {
     private static final long DENY_HOLD_MS = 4_000L;
 
     private WsClient ws;
+    // ---- control 连接（PROTOCOL §2「Independent conversation and control connections」）
+    //
+    // 为什么必须有它：主连接 `subscribe(当前会话)` 之后，**只收当前会话的事件**
+    // （协议 §subscribe：「不订阅 = 接收所有会话」）。于是别的会话里产生的
+    // 审批 / 提问根本推不到 App —— 用户报过两次「另一个任务让我做选择，App 没收到」。
+    // 协议给的正解是第二条带 `X-DSH-Channel: control` 的连接：
+    // **「Global metadata and pending interactions are delivered only to this connection.」**
+    // 它不订阅，所以收得到所有会话的待处理交互。
+    private WsClient wsControl;
+    private long controlRetryAt = 0L;
+    private final android.os.Handler controlHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable controlRetry = new Runnable() {
+        @Override public void run() { openControlLane(); }
+    };
     private String url = "";
     private String token = "";
     private String pairingCode = "";
@@ -334,6 +349,7 @@ public final class GatewayClient {
         WsClient c = ws;
         ws = null;
         if (c != null) c.close(1000, "bye");
+        closeControlLane();          // control 连接跟着主连接一起收
         setState(State.DISCONNECTED, "已断开");
     }
 
@@ -438,6 +454,7 @@ public final class GatewayClient {
                     String detail = (reason == null || reason.isEmpty() || "connection lost".equals(reason))
                             ? ("连接断开(" + code + ")") : reason;
                     noteShortLived();   // 存活 <5s 记一次短命罚分（P1-2）
+                    closeControlLane();  // control 跟着主连接一起收，重连后由 hello 再开
                     scheduleReconnect(detail + " · 准备重连");
                 }
 
@@ -1127,6 +1144,101 @@ public final class GatewayClient {
         }
         capabilities = caps;
         helloWarning = w.toString();
+        // split-channels：开 control 连接（专收全局待处理交互；主连接已被 subscribe 过滤掉）
+        if (caps != null && caps.contains("split-channels")) openControlLane();
+    }
+
+    /**
+     * 开 control 连接（幂等；失败自行退避重试）。
+     *
+     * <p>协议要点：配对只在 control 上做；这里已经有设备令牌了，所以直接用
+     * `dsh-auth.<token>` + `Authorization` + `X-DSH-Device-ID` 鉴权 ——
+     * 与 conversation 连接同一套凭证（协议原文："reuse the returned device token and
+     * device ID for conversation"）。
+     */
+    private void openControlLane() {
+        if (token == null || token.isEmpty() || url.isEmpty()) return;
+        if (wsControl != null) return;                                   // 已在
+        if (System.currentTimeMillis() < controlRetryAt) return;         // 退避中
+        List<String> protos = new ArrayList<>();
+        protos.add(PROTO);
+        protos.add("dsh-auth." + token);
+        Map<String, String> headers = new HashMap<>();
+        if (!deviceId.isEmpty()) headers.put("X-DSH-Device-ID", deviceId);
+        headers.put("Authorization", "Bearer " + token);
+        headers.put("X-DSH-Channel", "control");
+        try {
+            wsControl = new WsClient(url, protos, headers, new WsClient.Listener() {
+                @Override public void onOpen() {
+                    controlRetryAt = 0L;
+                    rec("control 通道已连接");
+                }
+                @Override public void onText(String text) {
+                    dispatchControl(text);
+                }
+                @Override public void onClosed(int code, String reason) {
+                    wsControl = null;
+                    rec("control 通道断开 code=" + code);
+                    if (wantConnected) {
+                        controlRetryAt = System.currentTimeMillis() + 4_000L;
+                        controlHandler.postDelayed(controlRetry, 4_000L);
+                    }
+                }
+                @Override public void onFailure(Throwable e) {
+                    wsControl = null;
+                    if (wantConnected) {
+                        controlRetryAt = System.currentTimeMillis() + 6_000L;
+                        controlHandler.postDelayed(controlRetry, 6_000L);
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            wsControl = null;
+            rec("! control 通道建立失败: " + t);
+            controlRetryAt = System.currentTimeMillis() + 8_000L;
+            controlHandler.postDelayed(controlRetry, 8_000L);
+        }
+    }
+
+    /** 关掉 control 连接（disconnect / 换端点时调）。 */
+    private void closeControlLane() {
+        controlHandler.removeCallbacks(controlRetry);
+        WsClient c = wsControl;
+        wsControl = null;
+        if (c != null) {
+            try { c.close(1000, "bye"); } catch (Throwable ignored) { }
+        }
+    }
+
+    /**
+     * control 通道的收帧口：**只认「待处理交互」这一类**。
+     *
+     * <p>其余帧（history / assistant-stream / sessions…）一律忽略 —— 那些由主连接负责，
+     * 两条线都处理会重复驱动 UI。
+     */
+    private void dispatchControl(String text) {
+        JSONObject f;
+        try { f = new JSONObject(text); } catch (Throwable t) { return; }
+        String kind = f.optString("kind", "");
+        if (kind.isEmpty()) return;
+        Listener l = listener;
+        if (l == null) return;
+        switch (kind) {
+            case "approval-requested":
+                l.onApprovalRequested(f);
+                break;
+            case "question-requested":
+                l.onQuestionRequested(f);
+                break;
+            case "approval-resolved":
+            case "question-resolved":
+            case "question-response":
+            case "approval-response":
+                l.onInteractionResolved(f);
+                break;
+            default:
+                break;
+        }
     }
 
     private static String joinCn(List<String> xs) {
