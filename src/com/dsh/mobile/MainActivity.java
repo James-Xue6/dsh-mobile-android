@@ -210,11 +210,15 @@ public final class MainActivity extends Activity implements
             // 所以"重连拿全局重放"不再毁历史翻页 -> 跨会话提问/审批进通知栏
             // **正在输入就跳过这一轮**：重连会触发列表/视图重建，
             // 真机表现为"打几个字窗口一闪、输入的字消失"（用户实测）。
-            // **周期重连已关闭**（用户实测：它会把界面/交互反复重建 ——
-            // 打字被清空、回答提问被丢弃/答到旧的重放卡上，导致"我发的消息你收不到"）。
-            // 通知保留"自然重连（前后台切换/网络变化）时"的全局重放那一路。
+            // **只在 App 不在前台时重连**（用户实测反馈的折中）：
+            //  - 他在用 App（前台）：不重连 -> 输入/回答稳定，不会被重建冲掉；
+            //  - 他离开 App（后台/别的应用/熄屏）：重连拿"连接建立时的全量不限会话重放"
+            //    -> 跨会话提问/审批进通知栏（这是他真正要的提醒）。
             boolean typing = convo != null && convo.hasDraft();
-            if (false && !typing && gw != null && gw.wantsGlobalLane()) gw.retryNow();
+            if (!typing && !com.dsh.mobile.notify.Notifier.isForeground()
+                    && gw != null && gw.wantsGlobalLane()) {
+                gw.retryNow();
+            }
             globalLaneHandler.postDelayed(this, 30_000L);
         }
     };
