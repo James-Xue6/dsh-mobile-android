@@ -58,6 +58,38 @@ public final class ModelSheet {
     private ModelSheet() { }
 
     /**
+     * **长文本面板**（从下往上的大面板，不是系统弹窗）：目标/任务全文用。
+     * 与其它 sheet 同一套视觉：抓柄 + 不透明面板底 + 可滚动 + 可选中复制 + 关闭按钮；
+     * **不挂窗口模糊**（沿用 10-04 真机定位的安全配方）。
+     */
+    public static void showText(Context ctx, String title, String body) {
+        if (ctx == null) return;
+        final Dialog dlg = new Dialog(ctx);
+        LinearLayout box = Ui.sheetCard(ctx);
+        box.addView(Ui.grabber(ctx));
+        box.addView(Ui.text(ctx, title, Ui.S_TITLE3, Ui.INK, true));
+
+        TextView tv = Ui.text(ctx, body == null ? "" : body, Ui.S_SUB, Ui.INK, false);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 10), Ui.dp(ctx, 2), Ui.dp(ctx, 10));
+        ScrollView scv = new MaxHeightScrollView(ctx);
+        scv.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        scv.addView(tv);
+        box.addView(scv);
+
+        TextView close = Ui.secondaryButton(ctx, "关闭");
+        close.setOnClickListener(v -> dlg.dismiss());
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(ctx, 10);
+        close.setLayoutParams(clp);
+        box.addView(close);
+
+        showSheet(dlg, box);
+    }
+
+    /**
      * 通用单选底部面板：思考等级、以及将来「权限 / 技能」这类「一组选项里挑一个」的场景都用它。
      *
      * @param currentId 当前生效项（打勾）；可为空

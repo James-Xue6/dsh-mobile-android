@@ -2836,16 +2836,8 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "这条会话还没有目标 / 任务", Toast.LENGTH_SHORT).show();
             return;
         }
-        android.widget.TextView tv = Ui.text(this, full, Ui.S_SUB, Ui.INK, false);
-        tv.setTextIsSelectable(true);
-        tv.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 12));
-        android.widget.ScrollView sc = new android.widget.ScrollView(this);
-        sc.addView(tv);
-        Ui.dialog(this)
-                .setTitle("目标 / 任务（全文）")
-                .setView(sc)
-                .setPositiveButton("关闭", null)
-                .show();
+        // 用**从下往上的大面板**（与其它 sheet 同一套视觉），不用系统弹窗
+        com.dsh.mobile.ui.ModelSheet.showText(this, "目标 / 任务", full);
     }
 
     public void onQueueItemAction(final String itemId, final String text) {
