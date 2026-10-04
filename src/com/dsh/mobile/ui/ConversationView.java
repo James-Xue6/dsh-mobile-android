@@ -141,6 +141,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private int listBasePadBottom;
     /** 「回到底部」按钮的布局参数（下边距要跟悬浮层高度走）。 */
     private FrameLayout.LayoutParams toBottomFlp;
+    /** 顶部渐隐层（让消息文字在浮动的目标卡下方淡出，与底部对称）。 */
+    private View topFade;
+    /** 列表顶部留白基数（叠在目标卡高度之上）。 */
+    private int listBasePadTop = 0;
     /** 「待发送」条容器（运行中排队的消息在这里显形；空则隐藏）。 */
     private LinearLayout pendingBox;
     /** 顶部「目标 / 任务」提要条 */
@@ -290,7 +294,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 这里保留卡片自己的底，只保留点击响应即可。
         // **就地向下展开**（点一下放大、再点收起）——不是底部弹窗、也不是系统弹窗
         planView.setOnClickListener(v -> { Ui.haptic(v); togglePlanExpand(); });
-        addView(planView);
+        // 不再加进布局流：改挂到 stage 顶部浮动层（与底部输入条对称）
 
         // ---- 分页状态行：正在加载更早 / 加载失败可重试（点一下 = 重新请求）
         moreStatus = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
@@ -407,6 +411,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 悬浮输入条下方必须让内容**淡出**，否则消息文字硬撞胶囊、两层字糊在一起。
         // 这是原生能做到的"磨砂替身"——真·背景模糊只有独立窗口才能做（Dialog 那条路），
         // 普通 View 无 API 可用。渐隐层在列表之上、输入区之下。
+        if (listBasePadTop == 0) listBasePadTop = Ui.dp(ctx, 12);
         bottomFade = new View(ctx);
         bottomFade.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_H)));
@@ -429,6 +434,30 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         addView(pendingBar);
 
         addView(stage);
+
+        // ---- 顶部浮动层（与底部输入条对称）：目标卡浮在列表之上，
+        //      列表顶部按其高度留白，且加一层**顶部渐隐**让文字"穿过去淡出"。
+        topFade = new View(ctx);
+        FrameLayout.LayoutParams tfLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, FADE_H));
+        tfLp.gravity = Gravity.TOP;
+        topFade.setLayoutParams(tfLp);
+        topFade.setBackground(buildTopFade(ctx));
+        stage.addView(topFade);
+
+        FrameLayout.LayoutParams planTopLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        planTopLp.gravity = Gravity.TOP;
+        stage.addView(planView, planTopLp);
+        planView.addOnLayoutChangeListener((v, l, tt, r, b, ol, ot, or, ob) -> {
+            int h = v.getHeight();
+            if (h <= 0) return;
+            int want = h + listBasePadTop;
+            if (list.getPaddingTop() != want) {
+                list.setPadding(list.getPaddingLeft(), want, list.getPaddingRight(), list.getPaddingBottom());
+                list.setClipToPadding(false);
+            }
+        });
 
         // 底部悬浮区（子智能体入口 + 输入胶囊）——必须排在 listWrap / 渐隐之后，绘在最上层
         LinearLayout bottomStack = Ui.col(ctx);
@@ -807,6 +836,14 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (planView.getParent() instanceof android.view.View) {
             ((android.view.View) planView.getParent()).requestLayout();
         }
+    }
+
+    /** 顶部渐隐：BG → 半透明 → 全透明（从上往下），与底部渐隐镜像。 */
+    private android.graphics.drawable.Drawable buildTopFade(Context c) {
+        int a = Ui.BG & 0x00FFFFFF;
+        return new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { Ui.BG, a | 0xAA000000, a });
     }
 
     /** 点「目标 / 任务」卡片时用：取全文。 */
@@ -1321,6 +1358,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
+        if (topFade != null) topFade.setBackground(buildTopFade(ctx));
         if (modelChip != null) {
             for (TextView c : new TextView[] { projectChip, modelChip, effortChip, usageChip, taskChip }) {
                 if (c == null) continue;
