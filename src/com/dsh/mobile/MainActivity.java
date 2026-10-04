@@ -185,6 +185,12 @@ public final class MainActivity extends Activity implements
     /** 非当前会话的待处理交互：sessionId -> 1 提问 / 2 审批 */
     private final Map<String, Integer> pendingBySession = new HashMap<>();
 
+    // ---------------------------------------------------------------- 模型选择（PROTOCOL §8）
+    /** 最近一次的 models 目录（供 chip 显示名与「模型不可用」文案复用）。 */
+    private org.json.JSONObject lastModels = null;
+    /** true = 这次 models 请求是用户点了「模型」chip，回来了要弹选择面板。 */
+    private boolean pendingModelRequest = false;
+
     // ---------------------------------------------------------------- 通知（见 com.dsh.mobile.notify.Notifier）
     //
     // 三个触发点：① 回合结束 →「任务完成」；② 审批/提问 →「需要处理」（高优先级，点进去就能选）；
@@ -1277,6 +1283,8 @@ public final class MainActivity extends Activity implements
         if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
         // 通知这边：人在对话页 = 正在看这条会话（"正在看就不打扰"的判断依据）
         Notifier.setViewedSession(this, currentSessionId);
+        // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
+        requestModelsQuietly();
     }
 
     private void showSettings() {
@@ -2367,6 +2375,94 @@ public final class MainActivity extends Activity implements
         rebuildOrder();
         if (convo != null) { convo.setItems(items); convo.refresh(); }
         if (listScreen != null) listScreen.setRows(buildRows());
+    }
+
+    // ---- 模型选择（PROTOCOL §8：models / select-model）
+
+    /**
+     * 点底部「模型」chip：拉该会话的模型目录（回来后弹选择面板）。
+     *
+     * <p>没有会话就先别发 —— 新会话的模型由宿主默认模型决定，切换要等会话建立。
+     */
+    @Override
+    public void onPickModel() {
+        if (currentSessionId == null || currentSessionId.isEmpty()) {
+            Toast.makeText(this, "先进入一条会话再切换模型", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端，先回「我的设备」重连", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pendingModelRequest = true;
+        gw.requestModels(currentSessionId);
+    }
+
+    /**
+     * 模型目录回来了。
+     *
+     * <p>两种情况都会到这里：① 进会话时顺手拉一次（只为把 chip 上的模型名刷出来）；
+     * ② 用户点了「模型」chip（拉完要弹面板）。用 {@link #pendingModelRequest} 区分。
+     */
+    @Override
+    public void onModels(org.json.JSONObject frame) {
+        if (frame == null) return;
+        lastModels = frame;
+        org.json.JSONObject cur = frame.optJSONObject("current");
+        if (cur != null && convo != null) {
+            convo.setModelLabel(modelDisplayName(cur.optString("model", "")));
+        }
+        if (!pendingModelRequest) return;
+        pendingModelRequest = false;
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !currentSessionId.isEmpty() && !sid.equals(currentSessionId)) return;
+        com.dsh.mobile.ui.ModelSheet.show(this, frame,
+                (provider, model, effort) -> {
+                    if (currentSessionId == null || currentSessionId.isEmpty()) return;
+                    gw.selectModel(currentSessionId, provider, model, effort);
+                });
+    }
+
+    /** 网关确认模型已切换：刷 chip + 轻提示。 */
+    @Override
+    public void onModelSelected(org.json.JSONObject frame) {
+        org.json.JSONObject sel = frame == null ? null : frame.optJSONObject("selected");
+        if (sel == null) return;
+        String label = modelDisplayName(sel.optString("model", ""));
+        if (convo != null) convo.setModelLabel(label);
+        String effort = sel.optString("reasoningEffort", "");
+        Toast.makeText(this, "已切换模型：" + label + (effort.isEmpty() ? "" : "（思考 " + effort + "）"),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /** 模型 id → 目录里的显示名（找不到就用 id 本身）。 */
+    private String modelDisplayName(String modelId) {
+        if (modelId == null || modelId.isEmpty()) return "";
+        org.json.JSONObject models = lastModels;
+        org.json.JSONArray groups = models == null ? null : models.optJSONArray("groups");
+        if (groups != null) {
+            for (int i = 0; i < groups.length(); i++) {
+                org.json.JSONObject g = groups.optJSONObject(i);
+                org.json.JSONArray ms = g == null ? null : g.optJSONArray("models");
+                if (ms == null) continue;
+                for (int j = 0; j < ms.length(); j++) {
+                    org.json.JSONObject m = ms.optJSONObject(j);
+                    if (m != null && modelId.equals(m.optString("id", ""))) {
+                        String name = m.optString("name", "");
+                        if (!name.isEmpty()) return name;
+                    }
+                }
+            }
+        }
+        return modelId;
+    }
+
+    /** 进会话时顺手拉一次模型目录（只为 chip 文案；失败静默，不影响任何流程）。 */
+    private void requestModelsQuietly() {
+        if (gw == null || currentSessionId == null || currentSessionId.isEmpty()) return;
+        if (!isOnline()) return;
+        pendingModelRequest = false;
+        gw.requestModels(currentSessionId);
     }
 
     @Override
@@ -4143,6 +4239,12 @@ public final class MainActivity extends Activity implements
             return;
         }
         lastSentText = text == null ? "" : text;
+        // **运行中发送 = 排队（与电脑端一致）**：帧里本来就有 mode:"queue"，宿主会把这条
+        // 排进队列、当前回合结束后自动发出。这里给一句即时反馈，免得用户以为"没发出去"。
+        // （队列内容的可视化要等 control 连接的 session-queue 帧，见 protocol §「排队消息同步」。）
+        if (running && !currentSessionId.isEmpty()) {
+            Toast.makeText(this, "已排队：当前回合结束后自动发出", Toast.LENGTH_SHORT).show();
+        }
         if (currentSessionId.isEmpty()) {
             // 新会话：先本地回显，等 sent 回来拿 sessionId
             pendingUserText = text;

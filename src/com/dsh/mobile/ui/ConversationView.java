@@ -11,6 +11,7 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.AbsListView;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -44,6 +45,11 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onMenu();
         /** 点「👥 N 子智能体」：打开子智能体列表（底部弹窗）。 */
         void onOpenSubagents();
+        /**
+         * 点底部 chip 行的「模型」：向网关拉该会话的模型目录（PROTOCOL §8 models）。
+         * 目录回来后由宿主弹选择面板，选中再走 select-model。
+         */
+        void onPickModel();
         void onVoiceInput();
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
@@ -82,6 +88,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private TextView toBottom;
     /** 列表底部渐隐层：让消息文字在接近悬浮输入条前淡出（避免两层字重叠） */
     private View bottomFade;
+    /** 底部 chip 行的「模型」chip（显示当前模型名；点它拉模型目录）。 */
+    private TextView modelChip;
+    /** 当前模型名（网关确认后写入；空 = 还没拿到）。 */
+    private String modelLabel = "";
     /** 底部渐隐层高度（dp）：够覆盖输入胶囊 + 一点呼吸区 */
     private static final float FADE_H = 132f;
     /** 列表底部留白的"呼吸量"（叠在悬浮层高度之上，见 bottomStack 的布局监听） */
@@ -450,22 +460,67 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         alp.leftMargin = Ui.dp(ctx, 8);
         action.setLayoutParams(alp);
         action.setOnClickListener(v -> {
-            if (running) { host.onStopTurn(); return; }
             String text = input.getText().toString().trim();
+            // **2026-10-04 与电脑端对齐（用户反馈）**：回合运行中不再是"只能停止"——
+            //   · 草稿非空 → 照样发送。网关的 message 帧本来带 mode:"queue"（见
+            //     GatewayClient.sendMessage），宿主会把这条排进队列，当前回合结束后自动发出；
+            //   · 草稿为空 → 才是"停止当前回合"。
+            // 这与电脑端/豆包一致：运行中右钮在"有字=发送(排队) / 无字=停止"之间切换。
+            if (running && text.isEmpty()) { host.onStopTurn(); return; }
             if (text.isEmpty()) return;
             input.setText("");
             host.onSend(text);
         });
+        // 草稿变化要重刷右钮图标（运行中：有字=↑发送 / 无字=■停止）
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable s) { refreshActionIcon(); }
+        });
         input.setOnLongClickListener(v -> { host.onVoiceInput(); return true; });
         inputBar.addView(action);
+
+        // ---- 底部 chip 行（2026-10-04 用户要求「能改模型」，对齐豆包输入框上方那一条）
+        //
+        // 豆包的样式：输入框上方一条**可横向滑动**的胶囊 chip 组（项目 / 模型 / 用量）。
+        // 本 App 先落「模型」这一枚（协议侧 models + select-model 已就绪），
+        // 行本身用 HorizontalScrollView，后续加「项目 / 用量」不用改布局。
+        HorizontalScrollView chipScroll = new HorizontalScrollView(ctx);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        chipScroll.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);   // 与全 App 一致：不要 Android 越界光晕
+        LinearLayout chipRow = Ui.row(ctx);
+        chipRow.setPadding(Ui.dp(ctx, 0), 0, Ui.dp(ctx, 0), 0);
+        modelChip = Ui.text(ctx, "模型", Ui.S_CAP1, Ui.INK_SUB, true);
+        modelChip.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 7), Ui.dp(ctx, 12), Ui.dp(ctx, 7));
+        modelChip.setBackground(Ui.pill(Ui.CHIP_BG));
+        modelChip.setClickable(true);
+        Ui.tap(modelChip);
+        modelChip.setOnClickListener(v -> { Ui.haptic(v); host.onPickModel(); });
+        chipRow.addView(modelChip);
+        chipScroll.addView(chipRow);
+        LinearLayout.LayoutParams csLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        csLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        csLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+        csLp.topMargin = Ui.dp(ctx, 4);
+        chipScroll.setLayoutParams(csLp);
+        bottomStack.addView(chipScroll);
+
         // 悬浮：左右 16dp（与全 App 的 M_SIDE 对齐）、下方 12dp
         LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         ibLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
         ibLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
-        ibLp.topMargin = Ui.dp(ctx, 6);
+        ibLp.topMargin = Ui.dp(ctx, 4);
         ibLp.bottomMargin = Ui.dp(ctx, 12);
         bottomStack.addView(inputBar, ibLp);   // 加在悬浮层里（不再是根布局的兄弟节点）
+    }
+
+    /** 更新底部「模型」chip 的文案（网关确认选中后调用；label 为空则回落到「模型」）。 */
+    public void setModelLabel(String label) {
+        if (modelChip == null) return;
+        modelLabel = label == null ? "" : label;
+        modelChip.setText(modelLabel.isEmpty() ? "模型" : ("模型 · " + modelLabel));
     }
 
     public String draftText() { return input.getText().toString(); }
@@ -606,15 +661,28 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             running = value;
             runningHint = hint == null ? "" : hint;
             adapter.setRunningHint(runningHint);
-            Ui.setIconBg(action,
-                    value ? com.dsh.mobile.R.drawable.ic_stop : com.dsh.mobile.R.drawable.ic_arrow_up,
-                    value ? Ui.INK : Ui.ON_BRAND,
-                    value ? Ui.STOP_BG : Ui.BRAND_FILL,
-                    42f, value ? 17f : 20f);
+            refreshActionIcon();
             // 只读子会话里停止按钮同样禁用（宿主也只会用 subagents.interruptByParent 停子会话）
             if (readOnly) Ui.setButtonEnabled(action, false);
             scheduleRefresh();
         });
+    }
+
+    /**
+     * 刷右钮图标：**运行中「有草稿 = ↑发送（排队）／无草稿 = ■停止」**，空闲恒为 ↑。
+     *
+     * <p>2026-10-04 与电脑端对齐：豆包/PC 在回合进行时仍然允许把消息排进队列，
+     * 只有当输入框是空的、那颗钮才表示"停止"。草稿变化（TextWatcher）与运行态变化都会调到这。
+     */
+    private void refreshActionIcon() {
+        if (action == null) return;
+        boolean stopping = running && input != null
+                && input.getText().toString().trim().isEmpty();
+        Ui.setIconBg(action,
+                stopping ? com.dsh.mobile.R.drawable.ic_stop : com.dsh.mobile.R.drawable.ic_arrow_up,
+                stopping ? Ui.INK : Ui.ON_BRAND,
+                stopping ? Ui.STOP_BG : Ui.BRAND_FILL,
+                42f, stopping ? 17f : 20f);
     }
 
     public void setItems(final List<ChatItem> items) {
@@ -941,6 +1009,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     public void applyTheme() {
         setBackgroundColor(Ui.BG);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
+        if (modelChip != null) {
+            modelChip.setTextColor(Ui.INK_SUB);
+            modelChip.setBackground(Ui.pill(Ui.CHIP_BG));                    // chip 底色随主题
+        }
         // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
         if (barRow != null) barRow.setBackground(null);
         if (barLine != null) barLine.setBackgroundColor(Ui.HAIRLINE);

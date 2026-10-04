@@ -44,6 +44,15 @@ public final class GatewayClient {
         /** 文件下载事件：kind 为 file-download-opened / file-download-chunk / file-download-cancelled。 */
         void onDownload(String kind, JSONObject frame);
 
+        /**
+         * 模型目录（PROTOCOL §8）：带 sessionId 时含 {@code current}/{@code routable}，
+         * 不带时是全局目录（{@code groups}+{@code failures}）。
+         */
+        default void onModels(JSONObject frame) { }
+
+        /** 切换模型 / 思考等级的回执（{@code selected:{provider,model,reasoningEffort}}）。 */
+        default void onModelSelected(JSONObject frame) { }
+
         /** 因失败而安排重连时回调（用于自动切换内网/公网）。 */
         default void onReconnectScheduled(String reason) { }
 
@@ -678,6 +687,34 @@ public final class GatewayClient {
 
     public void unsubscribe() { sendRaw(base("unsubscribe")); }
 
+    /**
+     * 模型目录（PROTOCOL §8）：
+     * 带 sessionId = 该会话的模型目录（含 current/routable/groups）；不带 = 全局目录。
+     */
+    public void requestModels(String sessionId) {
+        try {
+            JSONObject o = base("models");
+            if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 切换**该会话**的模型 / 思考等级（写进会话日志）。
+     *
+     * @param effort 思考等级（low/medium/high…）；不需要就传 null
+     */
+    public void selectModel(String sessionId, String provider, String model, String effort) {
+        try {
+            JSONObject o = base("select-model");
+            o.put("sessionId", sessionId);
+            o.put("provider", provider);
+            o.put("model", model);
+            if (effort != null && !effort.isEmpty()) o.put("reasoningEffort", effort);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
     public void requestHistory(String sessionId, Long beforeSeq, int historyFormatVersion) {
         try {
             JSONObject o = base("history");
@@ -974,6 +1011,12 @@ public final class GatewayClient {
                 break;
             case "question-requested":
                 l.onQuestionRequested(f);
+                break;
+            case "models":
+                l.onModels(f);
+                break;
+            case "select-model":
+                l.onModelSelected(f);
                 break;
             case "approval-resolved":
             case "question-resolved":
