@@ -1,9 +1,9 @@
 {
-  "versionCode": 20,
-  "versionName": "0.86.3",
-  "notes": "最终版：目标卡(白卡/就地展开/顶部渐隐40dp/无卡不渐隐)；带图消息排版；历史翻页；发消息稳定(关闭周期重连)；排队修改与立即插入反馈；跨会话通知(网关插件广播)",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.3/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.3/dist/dsh-mobile.apk",
+  "versionCode": 21,
+  "versionName": "0.86.4",
+  "notes": "跨会话与后台通知修复（网关注解放宽 + 前台服务不再断线自杀 + 无界面时仍弹提醒）；新通知渠道与渠道级自查引导；卡片灰框修复（改框架渐变底）；卡片底部按钮可达；卡片滚动位置与草稿跨刷新保持；点输入框不再乱滚",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.4/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.4/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
