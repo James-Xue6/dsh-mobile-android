@@ -193,6 +193,9 @@ public final class GatewayClient {
     /** logcat tag：control 通道的诊断（`adb logcat -s DSH-Control`）。 */
     private static final String CTL_TAG = "DSH-Control";
     private WsClient wsControl;
+    /** control 通道的最近状态（显示在 App 内诊断区；荣耀 logcat 加密，只能走 UI 通道）。 */
+    private volatile String ctlStatus = "未尝试（未收到 hello / 未宣告 split-channels）";
+    public String controlLaneStatus() { return ctlStatus; }
     private long controlRetryAt = 0L;
     private final android.os.Handler controlHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -1197,8 +1200,8 @@ public final class GatewayClient {
         helloWarning = w.toString();
         // split-channels：开 control 连接（专收全局待处理交互；主连接已被 subscribe 过滤掉）
         android.util.Log.i(CTL_TAG, "hello caps=" + (caps == null ? "null" : caps.toString()));
-        if (caps != null && caps.contains("split-channels")) openControlLane();
-        else android.util.Log.i(CTL_TAG, "hello 未宣告 split-channels，不开 control 通道");
+        if (caps != null && caps.contains("split-channels")) { ctlStatus = "准备连接（hello 已宣告 split-channels）"; openControlLane(); }
+        else ctlStatus = "未开：hello 没有 split-channels";
     }
 
     /**
@@ -1211,12 +1214,12 @@ public final class GatewayClient {
      */
     private void openControlLane() {
         if (token == null || token.isEmpty() || url.isEmpty()) {
-            android.util.Log.i(CTL_TAG, "skip: token/url 为空 token=" + (token == null ? "null" : (token.isEmpty() ? "empty" : "ok"))
-                    + " url=" + (url.isEmpty() ? "empty" : "ok"));
+            ctlStatus = "跳过：token 或 url 为空（token=" + (token == null ? "null" : (token.isEmpty() ? "empty" : "ok"))
+                    + " url=" + (url.isEmpty() ? "empty" : "ok") + "）";
             return;
         }
-        if (wsControl != null) { android.util.Log.i(CTL_TAG, "skip: 已有连接"); return; }
-        if (System.currentTimeMillis() < controlRetryAt) { android.util.Log.i(CTL_TAG, "skip: 退避中"); return; }
+        if (wsControl != null) { ctlStatus = "已在连接中"; return; }
+        if (System.currentTimeMillis() < controlRetryAt) { ctlStatus = "退避重试中…"; return; }
         List<String> protos = new ArrayList<>();
         protos.add(PROTO);
         protos.add("dsh-auth." + token);
@@ -1228,7 +1231,7 @@ public final class GatewayClient {
             wsControl = new WsClient(url, protos, headers, new WsClient.Listener() {
                 @Override public void onOpen() {
                     controlRetryAt = 0L;
-                    android.util.Log.i(CTL_TAG, "control 通道已连接");
+                    ctlStatus = "已连接 ✓";
                     rec("control 通道已连接");
                 }
                 @Override public void onText(String text) {
@@ -1236,7 +1239,7 @@ public final class GatewayClient {
                 }
                 @Override public void onClosed(int code, String reason) {
                     wsControl = null;
-                    android.util.Log.i(CTL_TAG, "control 通道断开 code=" + code + " reason=" + reason);
+                    ctlStatus = "断开 code=" + code + " reason=" + reason;
                     rec("control 通道断开 code=" + code);
                     if (wantConnected) {
                         controlRetryAt = System.currentTimeMillis() + 4_000L;
@@ -1245,7 +1248,7 @@ public final class GatewayClient {
                 }
                 @Override public void onFailure(Throwable e) {
                     wsControl = null;
-                    android.util.Log.i(CTL_TAG, "control 通道失败: " + e);
+                    ctlStatus = "失败: " + e;
                     if (wantConnected) {
                         controlRetryAt = System.currentTimeMillis() + 6_000L;
                         controlHandler.postDelayed(controlRetry, 6_000L);
@@ -1254,7 +1257,7 @@ public final class GatewayClient {
             });
         } catch (Throwable t) {
             wsControl = null;
-            android.util.Log.i(CTL_TAG, "control 通道建立失败: " + t);
+            ctlStatus = "建立失败: " + t;
             rec("! control 通道建立失败: " + t);
             controlRetryAt = System.currentTimeMillis() + 8_000L;
             controlHandler.postDelayed(controlRetry, 8_000L);

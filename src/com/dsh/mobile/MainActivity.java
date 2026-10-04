@@ -6508,6 +6508,7 @@ public final class MainActivity extends Activity implements
             sb.append("\n\n[配对诊断] 本次配对的每一步（不含配对码/令牌明文）：");
             for (String line : pairTrace) sb.append('\n').append("  ").append(line);
         }
+        if (gw != null) sb.append("\n\n[control 通道] ").append(gw.controlLaneStatus());
         if (gw != null && !gw.lastQueueSendInfo().isEmpty()) {
             sb.append("\n\n[最近一次队列操作] ").append(gw.lastQueueSendInfo());
         }
