@@ -208,7 +208,10 @@ public final class MainActivity extends Activity implements
             // 因此恢复"始终订阅当前会话"：跨会话提醒这条不再用客户端 hack，改由电脑端插件解决。
             // 重新启用周期重连：分页状态现在会保留（onSnapshot 的 keepPaging），
             // 所以"重连拿全局重放"不再毁历史翻页 -> 跨会话提问/审批进通知栏
-            if (gw != null && gw.wantsGlobalLane()) gw.retryNow();
+            // **正在输入就跳过这一轮**：重连会触发列表/视图重建，
+            // 真机表现为"打几个字窗口一闪、输入的字消失"（用户实测）。
+            boolean typing = convo != null && convo.hasDraft();
+            if (!typing && gw != null && gw.wantsGlobalLane()) gw.retryNow();
             globalLaneHandler.postDelayed(this, 30_000L);
         }
     };

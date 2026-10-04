@@ -1,9 +1,9 @@
 {
-  "versionCode": 16,
-  "versionName": "0.86",
-  "notes": "修「人在这条会话里就收不到通知栏」：提问/审批改为高优先级，即使在看的会话也弹通知；重连不再重置历史分页",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86/dist/dsh-mobile.apk",
+  "versionCode": 17,
+  "versionName": "0.87",
+  "notes": "修：正在输入时不再触发周期重连（原来每30s重连会刷新界面、把你打的字清掉+闪色）；修复目标卡换行后顶部留白没跟上、压住下面第一张卡首行",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.87/dist/dsh-mobile.apk",
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

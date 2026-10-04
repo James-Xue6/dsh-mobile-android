@@ -828,6 +828,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
         planFullText = sb.toString();
         planView.setText(sb);
+        schedulePlanPad();   // 文字换行后高度会变，延迟补算顶部留白（否则会盖住下面第一张卡的首行）
         planView.setVisibility(View.VISIBLE);
     }
 
@@ -856,6 +857,26 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 new int[] { Ui.BG, a | 0xAA000000, a });
     }
 
+    /** 文字/高度变化后补算顶部留白（多次 post，覆盖"换行后高度变化"的时序）。 */
+    private void schedulePlanPad() {
+        for (int d : new int[] { 0, 60, 180 }) {
+            postDelayed(() -> applyPlanPad(), d);
+        }
+    }
+
+    /** 依据目标卡当前高度设置列表顶部留白（+16dp 安全余量，避免首行被压住）。 */
+    private void applyPlanPad() {
+        if (planView == null || list == null) return;
+        boolean hasCard = planView.getVisibility() == View.VISIBLE;
+        if (topFade != null) topFade.setVisibility(hasCard ? View.VISIBLE : View.GONE);
+        int h = hasCard ? planView.getHeight() : 0;
+        int want = (h > 0 ? h : 0) + listBasePadTop + Ui.dp(ctx, 4);
+        if (list.getPaddingTop() != want) {
+            list.setPadding(list.getPaddingLeft(), want, list.getPaddingRight(), list.getPaddingBottom());
+            list.setClipToPadding(false);
+        }
+    }
+
     /** 点「目标 / 任务」卡片时用：取全文。 */
     public String planFullText() { return planFullText; }
 
@@ -879,6 +900,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     }
 
     public String draftText() { return input.getText().toString(); }
+
+    /** 输入框里是否有草稿（用户正在打字）。
+     *  用于让"周期重连"避开正在输入的时刻 —— 重连会触发列表重建，
+     *  真机表现为"打几个字窗口一闪、字就没了"。 */
+    public boolean hasDraft() {
+        return input != null && input.getText().toString().trim().length() > 0;
+    }
     public void setDraft(String s) { input.setText(s == null ? "" : s); }
     public void focusInput() { input.requestFocus(); }
 
@@ -983,6 +1011,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planFullText = planText == null ? "" : planText;
         planCompactMode = compact;
         planView.setText(compact ? compactPlan(planText) : planText);
+        schedulePlanPad();
         planView.setVisibility(VISIBLE);
     }
 
@@ -1427,3 +1456,4 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     @Override public void onQuestionSubmit(ChatItem item, JSONArray answers) { host.onQuestionSubmit(item, answers); }
     @Override public void onQuestionCancel(ChatItem item) { host.onQuestionCancel(item); }
 }
+
