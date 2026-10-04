@@ -2828,6 +2828,26 @@ public final class MainActivity extends Activity implements
         Toast.makeText(this, "那条会话暂时不在列表里（可能已归档）", Toast.LENGTH_SHORT).show();
     }
 
+    /** 点顶部「目标 / 任务」卡片：用可滚动的对话框展示全文（卡片只显示截断版）。 */
+    @Override
+    public void onOpenPlan() {
+        String full = convo == null ? "" : convo.planFullText();
+        if (full == null || full.trim().isEmpty()) {
+            Toast.makeText(this, "这条会话还没有目标 / 任务", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        android.widget.TextView tv = Ui.text(this, full, Ui.S_SUB, Ui.INK, false);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 12));
+        android.widget.ScrollView sc = new android.widget.ScrollView(this);
+        sc.addView(tv);
+        Ui.dialog(this)
+                .setTitle("目标 / 任务（全文）")
+                .setView(sc)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
     public void onQueueItemAction(final String itemId, final String text) {
         if (currentSessionId == null || currentSessionId.isEmpty()
                 || itemId == null || itemId.isEmpty()) return;

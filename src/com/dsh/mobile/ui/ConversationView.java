@@ -60,6 +60,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onTasksTap();
         /** 点顶部提示栏：切到那条有待回答提问/审批的会话。 */
         void onOpenPendingSession();
+        /** 点顶部「目标 / 任务」卡片：看全文（卡片本身只显示截断版）。 */
+        void onOpenPlan();
         /** 点「待发送」条上的一条：弹出 立即插入 / 编辑 / 删除（itemId 来自网关队列）。 */
         void onQueueItemAction(String itemId, String text);
         void onVoiceInput();
@@ -143,6 +145,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private LinearLayout pendingBox;
     /** 顶部「目标 / 任务」提要条 */
     private TextView planView;
+    /** 目标 / 任务的**全文**（planView 只显示截断版，点开看这个）。 */
+    private String planFullText = "";
     /**
      * 消息列表上方那一行「正在加载更早…」/「加载更早失败，点这里重试」。
      * 分页在途/失败必须有可见状态：静默失败会让用户以为"这个会话就这么长"，
@@ -278,6 +282,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         planLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
         planLp.topMargin = Ui.dp(ctx, 6);
         planView.setLayoutParams(planLp);
+        // 可点开看全文（原先 8 行封顶 + 省略号且不可点，用户报"显示有问题、点不开看全部"）
+        planView.setClickable(true);
+        Ui.tap(planView);
+        planView.setOnClickListener(v -> { Ui.haptic(v); host.onOpenPlan(); });
         addView(planView);
 
         // ---- 分页状态行：正在加载更早 / 加载失败可重试（点一下 = 重新请求）
@@ -717,6 +725,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         });
     }
 
+    /** 点「目标 / 任务」卡片时用：取全文。 */
+    public String planFullText() { return planFullText; }
+
     /** 供宿主在用户点「项目」时取完整路径。 */
     public String projectPath() { return projectFullPath; }
 
@@ -836,6 +847,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             return;
         }
         planView.setMaxLines(compact ? 1 : 8);
+        planFullText = planText == null ? "" : planText;
         planView.setText(compact ? compactPlan(planText) : planText);
         planView.setVisibility(VISIBLE);
     }
