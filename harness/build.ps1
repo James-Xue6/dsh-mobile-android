@@ -41,6 +41,12 @@ $sources = @(
   (Join-Path $here 'shim\android\os\Handler.java'),
   (Join-Path $here 'shim\android\os\Looper.java'),
   (Join-Path $here 'shim\android\util\Base64.java'),
+  # [2026-10-05 修] 这三块垫片是 GatewayClient 后来才引入的依赖（appCtx / android.util.Log /
+  # 通知钩子 Notifier.onGatewayState），原先 harness 没跟上 ⇒ 本脚本编不过当前 src。
+  # 从 .verify-p0\shim 复制到 harness\shim 下，让 harness 自洽。
+  (Join-Path $here 'shim\android\content\Context.java'),
+  (Join-Path $here 'shim\android\util\Log.java'),
+  (Join-Path $here 'shim\com\dsh\mobile\notify\Notifier.java'),
   $ws,
   $gw,
   (Join-Path $here 'src\Harness.java')

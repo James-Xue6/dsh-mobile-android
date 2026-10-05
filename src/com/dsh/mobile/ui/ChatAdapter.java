@@ -188,7 +188,7 @@ public final class ChatAdapter extends BaseAdapter {
         // 注意这里**不能**用 brandPill()：999 的圆角会被夹到 min(宽,高)/2，
         // 多行气泡会变成两头圆的"体育场形"。
         bubble.setBackground(Ui.brandGradient(Ui.dp(ctx, 18)));
-        bubble.setTextIsSelectable(true);
+        makeSelectable(bubble);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -240,7 +240,7 @@ public final class ChatAdapter extends BaseAdapter {
         android.graphics.drawable.GradientDrawable abg = Ui.round(Ui.dp(ctx, 18), Ui.SURFACE_G1);
         bubble.setBackground(abg);
         bubble.setElevation(Ui.dp(ctx, 2f));
-        bubble.setTextIsSelectable(true);
+        makeSelectable(bubble);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -310,7 +310,7 @@ public final class ChatAdapter extends BaseAdapter {
         TextView bubble = Ui.text(ctx, body, Ui.S_SUB, Ui.INK, false);
         bubble.setPadding(0, Ui.dp(ctx, 5), 0, 0);
         bubble.setMaxWidth(maxBubble);
-        bubble.setTextIsSelectable(true);
+        makeSelectable(bubble);
         card.addView(bubble);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -420,7 +420,7 @@ public final class ChatAdapter extends BaseAdapter {
 
         TextView line = Ui.text(ctx, it.text == null ? "" : it.text, Ui.S_FOOT, color, false);
         line.setPadding(Ui.dp(ctx, 6), 0, 0, 0);
-        line.setTextIsSelectable(true);
+        makeSelectable(line);
         wrap.addView(line);
         return wrap;
     }
@@ -917,5 +917,114 @@ public final class ChatAdapter extends BaseAdapter {
         t.setBackground(fill == Ui.BRAND_FILL ? Ui.brandPill() : Ui.pill(fill));
         Ui.tap(t);
         return t;
+    }
+
+    // ============================================================ 文本选中（任务③ 复制 bug）
+    //
+    // 用户原话：「对话框复制点击一次没法立即选择范围，操作不流畅」。
+    //
+    // 【根因】三条，前两条有代码证据，第三条是框架文档语义：
+    //  ① 框架语义（设计行为，不是崩溃）：setTextIsSelectable(true) 只把 TextView 变成
+    //     "文本可选" —— **单击只落一个光标 / 清掉旧选区**，要进入"选区模式"必须长按
+    //     （或双击选词）。用户按 PC 的直觉「点一下就该能拖选范围」，看到的就是
+    //     "点一次没法立即选择范围"。
+    //  ② 本仓库加重因素（代码证据）：getView() 从不复用 convertView，每次绑定都**新建**
+    //     TextView（见 userBubble/assistantBubble/agentCard/stepRow 里的 new TextView）；
+    //     而 ConversationView.commitData() 在回合运行期间每 60ms 就 applyFilter +
+    //     notifyChanged 一次（scheduleRefresh 的合并窗口）→ 长按刚弹出的选区/手柄
+    //     在下一帧被"销毁重建"，表现为"点了没反应、一晃就没了"。
+    //  ③ 已排除的方向：本工程全局没有任何 setOnItemClickListener /
+    //     setOnItemLongClickListener（全仓 grep 命中 0 处），而 ListView 只在设了
+    //     item 长按监听时才会去抢长按（AbsListView 的 CheckForTap 分支），所以
+    //     "列表项抢长按"这条**不成立**，不要去动 ListView 或 adapter 结构。
+    //
+    // 【最小修复】只做两件事，不动 ListView、不动行结构：
+    //  a) 单击（手指没有移动超过 touch slop）→ 把整段选中（requestFocus + setSelection(0,len)）。
+    //     setTextIsSelectable(true) 已把文本转成 Spannable，所以 setSelection 有效；
+    //     单击即见高亮选区 + 手柄，"点一次就能选范围"成立；长按/拖手柄微调照旧可用。
+    //  b) 显式声明焦点能力（setTextIsSelectable 内部本来也会设，这里写死是为了防止
+    //     后续主题/父容器改动把它悄悄关掉，那会直接让选区拿不到焦点、工具栏不弹）。
+    //  配套的"刷新让路"在 ConversationView.commitData()：有活动选区时推迟重建（有上限），
+    //  选区不会再被 60ms 的流式刷新抹掉。
+    //
+    // 【未验证】单击后系统「复制」浮动工具栏是否自动弹出，与 ROM 有关（程序化 setSelection
+    //  触发 SelectionActionMode 的时机各 ROM 不一致）；高亮选区与手柄是确定的。若真机上
+    //  工具栏不自动弹，再在 tap 分支补一次 performLongClick()（本次不冒险改）。
+
+    /** 把一段文字做成「可选中复制」，并修掉"点一次没法立即选择范围"。 */
+    private static void makeSelectable(final TextView t) {
+        if (t == null) return;
+        t.setTextIsSelectable(true);
+        // (b) 焦点能力显式声明：ListView 的 item 里若子 View 不可聚焦，
+        //     选区拿不到焦点，系统的复制工具栏也不会弹。
+        t.setFocusable(true);
+        t.setFocusableInTouchMode(true);
+        // (a) 单击（无位移）→ 整段选中。事件**不消费**（返回 false），
+        //     滚动仍归 ListView，长按/双击仍归 TextView 自己。
+        final float[] down = new float[2];
+        final boolean[] moved = new boolean[1];
+        final int slop = android.view.ViewConfiguration.get(t.getContext()).getScaledTouchSlop();
+        t.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    down[0] = e.getX();
+                    down[1] = e.getY();
+                    moved[0] = false;
+                    break;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    if (Math.abs(e.getX() - down[0]) > slop
+                            || Math.abs(e.getY() - down[1]) > slop) moved[0] = true;
+                    break;
+                case android.view.MotionEvent.ACTION_UP:
+                    if (!moved[0]) v.post(() -> selectWholeText((TextView) v));
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
+    }
+
+    /** 单击气泡后把整段选中；已经有"真范围"选区（用户拖出来的）就不覆盖它。 */
+    private static void selectWholeText(TextView t) {
+        try {
+            CharSequence cs = t.getText();
+            if (cs == null || cs.length() == 0) return;
+            if (t.getSelectionEnd() > t.getSelectionStart()) return;   // 已有范围选区，别覆盖
+            t.requestFocus();
+            // 【主理人 2026-10-05 修编译错】TextView **没有** setSelection(int,int)——
+            // javap android-36 核实：TextView 只有 getSelectionStart()/getSelectionEnd()/setTextIsSelectable()，
+            // 没有 setSelection。选中范围要走 android.text.Selection 这个静态工具，
+            // 且目标必须是 Spannable（setTextIsSelectable(true) 已保证）。
+            if (cs instanceof android.text.Spannable) {
+                android.text.Selection.setSelection((android.text.Spannable) cs, 0, cs.length());
+                // [主理人 2026-10-05 模拟器实测两轮] 让系统把「复制 / 全选」浮动工具条弹出来：
+                //   · 第 1 轮试 performLongClick() —— 实测**无效**：只有蓝色高亮，工具条不出现
+                //     （selectable TextView 的 ActionMode 是由 CheckForLongPress 那条手势路径启动的，
+                //      performLongClick() 走的是另一条内部路径，不会 startSelectionActionModeAsync）。
+                //   · 第 2 轮改成**合成一次长按手势**（DOWN → 等 900ms → UP），走系统自己的路径。
+                // post 到下一帧执行，避免和本次真实触摸事件抢时序；失败也只是"没工具条"，高亮仍在。
+                t.post(() -> {
+                    try {
+                        int cx = Math.max(1, t.getWidth() / 2);
+                        int cy = Math.max(1, t.getHeight() / 2);
+                        long now = android.os.SystemClock.uptimeMillis();
+                        android.view.MotionEvent down = android.view.MotionEvent.obtain(
+                                now, now, android.view.MotionEvent.ACTION_DOWN, cx, cy, 0);
+                        android.view.MotionEvent up = android.view.MotionEvent.obtain(
+                                now, now + 900, android.view.MotionEvent.ACTION_UP, cx, cy, 0);
+                        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                        up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                        t.dispatchTouchEvent(down);
+                        t.postDelayed(() -> {
+                            try { t.dispatchTouchEvent(up); } catch (Throwable ignored) { }
+                        }, 900);
+                    } catch (Throwable ignored) { }
+                });
+            }
+        } catch (Throwable ignored) {
+            // setSelection 需要 Spannable；setTextIsSelectable(true) 已保证是 Spannable。
+            // 真出意外也只是"没自动全选"，绝不能因此崩掉整条消息。
+        }
     }
 }

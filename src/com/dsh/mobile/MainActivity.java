@@ -2,18 +2,26 @@ package com.dsh.mobile;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Intent;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.dsh.mobile.model.ArtifactEntry;
 import com.dsh.mobile.model.ChatItem;
+import com.dsh.mobile.model.PendingAttachment;
 import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.model.WorkspaceGroup;
@@ -63,6 +71,18 @@ public final class MainActivity extends Activity implements
     private static final int REQ_QR = 1001;
     private static final int REQ_VOICE = 1002;
     private static final int REQ_IMAGE = 1003;
+    /** [2026-10-05 用户要求②] 加号 →「文件」：ACTION_OPEN_DOCUMENT（任意类型）。 */
+    private static final int REQ_FILE = 1004;
+    /** [2026-10-05 用户要求②] 加号 →「拍照」：ACTION_IMAGE_CAPTURE + EXTRA_OUTPUT。 */
+    private static final int REQ_CAMERA = 1005;
+    /**
+     * [2026-10-05 构建侧核实] 拍照前的 CAMERA 运行时权限申请。
+     *
+     * <p>Android 明确规定：**清单里声明了 CAMERA 却没授权**时，调
+     * {@code MediaStore.ACTION_IMAGE_CAPTURE} 会直接抛 {@code SecurityException}
+     *（本项目 manifest:11 已声明 CAMERA，此前只有扫码页在申请）。所以「拍照」必须先申请。
+     */
+    private static final int REQ_CAMERA_PERM = 1006;
     /**
      * Android 13+ 的通知权限申请（POST_NOTIFICATIONS）。
      * 只主动问一次，被拒之后不再骚扰 —— 改由设置页「通知」分组给出「去系统设置开启」的引导。
@@ -1582,10 +1602,22 @@ public final class MainActivity extends Activity implements
     @Override
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
-        if (request != REQ_NOTIF) return;
-        boolean ok = results != null && results.length > 0
+        boolean granted = results != null && results.length > 0
                 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
-        if (!ok) {
+        // [2026-10-05 构建侧核实] 拍照权限：授权了才真的起相机；被拒给明确出路（不静默失败）。
+        if (request == REQ_CAMERA_PERM) {
+            if (granted) {
+                takePhotoNow();
+            } else {
+                String why = "没有相机权限，拍不了照；可以在系统设置里给「DSH 掌上通」打开相机权限，"
+                        + "或者改用「相册」挑一张现成的图片";
+                if (convo != null) convo.setBanner(why, false);
+                Toast.makeText(this, why, Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        if (request != REQ_NOTIF) return;
+        if (!granted) {
             Toast.makeText(this, "通知权限没开：任务完成/需要处理时不会提醒（可在设置页「通知」里打开）",
                     Toast.LENGTH_LONG).show();
         }
@@ -1643,6 +1675,14 @@ public final class MainActivity extends Activity implements
         // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
         refreshProjectChip();   // 「项目」chip 先按会话 cwd 填上
         requestModelsQuietly();
+        // [2026-10-05 用户要求④] 权限 chip：进/切会话时静默拉一次当前 preset（失败不打扰）
+        requestPermissionQuietly();
+        // [2026-10-05 用户要求②] 附件属于某一条对话：切了会话就清空暂存，
+        // 免得把 A 会话挑的图发进 B 会话（同一会话来回切设置页不会清）。
+        if (!currentSessionId.equals(attachmentsOwnerSessionId)) {
+            attachmentsOwnerSessionId = currentSessionId;
+            if (!pendingAttachments.isEmpty()) clearPendingAttachments();
+        }
         // 「待发送」条：优先用网关队列的权威值（没有队列就整块收起）
         if (convo != null) { convo.clearPendingSends(); convo.setPendingBanner(""); }
         pendingJumpSessionId = "";
@@ -3801,8 +3841,805 @@ public final class MainActivity extends Activity implements
             }
             return;
         }
+        // [2026-10-05 真机验收补] 这条发送被网关整条拒了 → 把刚清掉的附件**放回待发送**。
+        // 依据：sendStagedAttachments 是"发完就清空附件条"，而成功与否是异步的；
+        // 实测踩到 clientTimeZone 非法时每一条都被拒，用户只看到错误提示、附件已经没了。
+        // 放回去才算"失败可重试"。
+        if ("message".equals(requestType) && lastSentAttachments != null && !lastSentAttachments.isEmpty()) {
+            for (PendingAttachment a : lastSentAttachments) {
+                boolean dup = false;
+                for (PendingAttachment x : pendingAttachments) {
+                    if (x.key().equals(a.key())) { dup = true; break; }
+                }
+                if (!dup) pendingAttachments.add(a);
+            }
+            lastSentAttachments = null;
+            if (convo != null) convo.setPendingAttachments(pendingAttachments);
+        }
         String text = (message == null || message.isEmpty()) ? code : message;
         Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+    }
+
+    // ============================================================ 附件暂存 / 生成物 / 权限
+    //
+    // [2026-10-05 用户要求 · 契约 docs/CONTRACT-20261005.md §3.3]
+    //   ② 加号 → 文件 / 相册 / 拍照；选中的东西**先暂存**（输入框上方），
+    //      和文字或语音一起发（不再"选完立即发"）；
+    //   ① 生成物窗口：列本会话产出文件，点一下下载到手机；
+    //   ④ 权限 chip：对齐电脑端 permission presets。
+    //
+    // 本段只做"接线"：协议收发在 net/GatewayClient，附件条 / 权限 chip 的渲染在
+    // ui/ConversationView，数据结构在 model/PendingAttachment、model/ArtifactEntry
+    //（三者都由主理人冻结，本文件只读不改它们的字段）。
+
+    /** 待发送附件（本机暂存；发送成功即清空）。 */
+    private final ArrayList<PendingAttachment> pendingAttachments = new ArrayList<>();
+    /**
+     * 附件当前所属的会话 id。
+     * 切了会话就清空暂存 —— 否则用户会把 A 会话挑的图误发进 B 会话。
+     */
+    private String attachmentsOwnerSessionId = "";
+    /** 相机输出的 content Uri（拍照返回后据此建 PendingAttachment）。 */
+    private android.net.Uri pendingCaptureUri = null;
+    /** 附件正在后台编码/发送：防连点重复发。 */
+    private boolean attachmentSendInFlight = false;
+    /**
+     * 刚发出去那一批附件（发送时暂存一份）。
+     *
+     * <p>为什么要留：{@code sendStagedAttachments} 是"发完就清空附件条"，而**发送成功与否
+     * 是异步的**。网关整条拒绝时（真机实测踩到：{@code clientTimeZone} 非法会让每一条都失败），
+     * 用户只看到一条错误提示，附件却已经没了、得重新挑一遍。留一份用于失败回填。
+     */
+    private List<PendingAttachment> lastSentAttachments = null;
+    /** 单张图片字节上限：与既有单图路径一致（原 sendImage 里的 3MB 判断）。 */
+    private static final int ATTACH_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+    /**
+     * 一次发送的附件总字节上限。
+     *
+     * <p>网关的 message 帧是**一帧装全部图片**，载荷过大有超帧/超时风险；
+     * 9MB（base64 后约 12MB）是保守取值，**未实测**，由主理人统一压测后可调。
+     */
+    private static final int ATTACH_MAX_TOTAL_BYTES = 9 * 1024 * 1024;
+
+    /**
+     * 单个**通用文件**（PDF/Office/压缩包）的字节上限（2026-10-05 任务② 非图片通道）。
+     *
+     * <p>为什么比图片宽松：图片 3MB 是为了避免把照片原图整张塞进一帧；而文档类用户预期
+     * 就是"原样发过去"，压不了。网关的 WS 帧上限是 144 MiB，base64 会膨胀 4/3，
+     * 24MB 原文件 ≈ 32MB 载荷，离上限还很远；真正的约束是手机内存（要一次性读进 byte[]
+     * 再编码），所以取 24MB 这个保守值。**未压测**，要调就调这里。
+     */
+    private static final int ATTACH_MAX_FILE_BYTES = 24 * 1024 * 1024;
+
+    /**
+     * 带通用文件时的一次发送总上限。
+     *
+     * <p>为什么和纯图片的 9MB 分开：纯图片走 {@code images[]}，宿主会逐张校验像素/大小，
+     * 保守一点更稳；而通用文件是"原样字节"，用户预期就是能发文档，9MB 会把人挡住。
+     * 48MB 原文件 ≈ 64MB base64 载荷，仍在网关 144 MiB 帧上限内。
+     */
+    private static final int ATTACH_MAX_TOTAL_WITH_FILE_BYTES = 48 * 1024 * 1024;
+
+    /** 生成物面板（底部 sheet，可下钻目录）。 */
+    private Dialog artifactsDlg;
+    private LinearLayout artifactsRows;
+    private TextView artifactsPathText;
+    /** 当前列出的目录（相对会话工作目录；空 = 根）。 */
+    private String artifactsPath = "";
+    /** 本次生成物请求的 requestId（只认自己发的回帧，避免和别的 file-list 串台）。 */
+    private String artifactsRequestId = "";
+    /** 下载序号：同一毫秒内连点两个文件时避免 requestId 撞车。 */
+    private int dlSeq = 0;
+    /** 当前权限 preset（网关 permission 回帧后写入；进会话时用来给 chip 打底）。 */
+    private String lastPermissionPreset = "";
+
+    /** 下载进度出口：生成物面板用它原地更新某一行的文案（不依赖 ChatItem）。 */
+    public interface ProgressSink {
+        void onProgress(String text);
+    }
+
+    // ---- ② 加号三选项（文件 / 相册 / 拍照）-----------------------------
+
+    /**
+     * 点输入条左侧加号：弹「文件 / 相册 / 拍照」。
+     *
+     * <p>契约 §3.2：加号不再直接 {@code onPickImage()}。三个入口选中的东西**都不发送**，
+     * 统一走 {@link #stageAttachment} 暂存到附件条。
+     *
+     * <p>面板复用既有 {@code ModelSheet.showOptions} 配方（不透明面板底 + 抓柄 + 可滚动 +
+     * 关闭按钮），不新造弹窗类型；ui 侧若补了 AttachSheet 由主理人统一替换，
+     * 本文件**不依赖** AttachSheet（它此刻还不存在，依赖它会让构建失败）。
+     */
+    @Override
+    public void onAttachPick() {
+        if (!currentParentId.isEmpty()) {
+            Toast.makeText(this, "子会话只读：回主智能体才能发附件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // [主理人 2026-10-05 接线] ui 层交付了 AttachSheet（图标行 + 抓柄 + 与 ModelSheet/
+        // SubagentSheet/DeviceHubView 同一套 sheet 配方），契约 §3.3 写的就是"存在就用它"。
+        // 之前 wire 先写完、当时该类还没落盘，所以先用 ModelSheet.showOptions 兜底；
+        // 现在换成 AttachSheet，去掉那份重复实现。
+        //
+        // 风险评估（改这行的依据）：AttachSheet 用到的 Ui 原语 —— sheetCard / grabber /
+        // secondaryButton / tapRow / iconBox —— 在 DeviceHubView:610-664 里就是**完全相同的组合**
+        // （同样是"底部面板 + 抓柄 + 图标行 + 取消"），ModelSheet/SubagentSheet/WorkspaceSheet
+        // 也在用同一批，因此它踩到的代码路径与既有面板同级，不是新面。
+        com.dsh.mobile.ui.AttachSheet.show(this,
+                this::pickFileForStaging,
+                this::pickImageForStaging,
+                this::takePhotoForStaging);
+    }
+
+    /** 相册（图片）：沿用既有 REQ_IMAGE，但**不再立即发送**。 */
+    private void pickImageForStaging() {
+        try {
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.setType("image/*");
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(i, "选择要发送的图片"), REQ_IMAGE);
+        } catch (Throwable t) {
+            Toast.makeText(this, "无法打开相册/文件选择器", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * 文件（任意类型）：ACTION_OPEN_DOCUMENT（{@code *}{@code /}{@code *}）。
+     *
+     * <p>契约 §2.3：网关 message 帧**只支持图片**。所以非图片文件现在可以选中、可以暂存、
+     * 可以移除，但**发送时会被明确拦下**并说明原因（不留一个点了没反应的死按钮）。
+     */
+    private void pickFileForStaging() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.setType("*/*");
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(i, "选择要发送的文件"), REQ_FILE);
+        } catch (Throwable t) {
+            Toast.makeText(this, "这台设备没有可用的文件选择器", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * 拍照入口：**先确认 CAMERA 权限**，没有就先申请。
+     *
+     * <p>为什么不能直接 startActivityForResult：Android 明确规定「清单声明了 CAMERA 却未授权」
+     * 时调用 {@code ACTION_IMAGE_CAPTURE} 会抛 {@code SecurityException}（构建侧核实，
+     * manifest:11 已声明 CAMERA，此前只有扫码页 ui/QrScanActivity.java:165 在申请）。
+     */
+    private void takePhotoForStaging() {
+        try {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] { android.Manifest.permission.CAMERA }, REQ_CAMERA_PERM);
+                return;
+            }
+        } catch (Throwable ignored) {
+            // 权限查询本身失败（极端 ROM）：继续往下试，由 takePhotoNow 的 try 兜住
+        }
+        takePhotoNow();
+    }
+
+    /**
+     * 真正起相机（权限已确认）。
+     *
+     * <p>EXTRA_OUTPUT 必须是 {@code content://}（Android 7+ 不允许把 {@code file://} 交给
+     * 相机 App），由 proto 提供的 {@code net/CaptureFileProvider.newCaptureUri} 在应用私有
+     * 缓存目录下预建一张空文件并返回 Uri（契约 §3.4；**手写 ContentProvider**，非 androidx
+     * FileProvider —— 本项目不依赖 androidx）。
+     */
+    private void takePhotoNow() {
+        try {
+            pendingCaptureUri = com.dsh.mobile.net.CaptureFileProvider.newCaptureUri(this);
+            Intent i = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+            i.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, pendingCaptureUri);
+            i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivityForResult(i, REQ_CAMERA);
+        } catch (Throwable t) {
+            pendingCaptureUri = null;
+            Toast.makeText(this, "打不开相机；可以在系统设置里给「DSH 掌上通」相机权限后再试",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * 把选中的内容解析成 {@link PendingAttachment} 并追加到附件条（**不发送**）。
+     *
+     * <p>读元数据在后台线程（ContentResolver 的 query / openInputStream 都是 IO）；
+     * 图片只读宽高（{@code inJustDecodeBounds}），**不解码整图** —— 大图解码会直接吃内存。
+     *
+     * @param kindHint 已知类型（相册/拍照 = image）；null = 按 MIME 判断
+     */
+    private void stageAttachment(final android.net.Uri uri, final String kindHint) {
+        if (uri == null) return;
+        new Thread(() -> {
+            try {
+                android.content.ContentResolver cr = getContentResolver();
+                String type = cr.getType(uri);
+                if (type == null) type = "";
+                String name = safeDownloadName(displayNameOf(uri));
+                long bytes = sizeOf(uri);
+                boolean image = PendingAttachment.KIND_IMAGE.equals(kindHint) || type.startsWith("image/");
+                int w = 0, h = 0;
+                if (image) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    java.io.InputStream is = cr.openInputStream(uri);
+                    try {
+                        android.graphics.BitmapFactory.decodeStream(is, null, o);
+                    } finally {
+                        if (is != null) try { is.close(); } catch (Throwable ignored) { }
+                    }
+                    w = Math.max(0, o.outWidth);
+                    h = Math.max(0, o.outHeight);
+                    if (type.isEmpty() && o.outMimeType != null) type = o.outMimeType;
+                    if (type.isEmpty()) type = "image/jpeg";
+                } else if (type.isEmpty()) {
+                    type = "application/octet-stream";
+                }
+                final PendingAttachment a = image
+                        ? PendingAttachment.image(uri, name, type, bytes, w, h, "")
+                        : PendingAttachment.file(uri, name, type, bytes, "");
+                runOnUiThread(() -> addPendingAttachment(a));
+            } catch (Throwable t) {
+                final String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                runOnUiThread(() -> Toast.makeText(this, "读取附件失败：" + msg, Toast.LENGTH_LONG).show());
+            }
+        }, "attach-stage").start();
+    }
+
+    /** 附件入列（按 key 去重）并刷新附件条。 */
+    private void addPendingAttachment(PendingAttachment a) {
+        if (a == null) return;
+        for (PendingAttachment x : pendingAttachments) {
+            if (x.key().equals(a.key())) {
+                Toast.makeText(this, "这个附件已经在待发送里了", Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+        pendingAttachments.add(a);
+        if (convo != null) convo.setPendingAttachments(pendingAttachments);
+    }
+
+    /** 清空附件条（发送成功后调）。 */
+    private void clearPendingAttachments() {
+        pendingAttachments.clear();
+        if (convo != null) convo.setPendingAttachments(pendingAttachments);
+    }
+
+    /** 附件条上点 ×：移除一个待发送附件。 */
+    @Override
+    public void onRemoveAttachment(PendingAttachment a) {
+        if (a == null) return;
+        for (int i = 0; i < pendingAttachments.size(); i++) {
+            if (pendingAttachments.get(i).key().equals(a.key())) {
+                pendingAttachments.remove(i);
+                break;
+            }
+        }
+        if (convo != null) convo.setPendingAttachments(pendingAttachments);
+    }
+
+    /** 内容 Uri 的展示名（取不到就按 MIME / 末段路径给个默认名）。 */
+    private String displayNameOf(android.net.Uri uri) {
+        android.database.Cursor c = null;
+        try {
+            c = getContentResolver().query(uri,
+                    new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null);
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                if (n != null && !n.trim().isEmpty()) return n.trim();
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) try { c.close(); } catch (Throwable ignored) { }
+        }
+        String last = uri.getLastPathSegment();
+        if (last != null && !last.trim().isEmpty()) return last;
+        String t = getContentResolver().getType(uri);
+        if (t != null && t.startsWith("image/")) return "图片";
+        return "文件";
+    }
+
+    /** 内容 Uri 的字节数（取不到返回 0 = 未知）。 */
+    private long sizeOf(android.net.Uri uri) {
+        android.database.Cursor c = null;
+        try {
+            c = getContentResolver().query(uri,
+                    new String[] { android.provider.OpenableColumns.SIZE }, null, null, null);
+            if (c != null && c.moveToFirst()) return Math.max(0L, c.getLong(0));
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) try { c.close(); } catch (Throwable ignored) { }
+        }
+        return 0L;
+    }
+
+    /**
+     * 把暂存的附件读成标准 Base64 并一次性发出（2026-10-05 起支持图片 + 通用文件）。
+     *
+     * <p>图片走 {@code images[]}（{@code mediaType,data,name?}），通用文件走 {@code files[]}
+     * （{@code data,name}）——后者要靠电脑端网关打过 {@code patch-gateway-file-upload.ps1}
+     * 才认（网关会把它换成宿主 {@code fileUploads} 的 receiptId 再拼进 prompt content）。
+     *
+     * <p>为什么在后台线程读：一张 3MB 图 base64 后约 4MB，多张一起在 UI 线程编码必然卡顿/ANR。
+     * 编码完成回主线程再发；发送成功后清空附件条，**失败只提示、保留附件**（用户可以重试或删掉）。
+     */
+    private void sendStagedAttachments(final String text, final List<PendingAttachment> atts) {
+        if (attachmentSendInFlight) return;
+        attachmentSendInFlight = true;
+        new Thread(() -> {
+            JSONArray images = new JSONArray();
+            JSONArray files = new JSONArray();
+            try {
+                boolean hasFile = false;
+                for (PendingAttachment a : atts) if (!a.isImage()) { hasFile = true; break; }
+                final long totalCap = hasFile ? ATTACH_MAX_TOTAL_WITH_FILE_BYTES : ATTACH_MAX_TOTAL_BYTES;
+                long total = 0;
+                for (PendingAttachment a : atts) {
+                    byte[] bytes = readAttachmentBytes(a);
+                    if (bytes.length == 0) {
+                        throw new java.io.IOException("「" + a.displayName() + "」读不到内容");
+                    }
+                    final int cap = a.isImage() ? ATTACH_MAX_IMAGE_BYTES : ATTACH_MAX_FILE_BYTES;
+                    if (bytes.length > cap) {
+                        throw new java.io.IOException("「" + a.displayName() + "」超过 "
+                                + (cap / 1024 / 1024) + "MB，"
+                                + (a.isImage() ? "请先压缩或换一张" : "请换个更小的文件"));
+                    }
+                    total += bytes.length;
+                    if (total > totalCap) {
+                        throw new java.io.IOException("附件合计超过 "
+                                + (totalCap / 1024 / 1024) + "MB，请分批发送");
+                    }
+                    String b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+                    if (a.isImage()) {
+                        String mt = (a.mediaType == null || a.mediaType.isEmpty()) ? "image/jpeg" : a.mediaType;
+                        // 网关只认 png/jpeg/webp/gif 四种图片 MIME（契约 §2.3）：其它一律按 jpeg 报，
+                        // 具体字节由宿主自行嗅探，报错也只会是"不支持的类型"。
+                        if (!mt.startsWith("image/")) mt = "image/jpeg";
+                        JSONObject img = new JSONObject();
+                        img.put("mediaType", mt);
+                        img.put("data", b64);
+                        if (!a.name.isEmpty()) img.put("name", a.name);
+                        images.put(img);
+                    } else {
+                        // 通用文件：补丁认 {"data","name"}（name 必给，网关用它当落盘名）
+                        JSONObject f = new JSONObject();
+                        f.put("data", b64);
+                        f.put("name", a.name.isEmpty() ? a.displayName() : a.name);
+                        files.put(f);
+                    }
+                }
+            } catch (Throwable t) {
+                final String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                runOnUiThread(() -> {
+                    attachmentSendInFlight = false;
+                    restoreDraft(text);   // 输入框已被清空：失败就把草稿还回去
+                    Toast.makeText(this, "附件发送失败：" + msg, Toast.LENGTH_LONG).show();
+                });
+                return;
+            }
+            final JSONArray outImages = images;
+            final JSONArray outFiles = files;
+            runOnUiThread(() -> {
+                attachmentSendInFlight = false;
+                if (!isOnline() || !gw.canSend()) {
+                    restoreDraft(text);
+                    Toast.makeText(this, "连接不稳定，附件没发出去；附件还留着，稍后重发即可",
+                            Toast.LENGTH_LONG).show();
+                    gw.retryNow();
+                    return;
+                }
+                lastSentAttachments = new ArrayList<>(atts);   // 留一份：网关拒绝时回填（见字段注释）
+                gw.sendMessageWithAttachments(currentSessionId, text, outImages, outFiles);
+                clearPendingAttachments();
+            });
+        }, "attach-send").start();
+    }
+
+    /** 从 Uri（优先）或本地路径读字节。 */
+    private byte[] readAttachmentBytes(PendingAttachment a) throws java.io.IOException {
+        java.io.InputStream is = null;
+        try {
+            if (a.uri != null) is = getContentResolver().openInputStream(a.uri);
+            if (is == null && !a.localPath.isEmpty()) is = new java.io.FileInputStream(a.localPath);
+            if (is == null) throw new java.io.IOException("打不开这个附件");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } finally {
+            if (is != null) try { is.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** 把文件名列表拼成「a、b」这样的短串（提示文案用）。 */
+    private static String joinNames(List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < names.size(); i++) {
+            if (i > 0) sb.append("、");
+            sb.append(names.get(i));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 发送失败 / 被拦下时把草稿还给输入框。
+     *
+     * <p>为什么必须还：{@code ConversationView} 在调 {@code host.onSend(text)} **之前**就
+     * 已经 {@code input.setText("")} 了，所以 onSend 里任何提前 return 都会静默吃掉用户的文字。
+     * 只在输入框确实为空时回填，避免覆盖用户这期间新打的字。
+     */
+    private void restoreDraft(String text) {
+        if (convo == null || text == null || text.isEmpty()) return;
+        try {
+            String cur = convo.draftText();
+            if (cur == null || cur.trim().isEmpty()) convo.setDraft(text);
+        } catch (Throwable ignored) { }
+    }
+
+    // ---- ① 生成物窗口 --------------------------------------------------
+
+    /**
+     * 打开「生成物」面板：列本会话工作目录一层（契约 §2.1 {@code file-list}）。
+     *
+     * <p>面板**先开再拉**：立刻给出「正在读取…」，避免用户点了没反应（用户报过"点了没反应"）。
+     */
+    @Override
+    public void onArtifacts() {
+        if (currentSessionId.isEmpty()) {
+            Toast.makeText(this, "先打开一条对话，再看它产出的文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端，暂时看不了生成物", Toast.LENGTH_LONG).show();
+            return;
+        }
+        showArtifactsPanel();
+        requestArtifacts("");
+    }
+
+    /** 请求某个目录（相对会话工作目录；空 = 根）。 */
+    private void requestArtifacts(String path) {
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        artifactsPath = path == null ? "" : path;
+        artifactsRequestId = "art-" + System.currentTimeMillis() + "-" + (dlSeq++);
+        renderArtifacts(artifactsPath, null, "正在读取…");
+        gw.requestFileList(currentSessionId, artifactsPath, artifactsRequestId);
+    }
+
+    @Override
+    public void onFileList(JSONObject frame) {
+        if (frame == null) return;
+        String rid = frame.optString("requestId", "");
+        // 只认自己发的那次请求：别的 file-list 回帧（例如交付物卡那条链路）不覆盖本面板
+        if (!artifactsRequestId.isEmpty() && !rid.equals(artifactsRequestId)) return;
+        artifactsRequestId = "";
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !sid.equals(currentSessionId)) return;
+
+        String path = frame.optString("path", "");
+        ArrayList<ArtifactEntry> list = new ArrayList<>();
+        JSONArray arr = frame.optJSONArray("entries");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                ArtifactEntry e = ArtifactEntry.from(arr.optJSONObject(i));
+                if (e != null) list.add(e);
+            }
+        }
+        // 目录在前、同类按名字排：网关不保证顺序，手机上手滑顺序乱会很难找
+        Collections.sort(list, (a, b) -> {
+            if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
+            return a.name.compareToIgnoreCase(b.name);
+        });
+        artifactsPath = path == null ? "" : path;
+        renderArtifacts(artifactsPath, list, "");
+    }
+
+    /**
+     * 建生成物面板（底部 sheet，配方与 ModelSheet.showSheet 完全一致：
+     * 不透明面板底 + 抓柄 + 遮罩，**不挂窗口模糊** —— 那条路真机实测过"滑动后整层丢失"）。
+     */
+    private void showArtifactsPanel() {
+        if (artifactsDlg != null) {
+            try { artifactsDlg.dismiss(); } catch (Throwable ignored) { }
+            artifactsDlg = null;
+        }
+        artifactsDlg = new Dialog(this);
+        LinearLayout box = Ui.sheetCard(this);
+        box.addView(Ui.grabber(this));
+        box.addView(Ui.text(this, "生成物", Ui.S_TITLE3, Ui.INK, true));
+        artifactsPathText = Ui.text(this, "会话工作目录", Ui.S_FOOT, Ui.INK_SUB, false);
+        artifactsPathText.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 10));
+        box.addView(artifactsPathText);
+
+        artifactsRows = Ui.col(this);
+        ScrollView sc = new ScrollView(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                // 高度封顶 55% 屏高（与 ModelSheet 同款）：条目多时不把面板顶出屏幕、关闭键永远点得到
+                int cap = Math.round(getResources().getDisplayMetrics().heightPixels * 0.55f);
+                int mode = MeasureSpec.getMode(heightSpec);
+                int size = MeasureSpec.getSize(heightSpec);
+                if (mode == MeasureSpec.UNSPECIFIED || size > cap) {
+                    heightSpec = MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST);
+                }
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
+        sc.setOverScrollMode(View.OVER_SCROLL_NEVER);   // 与全 App 一致：不要 Android 越界光晕
+        sc.setVerticalScrollBarEnabled(false);
+        sc.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        sc.addView(artifactsRows);
+        box.addView(sc);
+
+        TextView close = Ui.secondaryButton(this, "关闭");
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(this, 10);
+        close.setLayoutParams(clp);
+        close.setOnClickListener(v -> artifactsDlg.dismiss());
+        box.addView(close);
+
+        artifactsDlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        artifactsDlg.setContentView(box);
+        artifactsDlg.setCanceledOnTouchOutside(true);
+        Window w = artifactsDlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT);
+            Ui.applyScreenshotPolicy(w);
+            w.setDimAmount(0.35f);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        artifactsDlg.show();
+        renderArtifacts("", null, "正在读取…");
+    }
+
+    /**
+     * 画生成物列表。
+     *
+     * @param entries null = 还没数据（只显示 note，例如「正在读取…」）
+     */
+    private void renderArtifacts(final String path, List<ArtifactEntry> entries, String note) {
+        if (artifactsRows == null) return;
+        final String p = path == null ? "" : path;
+        if (artifactsPathText != null) {
+            artifactsPathText.setText(p.isEmpty() ? "会话工作目录" : ("会话工作目录 / " + p));
+        }
+        artifactsRows.removeAllViews();
+
+        if (note != null && !note.isEmpty()) {
+            TextView n = Ui.text(this, note, Ui.S_FOOT, Ui.INK_FAINT, false);
+            n.setPadding(Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12));
+            artifactsRows.addView(n);
+        }
+        if (entries == null) return;
+
+        // 下钻了就给一条「返回上级」：手机上只靠系统返回键会退出整个面板，用户会迷路
+        if (!p.isEmpty()) {
+            final String parent = parentPath(p);
+            artifactsRows.addView(artRow("← 返回上级",
+                    parent.isEmpty() ? "回到会话工作目录" : ("回到 " + parent),
+                    Ui.INK_SUB, v -> requestArtifacts(parent)));
+        }
+
+        if (entries.isEmpty()) {
+            TextView n = Ui.text(this, p.isEmpty() ? "本次还没有生成文件" : "这个文件夹是空的",
+                    Ui.S_FOOT, Ui.INK_FAINT, false);
+            n.setPadding(Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12));
+            artifactsRows.addView(n);
+            return;
+        }
+
+        for (final ArtifactEntry e : entries) {
+            if (e.isDirectory()) {
+                artifactsRows.addView(artRow(e.name, "文件夹 · 点一下进去", Ui.INK,
+                        v -> requestArtifacts(e.path)));
+            } else {
+                artifactsRows.addView(artifactFileRow(e));
+            }
+        }
+    }
+
+    /**
+     * 生成物列表的通用一行（点一下执行 onClick）。
+     *
+     * <p>视觉全部取自 {@code Ui}：字段底 FIELD_BG + 12dp 圆角 + 按下高亮 PRESS ——
+     * 与 ModelSheet 的选项行同款，不引入任何新的硬编码颜色。
+     */
+    private LinearLayout artRow(String title, String sub, int titleColor, View.OnClickListener onClick) {
+        LinearLayout r = Ui.row(this);
+        r.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12));
+        android.graphics.drawable.GradientDrawable bg = Ui.round(Ui.dp(this, 12), Ui.FIELD_BG);
+        Ui.tapRow(r, bg, Ui.PRESS);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dp(this, 3);
+        r.setLayoutParams(lp);
+
+        LinearLayout texts = Ui.col(this);
+        texts.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView t = Ui.text(this, title, Ui.S_BODY, titleColor, false);
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        texts.addView(t);
+        if (sub != null && !sub.isEmpty()) {
+            TextView d = Ui.text(this, sub, Ui.S_CAP1, Ui.INK_SUB, false);
+            d.setSingleLine(true);
+            d.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            d.setPadding(0, Ui.dp(this, 3), 0, 0);
+            texts.addView(d);
+        }
+        r.addView(texts);
+        r.setClickable(true);
+        r.setOnClickListener(v -> {
+            Ui.haptic(v);
+            if (onClick != null) onClick.onClick(v);
+        });
+        return r;
+    }
+
+    /**
+     * 生成物里的一行文件：点一下下载到手机。
+     *
+     * <p>注意 {@link ArtifactEntry#path} 是**相对会话工作目录**的路径（契约 §2.1），
+     * 直接交给 {@code file-download-open}，**不再做 relativize** —— 那是「交付物卡」那条
+     * 绝对路径链路才需要的（见 {@link #startDownload(ChatItem, String)}）。
+     */
+    private LinearLayout artifactFileRow(final ArtifactEntry e) {
+        String size = e.sizeLabel();
+        LinearLayout row = artRow(e.name,
+                size.isEmpty() ? "点一下下载到手机" : ("点一下下载到手机 · " + size), Ui.INK, null);
+        // 进度行：拿到 artRow 里第二个 TextView 的引用，下载过程中原地更新它的文案
+        LinearLayout texts = (LinearLayout) row.getChildAt(0);
+        final TextView state = (TextView) texts.getChildAt(texts.getChildCount() - 1);
+        row.setOnClickListener(v -> {
+            Ui.haptic(v);
+            startDownload(e.path, e.name, text -> runOnUiThread(() -> {
+                try { state.setText(text); } catch (Throwable ignored) { }
+            }));
+        });
+        return row;
+    }
+
+    /** 相对路径的上一层（到根返回空串）。 */
+    private static String parentPath(String rel) {
+        String p = rel == null ? "" : rel.replace('\\', '/');
+        while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
+        int cut = p.lastIndexOf('/');
+        return cut <= 0 ? "" : p.substring(0, cut);
+    }
+
+    // ---- ④ 权限 chip ---------------------------------------------------
+
+    /** 点「权限」chip：拉一次目录 + 本会话当前值，再弹单选面板。 */
+    @Override
+    public void onPickPermission() {
+        if (currentSessionId.isEmpty()) {
+            Toast.makeText(this, "先打开一条对话，再改它的权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端，暂时改不了权限", Toast.LENGTH_LONG).show();
+            return;
+        }
+        gw.requestPermissionOptions(currentSessionId);
+    }
+
+    /**
+     * 进/切会话时**静默**拉一次当前权限（chip 打底）。
+     *
+     * <p>失败不打扰用户：chip 保持上一次文案即可，用户点「权限」时会再拉一次并给出明确提示。
+     */
+    private void requestPermissionQuietly() {
+        if (gw == null || currentSessionId.isEmpty()) return;
+        if (gw.state() != GatewayClient.State.READY) return;
+        gw.requestPermissionOptions(currentSessionId);
+    }
+
+    @Override
+    public void onPermissionOptions(JSONObject frame) {
+        if (frame == null) return;
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !sid.equals(currentSessionId)) return;
+
+        // 当前值：优先 sessionPermissions 里的显式字段，其次 defaultPreset。
+        // 【主理人 2026-10-05 修】网关实际只在 `sessionPermissions.currentValue` 里放当前值：
+        //   - lib/index.mjs:1696  out.sessionPermissions = { ...projections.values.permissions, options }
+        //   - lib/index.mjs:1235  判据就是 `typeof permissions.currentValue !== 'string'`
+        //   - lib/index.mjs:1252  高亮判据 option.value === permissions.currentValue
+        //   - permissions 投影本身"只含 currentValue"（asar:888162）
+        // 原来的兜底键表 preset|permission|mode|current **漏了 currentValue**，会永远取不到 →
+        // 面板里看不出哪项是当前项、chip 也只会退回 defaultPreset。故把 currentValue 排第一，
+        // 其余键保留作为未来协议变化的兜底。
+        String cur = "";
+        JSONObject sp = frame.optJSONObject("sessionPermissions");
+        if (sp != null) {
+            for (String k : new String[] { "currentValue", "preset", "permission", "mode", "current" }) {
+                String v = sp.optString(k, "");
+                if (!v.isEmpty()) { cur = v; break; }
+            }
+        }
+        if (cur.isEmpty()) cur = frame.optString("defaultPreset", "");
+        lastPermissionPreset = cur;
+        // [主理人 2026-10-05 真机验收修] 这里**只传标签**，不要再拼「权限 」前缀：
+        // ConversationView.setPermissionChip 自己会拼 "权限 · " + label，
+        // 两边都拼就会出现「权限 · 权限 完全访问」这种重复前缀（模拟器实测截图坐实）。
+        if (convo != null && !cur.isEmpty()) convo.setPermissionChip(permissionLabel(cur));
+
+        ArrayList<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
+        JSONArray arr = frame.optJSONArray("options");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String value = o.optString("value", "");
+                if (value.isEmpty()) continue;
+                String name = o.optString("name", "");
+                if (name.isEmpty()) name = permissionLabel(value);   // 契约：显示名优先 name，缺则回退
+                opts.add(new com.dsh.mobile.ui.ModelSheet.Opt(value, name, permissionDetail(value)));
+            }
+        }
+        if (opts.isEmpty()) {
+            Toast.makeText(this, "电脑端没有返回可选的权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        com.dsh.mobile.ui.ModelSheet.showOptions(this, "权限",
+                "只影响这条对话；权限越大，Agent 能改的文件越多",
+                opts, cur, id -> {
+                    if (!gw.canSend()) {
+                        Toast.makeText(this, "连接不稳定，权限没切过去；稍后重试", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    gw.selectPermission(currentSessionId, id);
+                });
+    }
+
+    @Override
+    public void onPermission(JSONObject frame) {
+        if (frame == null) return;
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !sid.equals(currentSessionId)) return;
+        String set = frame.optString("set", "");
+        lastPermissionPreset = set;
+        String label = permissionLabel(set);
+        if (convo != null) convo.setPermissionChip(label);   // 同上：前缀由 ConversationView 统一拼，别重复
+        Toast.makeText(this, "权限已切换为「" + label + "」", Toast.LENGTH_SHORT).show();
+    }
+
+    /** preset 取值 → 中文显示名（网关没给 name 时兜底；取值见契约 §2.2）。 */
+    private static String permissionLabel(String value) {
+        if (value == null || value.isEmpty()) return "默认";
+        switch (value) {
+            case "read-only": return "只读";
+            case "workspace-write": return "工作区可写";
+            case "danger-full-access": return "完全访问";
+            case "auto": return "自动";
+            case "custom": return "自定义";
+            default: return value;
+        }
+    }
+
+    /** 每个档位的一句人话解释（网关没有说明字段，按 DSH 语义写死，只用于副标题）。 */
+    private static String permissionDetail(String value) {
+        if (value == null) return "";
+        switch (value) {
+            case "read-only": return "只能看，不能改任何文件";
+            case "workspace-write": return "只能改这条对话的工作目录";
+            case "danger-full-access": return "整个电脑都能改，谨慎使用";
+            case "auto": return "由电脑端自动决定";
+            case "custom": return "自定义规则";
+            default: return "";
+        }
     }
 
     // ============================================================ 文件下载
@@ -3810,6 +4647,13 @@ public final class MainActivity extends Activity implements
     /** 一次下载的进行态。 */
     private static final class Dl {
         String requestId, transferId, relPath, name, mediaType, itemKey;
+        /** 非空 = 这次下载是生成物面板发起的，进度走 sink（不碰 ChatItem）。 */
+        ProgressSink sink;
+        /**
+         * 保存成功后的可读 Uri（API 29+ 由 MediaStore 返回）。
+         * 生成物面板下载完用它尝试 {@code ACTION_VIEW} 打开；取不到就只提示"已保存到下载目录"。
+         */
+        android.net.Uri savedUri;
         java.io.File temp;
         long size, received;
         java.security.MessageDigest md;
@@ -3885,6 +4729,47 @@ public final class MainActivity extends Activity implements
         }
     }
 
+    /**
+     * 生成物面板用的下载入口：**直接收相对路径**，不依赖 ChatItem。
+     *
+     * <p>为什么不能复用上面那个：{@link #startDownload(ChatItem, String)} 收的是**绝对路径**，
+     * 会先 {@link #relativize} 成会话工作目录内的相对路径；而 {@code file-list} 回帧里的
+     * {@link ArtifactEntry#path} 本来就是相对路径（契约 §2.1），再 relativize 一次必然得到 null
+     * → 面板里点文件会永远"不在工作目录内"。
+     *
+     * <p>复用同一条 {@code Dl}/{@code dlByRequest}/{@code dlByTransfer}/{@code onDownload}
+     * 分块链路，只把进度出口换成 {@code sink}（既有语义一字未改）。
+     */
+    private void startDownload(final String relPath, final String displayName, final ProgressSink sink) {
+        if (!isOnline()) {
+            if (sink != null) sink.onProgress("还没连上电脑端");
+            Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String rel = relPath == null ? "" : relPath.trim().replace('\\', '/');
+        while (rel.startsWith("/")) rel = rel.substring(1);
+        if (rel.isEmpty() || rel.contains("..")) {
+            if (sink != null) sink.onProgress("这个文件不在会话工作目录内");
+            return;
+        }
+        try {
+            Dl d = new Dl();
+            d.requestId = "dl-" + System.currentTimeMillis() + "-" + (dlSeq++);
+            d.relPath = rel;
+            d.itemKey = "";                 // 没有 ChatItem；进度由 sink 承接
+            d.sink = sink;
+            d.name = safeDownloadName(displayName);
+            d.temp = java.io.File.createTempFile("dl-", ".part", getCacheDir());
+            d.md = java.security.MessageDigest.getInstance("SHA-256");
+            dlByRequest.put(d.requestId, d);
+            if (sink != null) sink.onProgress("请求中…");
+            gw.fileDownloadOpen(currentSessionId, rel, d.requestId);
+        } catch (Throwable t) {
+            if (sink != null) sink.onProgress("开始下载失败");
+            Toast.makeText(this, "开始下载失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     public void onDownload(String kind, JSONObject frame) {
         if ("file-download-opened".equals(kind)) {
@@ -3946,6 +4831,9 @@ public final class MainActivity extends Activity implements
                 if (saved == null) { failDownload(d, "保存失败"); return; }
                 setDownloadState(d, "已下载 ✓ " + saved);
                 Toast.makeText(this, "已保存到 " + saved, Toast.LENGTH_LONG).show();
+                // [2026-10-05 主理人约束④] 生成物面板：下载完顺手尝试打开一次；
+                // 打不开（没有对应应用）就只留"已保存到下载目录"这句，不新建 provider。
+                if (d.sink != null) tryOpenDownloaded(d);
                 dlByRequest.remove(d.requestId);
                 dlByTransfer.remove(d.transferId);
                 try { d.temp.delete(); } catch (Throwable ignored) { }
@@ -3991,6 +4879,7 @@ public final class MainActivity extends Activity implements
                 android.net.Uri uri = getContentResolver()
                         .insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                 if (uri == null) return null;
+                d.savedUri = uri;   // [2026-10-05] 生成物面板下载完据此尝试 ACTION_VIEW 打开
                 try (java.io.OutputStream os = getContentResolver().openOutputStream(uri);
                      java.io.FileInputStream fis = new java.io.FileInputStream(d.temp)) {
                     if (os == null) return null;
@@ -4016,6 +4905,12 @@ public final class MainActivity extends Activity implements
     }
 
     private void setDownloadState(Dl d, String text) {
+        // 生成物面板发起的下载：进度走 sink（面板行原地更新），不碰消息列表
+        // —— 面板里的文件没有对应的 ChatItem，走下面那条会把进度写丢。
+        if (d.sink != null) {
+            d.sink.onProgress(text);
+            return;
+        }
         for (ChatItem it : items) {
             if (it.key.equals(d.itemKey)) { it.downloadState = text; break; }
         }
@@ -4028,6 +4923,35 @@ public final class MainActivity extends Activity implements
         dlByRequest.remove(d.requestId);
         dlByTransfer.remove(d.transferId);
         try { d.temp.delete(); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * [2026-10-05 主理人约束④] 生成物下载完成后尝试用系统应用打开它。
+     *
+     * <p>**不新建任何 provider**：直接用 MediaStore 插入时返回的 {@code content://} Uri
+     * （`saveToDownloads` 里记进 {@code Dl.savedUri}）配 {@code FLAG_GRANT_READ_URI_PERMISSION}。
+     * 特别注意**不能**复用 {@code ApkFileProvider} —— 它的 {@code getType()} 恒返回 APK 的 MIME，
+     * 拿它去开图片/文档只会被系统当成安装包。
+     *
+     * <p>API &lt; 29 落在应用私有目录、没有可分享的 content Uri → 只提示已保存（不硬开）。
+     */
+    private void tryOpenDownloaded(Dl d) {
+        if (d.savedUri == null) {
+            Toast.makeText(this, "已保存到「下载/DSH 掌上通」，可在文件管理器里打开",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            Intent v = new Intent(Intent.ACTION_VIEW);
+            String mt = (d.mediaType == null || d.mediaType.isEmpty())
+                    ? "application/octet-stream" : d.mediaType;
+            v.setDataAndType(d.savedUri, mt);
+            v.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(v);
+        } catch (Throwable t) {
+            Toast.makeText(this, "已保存到「下载/DSH 掌上通」，这台设备没有能打开它的应用",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     /**
@@ -5161,14 +6085,10 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onPickImage() {
-        try {
-            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
-            i.setType("image/*");
-            i.addCategory(Intent.CATEGORY_OPENABLE);
-            startActivityForResult(Intent.createChooser(i, "选择要发送的图片"), REQ_IMAGE);
-        } catch (Throwable t) {
-            Toast.makeText(this, "无法打开相册/文件选择器", Toast.LENGTH_LONG).show();
-        }
+        // [2026-10-05 用户要求②] 加号已改为 onAttachPick()（三选项面板，契约 §3.2）。
+        // 这个旧入口保留（接口未删），语义同样改成「只暂存不发送」——
+        // 万一还有别的调用点，也绝不会再把图直接发走。
+        pickImageForStaging();
     }
 
     @Override
@@ -5310,18 +6230,53 @@ public final class MainActivity extends Activity implements
             // 在输入区上方留一条「待发送 · <内容>」，回合结束后自动收起。
             convo.addPendingSend(text);
         }
+
+        // [2026-10-05 用户要求②] 有暂存附件 → 和文字（或语音转写）一起发，
+        // 不再"选完立即发"（旧路径见 onActivityResult 里被换掉的 sendImage 调用）。
+        //
+        // 契约 §2.3：网关 message 帧**只支持图片**。非图片文件现在明确拦下并说明原因
+        //（不留一个点了没反应的死按钮）；等 proto 把「文件上传帧」补丁评估/落地后，
+        // 这里只需把非图片也拼进 images 之外的字段，其余流程不变。
+        final List<PendingAttachment> atts = new ArrayList<>(pendingAttachments);
+        if (!atts.isEmpty()) {
+            ArrayList<String> blocked = new ArrayList<>();
+            for (PendingAttachment a : atts) {
+                if (!a.isImage()) blocked.add(a.displayName());
+            }
+            if (!blocked.isEmpty() && !gw.hasCapability("file-uploads")) {
+                // 输入框在 ConversationView 调 onSend 之前就已经清空了 → 被拦下必须把草稿还回去，
+                // 否则用户打完的一段字会被这条提示吃掉（只剩附件条里那个文件）。
+                //
+                // [2026-10-05 任务② 非图片通道] 判据从"永远拦下"改成**按能力门**：
+                // 电脑端网关打过 patch-gateway-file-upload.ps1 后会在 hello.capabilities 里
+                // 宣告 file-uploads，那时通用文件走 message 帧的 files[] 正常发出去；
+                // 没宣告才拦下（**不能盲发**：未打补丁的网关会静默忽略 files[]，文件悄悄丢掉）。
+                restoreDraft(text);
+                Toast.makeText(this, "暂时还不能发送文件：" + joinNames(blocked)
+                        + "\n（电脑端网关没打文件上传补丁，请先点 × 移除；图片可以正常发）",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        final boolean hasAtts = !atts.isEmpty();
         if (currentSessionId.isEmpty()) {
             // 新会话：先本地回显，等 sent 回来拿 sessionId
-            pendingUserText = text;
-            ChatItem pend = ChatItem.of(ChatItem.USER, "pending-user", text);
+            pendingUserText = (hasAtts && (text == null || text.trim().isEmpty())) ? "[图片]" : text;
+            ChatItem pend = ChatItem.of(ChatItem.USER, "pending-user", pendingUserText);
             byKey.put("pending-user", pend);
             items.add(pend);
             if (convo != null) { convo.setItems(items); convo.refreshNow(); convo.scrollToBottom(); }
             // 带上「⋯」菜单选中的工作区（普通「＋」时两者都为空 = 宿主默认工作区）。
             // 这就是用户报的那个 bug 的修复点：新会话第一次不再只能落进默认工作区。
-            gw.sendMessage("", text, pendingNewWorkspaceId, pendingNewWorkspaceCwd);
+            //
+            // 注：带附件时走 sendMessageWithImages，而它的冻结签名**不带 workspaceId/cwd**
+            //（契约 §3.1）→ 带附件的新会话暂时只能落宿主默认工作区。已回报主理人，
+            // 若需要保留工作区语义，请 proto 补一个带 workspace 的重载，这里换调用即可。
+            if (hasAtts) sendStagedAttachments(text, atts);
+            else gw.sendMessage("", text, pendingNewWorkspaceId, pendingNewWorkspaceCwd);
         } else {
-            gw.sendMessage(currentSessionId, text);
+            if (hasAtts) sendStagedAttachments(text, atts);
+            else gw.sendMessage(currentSessionId, text);
         }
         setRunning(true);
         if (convo != null) convo.setRunning(true, runningHint());
@@ -7820,8 +8775,25 @@ public final class MainActivity extends Activity implements
         if (request == REQ_QR && result == RESULT_FIRST_USER) {
             onPastePairing();
         }
+        // [2026-10-05 用户要求②] 相册 / 文件 / 拍照选中的东西**只暂存、不发送**（契约 §3.3）：
+        // 用户原话「添加进来之后不是立即发送，而是和输入的文字或语音内容一起发送」。
         if (request == REQ_IMAGE && result == RESULT_OK && data != null && data.getData() != null) {
-            sendImage(data.getData());
+            stageAttachment(data.getData(), PendingAttachment.KIND_IMAGE);
+        }
+        if (request == REQ_FILE && result == RESULT_OK && data != null && data.getData() != null) {
+            // 类型未知：按 MIME 判断图片还是文件（图片能发，非图片发送时会被明确拦下）
+            stageAttachment(data.getData(), null);
+        }
+        if (request == REQ_CAMERA) {
+            if (result == RESULT_OK && pendingCaptureUri != null) {
+                stageAttachment(pendingCaptureUri, PendingAttachment.KIND_IMAGE);
+            } else if (pendingCaptureUri != null) {
+                // 用户取消了拍照：把我们预建的空文件删掉，缓存目录里不留垃圾。
+                // 自研 provider 未必实现 delete（会抛 UnsupportedOperationException），静默兜住。
+                try { getContentResolver().delete(pendingCaptureUri, null, null); }
+                catch (Throwable ignored) { }
+            }
+            pendingCaptureUri = null;
         }
         if (request == REQ_VOICE && result == RESULT_OK && data != null && convo != null) {
             java.util.ArrayList<String> r =
@@ -7835,8 +8807,14 @@ public final class MainActivity extends Activity implements
     }
 
     /**
-     * 读图片 -> 标准 Base64 -> 走 message 的 images[] 发出去。
-     * 读文件与编码都在后台线程（IO 不能上主线程），完成后回主线程发送。
+     * [2026-10-05 起**不再被调用**，保留以便快速回退]
+     *
+     * <p>旧路径：加号选图后立刻发。用户要求②改成「先暂存、和文字/语音一起发」之后，
+     * 入口统一走 {@link #stageAttachment} + {@link #sendStagedAttachments}，
+     * 这里只剩历史实现（读图片 → 标准 Base64 → message 的 images[]），
+     * 留着是因为它是最小可用的单图发送参考实现。
+     *
+     * <p>读文件与编码都在后台线程（IO 不能上主线程），完成后回主线程发送。
      */
     private void sendImage(final android.net.Uri uri) {
         new Thread(() -> {

@@ -55,6 +55,22 @@ $env:ANDROID_HOME = $env:ANDROID_SDK_ROOT
   if (-not $env:ANDROID_EMULATOR_HOME) { $env:ANDROID_EMULATOR_HOME = Split-Path -Parent $root }
   if (-not $env:ANDROID_USER_HOME) { $env:ANDROID_USER_HOME = Join-Path (Split-Path -Parent $root) '.android' }
 
+# [2026-10-05 主理人补] 把 emulator\lib64 加进 PATH。
+#   为什么：emulator.exe 只是启动器，真正跑的是子进程
+#   qemu\windows-x86_64\qemu-system-x86_64-headless.exe；启动器把自己那套 DLL 搜索路径
+#   （emulator\lib64 / lib64\vulkan / lib64\gles_swiftshader）只加在**自己进程**里，
+#   子进程不继承。结果 QEMU 找不到 DLL，**直接以 0xC0000135（STATUS_DLL_NOT_FOUND）退出**，
+#   而它死在 main() 之前、stdout/stderr 全空 —— 外部只看到"启动器跑了、设备一直 offline"，
+#   极易误判成"沙箱不让起模拟器"。实测把 lib64 加进 PATH 后 QEMU 能正常起来。
+#   纯增量改动，不影响原本就能跑的环境。
+$dllDirs = @(
+  (Join-Path $SdkRoot 'emulator\lib64'),
+  (Join-Path $SdkRoot 'emulator\lib64\vulkan'),
+  (Join-Path $SdkRoot 'emulator\lib64\gles_swiftshader'),
+  (Join-Path $SdkRoot 'emulator\qemu\windows-x86_64')
+) | Where-Object { Test-Path $_ }
+if ($dllDirs.Count -gt 0) { $env:PATH = (($dllDirs -join ';') + ';' + $env:PATH) }
+
 
 Say "================================================================"
 Say " DSH 掌上通 · 起模拟器 + 装机"

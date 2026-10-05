@@ -61,6 +61,35 @@ public final class GatewayClient {
         default void onTasks(JSONObject frame) { }
 
         /**
+         * 文件列表回帧（PROTOCOL §5「文件下载（图片、文档、IPA、APK 及其他普通文件）」）：
+         * {@code {kind:"file-list", requestId?, sessionId, path, entries:[{name,path,kind,
+         * bytes?,modifiedAt?,mediaType?}]}}。{@code path} 一律是相对该会话 cwd 的路径。
+         *
+         * <p>请求用 {@link #requestFileList(String, String, String)}；下载链路另走
+         * {@code file-download-*}（见 {@link #onDownload}），两者是独立通道。
+         */
+        default void onFileList(JSONObject frame) { }
+
+        /**
+         * 权限 preset 目录回帧（PROTOCOL §9「权限控制」）：
+         * {@code {kind:"permission-options", options:[{value,name,…}], defaultOptions,
+         * defaultPreset, sessionId?, sessionPermissions?}}。
+         *
+         * <p>{@code options[]} 的显示名取 {@code name}、id 取 {@code value}（缺则回退 value）；
+         * 本会话当前生效值在 {@code sessionPermissions.currentValue}。
+         */
+        default void onPermissionOptions(JSONObject frame) { }
+
+        /**
+         * 权限切换回执（PROTOCOL §9「权限控制」）：
+         * {@code {kind:"permission", sessionId, set, commandId, result}}。
+         *
+         * <p>失败不走这里，而是既有 {@code {kind:"error", requestType:"permission"}} →
+         * {@link #onProtocolError}。
+         */
+        default void onPermission(JSONObject frame) { }
+
+        /**
          * 队列（PROTOCOL §「排队消息同步」）：session-queues = 全量快照（整体替换），
          * session-queue = 单会话全量替换。条目 {id, placement, message:{id,content}, rpcId?}。
          *
@@ -1124,7 +1153,7 @@ public final class GatewayClient {
             else putNewSessionWorkspace(o, workspaceId, cwd);
             o.put("text", text == null ? "" : text);
             o.put("mode", "queue");
-            o.put("clientTimeZone", TimeZone.getDefault().getID());
+            putClientTimeZone(o);
             sendRaw(o);
         } catch (Throwable ignored) { }
     }
@@ -1137,6 +1166,46 @@ public final class GatewayClient {
                 return;
             }
             if (cwd != null && !cwd.trim().isEmpty()) o.put("cwd", cwd.trim());
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 客户端时区：**只在它是合法 IANA Area/Location 名时才带**，否则整个字段不发。
+     *
+     * <p>为什么必须校验（2026-10-05 真机验收抓到的真 bug）：网关会用 zod 校验
+     * {@code clientTimeZone}，不是 {@code UTC} 或合法 IANA 名就**把整条消息拒掉**。
+     * 实测网关日志：
+     * <pre>
+     * mobile message failed: clientTimeZone must be UTC or a valid IANA Area/Location name
+     * </pre>
+     * 而 Android 的 {@code TimeZone.getDefault().getID()} **并不保证**是 IANA 名 ——
+     * 模拟器的 {@code persist.sys.timezone=GMT} 会给出 {@code "GMT"}，部分国产 ROM 会给
+     * {@code "GMT+08:00"}。这种设备上**每一条消息都会静默失败**：客户端把输入框清空了，
+     * 用户以为发出去了，其实网关整条拒了（2026-10-03 的日志里已经出现过一次同样的拒绝）。
+     *
+     * <p>拿不准就**不带这个字段**（它是可选的，宿主会退回服务器时区），
+     * 这比"带上一个非法值导致全盘失败"安全得多。
+     */
+    private static String safeClientTimeZone() {
+        try {
+            String id = TimeZone.getDefault().getID();
+            if (id == null) return null;
+            id = id.trim();
+            if (id.isEmpty()) return null;
+            if ("UTC".equalsIgnoreCase(id)) return id;
+            // IANA 名形如 Area/Location（可带下划线/连字符/数字，允许多级如 America/Argentina/Buenos_Aires）
+            if (id.matches("^[A-Za-z][A-Za-z0-9_+-]*/[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$")) return id;
+            return null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 合法才写 {@code clientTimeZone}（见 {@link #safeClientTimeZone()} 的注释）。 */
+    private static void putClientTimeZone(JSONObject o) {
+        try {
+            String tz = safeClientTimeZone();
+            if (tz != null) o.put("clientTimeZone", tz);
         } catch (Throwable ignored) { }
     }
 
@@ -1155,7 +1224,7 @@ public final class GatewayClient {
             else putNewSessionWorkspace(o, workspaceId, cwd);
             o.put("text", text == null ? "" : text);
             o.put("mode", "queue");
-            o.put("clientTimeZone", TimeZone.getDefault().getID());
+            putClientTimeZone(o);
             JSONArray images = new JSONArray();
             JSONObject img = new JSONObject();
             img.put("mediaType", mediaType);
@@ -1276,6 +1345,118 @@ public final class GatewayClient {
         try {
             JSONObject o = base("tasks");
             o.put("sessionId", sessionId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 列出会话工作目录的一层（PROTOCOL §5「文件下载」）。
+     *
+     * <p>帧：{@code {"type":"file-list","sessionId":…,"path":<相对cwd，可省>,"requestId":…}}
+     * → 回 {@code {kind:"file-list",…,entries:[…]}}（见 {@link Listener#onFileList}）。
+     * {@code file-list} **没有能力门**（契约 §2.1）：旧网关只要版本够就能列。
+     *
+     * @param path      相对该会话 cwd 的相对路径（`/` 分隔）；null/空 = 根目录
+     * @param requestId 调用方自造的请求标识，回帧原样带回，用于把回帧配到发起的那次请求
+     */
+    public void requestFileList(String sessionId, String path, String requestId) {
+        try {
+            JSONObject o = base("file-list");
+            o.put("sessionId", sessionId);
+            if (path != null && !path.isEmpty()) o.put("path", path);
+            if (requestId != null && !requestId.isEmpty()) o.put("requestId", requestId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 拉权限 preset 目录 + 本会话当前值（PROTOCOL §9「权限控制」）。
+     *
+     * <p>帧：{@code {"type":"permission-options","sessionId":…}} → 回
+     * {@code {kind:"permission-options",options,defaultOptions,defaultPreset,sessionPermissions}}
+     * （见 {@link Listener#onPermissionOptions}）。**无能力门**（契约 §2.2）。
+     */
+    public void requestPermissionOptions(String sessionId) {
+        try {
+            JSONObject o = base("permission-options");
+            if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 切换本会话的权限 preset（PROTOCOL §9「权限控制」）。
+     *
+     * <p>帧：{@code {"type":"permission","sessionId":…,"name":"<value>"}} → 成功回
+     * {@code {kind:"permission",sessionId,set,commandId,result}}（见 {@link Listener#onPermission}）；
+     * 失败回 {@code {kind:"error",requestType:"permission"}} → {@link Listener#onProtocolError}。
+     * 网关侧走官方 {@code /permission} 命令，**不触发模型**。
+     *
+     * @param name 取值 read-only / workspace-write / danger-full-access（另有派生 auto/custom）
+     */
+    public void selectPermission(String sessionId, String name) {
+        try {
+            JSONObject o = base("permission");
+            o.put("sessionId", sessionId);
+            o.put("name", name);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 多图 + 文字一起发（契约 §3.1；帧格式同 {@link #sendMessageWithImage} 的单图版本，
+     * 见 PROTOCOL §4「发送图片」）。
+     *
+     * <p>协议事实（契约 §2.3）：{@code message} 帧**只支持图片**，{@code images[]} 每项
+     * {@code {"mediaType","data","name"?}}，{@code data} 是**标准 Base64、不带 data: 前缀**；
+     * {@code mediaType} 限 image/png|image/jpeg|image/webp|image/gif；{@code text} 与
+     * {@code images} 至少一项非空。
+     *
+     * <p>为什么单独开一个方法而不是重载单图版：附件暂存条允许一次挑多张，wire 层发送时
+     * 把 {@code PendingAttachment} 列表整体交过来，避免每张各发一帧（会变成多条排队消息）。
+     * 与单图版一样保留 {@code mode:"queue"} / {@code clientTimeZone}，语义完全一致。
+     *
+     * @param images 元素为 {@code {"mediaType","data","name"?}}；null/空 = 只发文字
+     */
+    public void sendMessageWithImages(String sessionId, String text, JSONArray images) {
+        try {
+            JSONObject o = base("message");
+            if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            o.put("text", text == null ? "" : text);
+            o.put("mode", "queue");
+            putClientTimeZone(o);
+            if (images != null && images.length() > 0) o.put("images", images);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 图片 + 通用文件 + 文字一起发（2026-10-05 任务② 的**非图片文件**通道）。
+     *
+     * <p>为什么要有它：{@code message} 帧原生**只支持图片**，通用文件（PDF/Office/压缩包）
+     * 没有上传通道。电脑端网关打过 `patch-gateway-file-upload.ps1` 之后，帧上多认一个
+     * {@code files[]}：每项 {@code {"data":"<标准Base64、不带 data: 前缀>","name":"a.pdf"}}，
+     * 网关把它换成宿主 {@code fileUploads} 的 receiptId 再拼进 prompt content。
+     *
+     * <p>顺序与官方 WebUI 一致：图片 → 文件 → 文字。
+     *
+     * <p>**兼容性（重要）**：没打补丁的网关会**静默忽略** {@code files[]}（它只读 images/text），
+     * 结果就是"文件被悄悄丢掉、用户以为发出去了"。所以 wire 层在发之前**必须**用
+     * {@link #hasCapability(String)} 查 {@code file-uploads}；没有就按"暂不支持"明确提示，
+     * 不要盲发。
+     *
+     * @param images 元素为 {@code {"mediaType","data","name"?}}；null/空 = 不带图片
+     * @param files  元素为 {@code {"data","name"}}；null/空 = 不带文件
+     */
+    public void sendMessageWithAttachments(String sessionId, String text, JSONArray images, JSONArray files) {
+        try {
+            JSONObject o = base("message");
+            if (sessionId != null && !sessionId.isEmpty()) o.put("sessionId", sessionId);
+            o.put("text", text == null ? "" : text);
+            o.put("mode", "queue");
+            putClientTimeZone(o);
+            if (images != null && images.length() > 0) o.put("images", images);
+            if (files != null && files.length() > 0) o.put("files", files);
             sendRaw(o);
         } catch (Throwable ignored) { }
     }
@@ -1435,6 +1616,20 @@ public final class GatewayClient {
             case "tasks":
             case "tasks-updated":
                 l.onTasks(f);
+                break;
+            // 文件列表（PROTOCOL §5「文件下载」）：与 file-download-* 分开一条 kind。
+            // 照 onModels / onTasks 的既有写法，只做 kind → 回调的转发。
+            case "file-list":
+                l.onFileList(f);
+                break;
+            // 权限（PROTOCOL §9「权限控制」）：目录与切换回执各一条 kind。
+            // 失败帧不在这里 —— 网关发的是 {kind:"error", requestType:"permission"}，
+            // 已被上面的 case "error" 收走给 onProtocolError（契约 §2.2）。
+            case "permission-options":
+                l.onPermissionOptions(f);
+                break;
+            case "permission":
+                l.onPermission(f);
                 break;
             case "session-queues":
             case "session-queue":

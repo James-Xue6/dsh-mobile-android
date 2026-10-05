@@ -17,12 +17,17 @@ import android.widget.ListView;
 import android.widget.TextView;
 
 import com.dsh.mobile.model.ChatItem;
+import com.dsh.mobile.model.PendingAttachment;
 import com.dsh.mobile.model.StepProcess;
 
 import org.json.JSONArray;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /** 会话界面：顶部栏 + 状态横幅 + 消息列表 + 输入条。 */
 public final class ConversationView extends LinearLayout implements ChatAdapter.Host {
@@ -68,6 +73,16 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
         void onCopyPath(String path);
+
+        // ---- 2026-10-05 四项优化（契约 docs/CONTRACT-20261005.md §3.2，签名逐字冻结）
+        /** 加号：弹「文件 / 相册 / 拍照」三选项面板。 */
+        void onAttachPick();
+        /** 生成物：打开本会话产出文件面板。 */
+        void onArtifacts();
+        /** 权限：打开本会话权限 preset 选择面板。 */
+        void onPickPermission();
+        /** 附件条上点 ×：移除一个待发送附件。 */
+        void onRemoveAttachment(com.dsh.mobile.model.PendingAttachment a);
     }
 
     private final Context ctx;
@@ -93,7 +108,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private final ChatAdapter adapter;
     private final EditText input;
     private final TextView action;
-    /** 输入框左侧的「＋」（选图）：子会话只读时要一起禁用。 */
+    /**
+     * 输入框左侧的「＋」：2026-10-05 起弹「文件 / 相册 / 拍照」三选项面板
+     * （不再是直接开相册）。子会话只读时要一起禁用。
+     */
     private final TextView pick;
     /** 顶部栏两个圆形按钮（主题切换要改图标颜色）。 */
     private final TextView backBtn;
@@ -117,6 +135,32 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private TextView pendingBar;
     /** 「任务」chip（该会话 todo 进度；无任务时隐藏）。 */
     private TextView taskChip;
+    /** 「权限」chip（本会话权限 preset；2026-10-05 用户要求对齐 PC 端）。 */
+    private TextView permissionChip;
+    /** 「生成物」chip（本会话产出文件面板入口）。 */
+    private TextView artifactsChip;
+
+    // ---- 附件暂存条（2026-10-05 用户要求：加号选中的东西先暂存，和文字/语音一起发）
+    /** 附件条容器（横向滚动；空则整条 GONE）。 */
+    private HorizontalScrollView attachScroll;
+    /** 附件条里那一排胶囊。 */
+    private LinearLayout attachRow;
+    /** 当前暂存的附件（wire 发送时读它；UI 只读不改）。 */
+    private List<PendingAttachment> pendingAttachments = new ArrayList<>();
+    /** 缩略图缓存：key = {@link PendingAttachment#key()}，避免每次刷新重解码。 */
+    private final Map<String, android.graphics.Bitmap> attachThumbs = new HashMap<>();
+    /** 正在后台解码的 key（防重复起线程）。 */
+    private final Set<String> attachThumbLoading = new HashSet<>();
+    /** 「权限」chip 的当前显示名（空 = 还没拿到）。 */
+    private String permissionLabel = "";
+
+    /**
+     * 选字闸门（任务③）：有活动选区时推迟重建列表，避免 60ms 一次的流式刷新
+     * 把刚弹出来的选区/手柄抹掉。有上限，绝不会让列表永久冻结。
+     */
+    private long selectionHoldSince = 0L;
+    /** 选字让路的最长时间：超过就照常刷新（宁可丢一次选区，也不能让消息停在半路）。 */
+    private static final long SELECTION_HOLD_MAX_MS = 4000L;
     /** 当前模型名（网关确认后写入；空 = 还没拿到）。 */
     private String modelLabel = "";
     private String effortLabel = "";
@@ -641,7 +685,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(Ui.dp(ctx, 34), Ui.dp(ctx, 34));
         plp.rightMargin = Ui.dp(ctx, 6);
         pick.setLayoutParams(plp);
-        pick.setOnClickListener(v -> host.onPickImage());
+        pick.setOnClickListener(v -> host.onAttachPick());
         inputBar.addView(pick);
         inputBar.addView(input);
 
@@ -685,6 +729,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         projectChip = chip("项目", v -> { Ui.haptic(v); host.onProjectTap(); });
         // 模型（点开模型目录）
         modelChip = chip("模型", v -> { Ui.haptic(v); host.onPickModel(); });
+        // 权限（2026-10-05 用户要求：对齐 PC 端的权限 preset；位置按契约放在模型之后、思考之前）
+        permissionChip = chip("权限", v -> { Ui.haptic(v); host.onPickPermission(); });
+        // 生成物（2026-10-05 任务①：本会话产出文件面板）
+        artifactsChip = chip("生成物", v -> { Ui.haptic(v); host.onArtifacts(); });
         // 思考等级（点开当前模型的思考档位）
         effortChip = chip("思考", v -> { Ui.haptic(v); host.onPickEffort(); });
         // 用量（上下文占用；点一下看详情）
@@ -693,6 +741,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         taskChip = chip("任务", v -> { Ui.haptic(v); host.onTasksTap(); });
         chipRow.addView(projectChip);
         chipRow.addView(modelChip);
+        chipRow.addView(permissionChip);
+        chipRow.addView(artifactsChip);
         chipRow.addView(effortChip);
         chipRow.addView(usageChip);
         chipRow.addView(taskChip);
@@ -704,6 +754,27 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         csLp.topMargin = Ui.dp(ctx, 4);
         chipScroll.setLayoutParams(csLp);
         bottomStack.addView(chipScroll);
+
+        // ---- 附件暂存条（2026-10-05 用户要求）
+        //
+        // 用户原话：「添加进来之后**不是立即发送**而是和输入的文字或语音内容一起发送」。
+        // 所以加号选中的文件/图片/照片先落到这里（输入胶囊正上方），可删、可看缩略图，
+        // 真正发送由 wire 在 onSend 里读 pendingAttachments() 决定。
+        // 复用 chip 行的同一套配方（HorizontalScrollView + 胶囊），空则整条 GONE。
+        attachScroll = new HorizontalScrollView(ctx);
+        attachScroll.setHorizontalScrollBarEnabled(false);
+        attachScroll.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
+        attachRow = Ui.row(ctx);
+        attachRow.setPadding(0, 0, 0, 0);
+        attachScroll.addView(attachRow);
+        LinearLayout.LayoutParams asLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        asLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
+        asLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
+        asLp.topMargin = Ui.dp(ctx, 2);
+        attachScroll.setLayoutParams(asLp);
+        attachScroll.setVisibility(GONE);
+        bottomStack.addView(attachScroll);
 
         // 悬浮：左右 16dp（与全 App 的 M_SIDE 对齐）、下方 12dp
         LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(
@@ -822,6 +893,160 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (projectChip != null) {
             projectChip.setText(projectLabel.isEmpty() ? "项目" : ("项目 · " + projectLabel));
         }
+    }
+
+    // ============================================================ 附件暂存条（2026-10-05）
+
+    /**
+     * 刷新输入条上方的附件暂存条（契约 §3.2）。
+     *
+     * <p>空列表 = 整条隐藏。可在任意线程调用（内部切主线程）。
+     */
+    public void setPendingAttachments(final java.util.List<PendingAttachment> list) {
+        final List<PendingAttachment> next =
+                list == null ? new ArrayList<PendingAttachment>() : new ArrayList<>(list);
+        postOnUi(() -> {
+            pendingAttachments = next;
+            // 顺手清掉已经不在列表里的缩略图缓存，避免常驻内存（安全评审：别把大图留着）
+            Set<String> alive = new HashSet<>();
+            for (PendingAttachment a : next) alive.add(a.key());
+            attachThumbs.keySet().retainAll(alive);
+            rebuildAttachStrip();
+        });
+    }
+
+    /** 当前暂存的附件（发送时 wire 读它；返回副本，调用方改不动内部状态）。 */
+    public java.util.List<PendingAttachment> pendingAttachments() {
+        return new ArrayList<>(pendingAttachments);
+    }
+
+    /** 权限 chip 文案（如「权限 工作区可写」）；传 null/空 = 显示「权限」未定。 */
+    public void setPermissionChip(String label) {
+        permissionLabel = label == null ? "" : label.trim();
+        postOnUi(() -> {
+            if (permissionChip == null) return;
+            permissionChip.setText(permissionLabel.isEmpty() ? "权限" : ("权限 · " + permissionLabel));
+        });
+    }
+
+    /** 重建附件条（增删一项、主题切换后都会走到这里）。 */
+    private void rebuildAttachStrip() {
+        if (attachRow == null || attachScroll == null) return;
+        attachRow.removeAllViews();
+        if (pendingAttachments.isEmpty()) {
+            attachScroll.setVisibility(GONE);
+            return;
+        }
+        for (PendingAttachment a : pendingAttachments) attachRow.addView(attachItem(a));
+        attachScroll.setVisibility(VISIBLE);
+    }
+
+    /** 一个附件胶囊：缩略图/类型图标 + 文件名 + ×。 */
+    private View attachItem(final PendingAttachment a) {
+        LinearLayout pill = Ui.row(ctx);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 5), Ui.dp(ctx, 4), Ui.dp(ctx, 5));
+        pill.setBackground(Ui.pill(Ui.CHIP_BG));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = Ui.dp(ctx, 8);
+        pill.setLayoutParams(lp);
+
+        android.widget.ImageView iv = new android.widget.ImageView(ctx);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(Ui.dp(ctx, 30), Ui.dp(ctx, 30));
+        iv.setLayoutParams(ilp);
+        iv.setBackground(Ui.round(Ui.dp(ctx, 9), Ui.FIELD_BG));
+        if (a.isImage()) {
+            iv.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            iv.setTag(a.key());   // 后台解码回来时按 key 校验，只贴给还属于这一项的那个 ImageView
+            android.graphics.Bitmap cached = attachThumbs.get(a.key());
+            if (cached != null) iv.setImageBitmap(cached);
+            else loadThumb(a, iv);
+        } else {
+            // 非图片：类型图标（不用 emoji —— 各 ROM 字形不同）
+            iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+            iv.setPadding(Ui.dp(ctx, 7), Ui.dp(ctx, 7), Ui.dp(ctx, 7), Ui.dp(ctx, 7));
+            iv.setImageDrawable(Ui.iconDrawable(ctx,
+                    com.dsh.mobile.R.drawable.ic_folder, 16f, Ui.INK_SUB));
+        }
+        pill.addView(iv);
+
+        TextView name = Ui.text(ctx, a.displayName(), Ui.S_CAP1, Ui.INK, false);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        name.setMaxWidth(Ui.dp(ctx, 132));
+        name.setPadding(Ui.dp(ctx, 7), 0, Ui.dp(ctx, 2), 0);
+        pill.addView(name);
+
+        // × ：移除（点它由 wire 从列表里去掉这一项，再 setPendingAttachments 回灌）
+        TextView x = Ui.text(ctx, "\u00D7", Ui.S_HEAD, Ui.INK_SUB, false);
+        x.setGravity(Gravity.CENTER);
+        x.setMinWidth(Ui.dp(ctx, 30));
+        x.setMinHeight(Ui.dp(ctx, 30));
+        x.setPadding(Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6), 0);
+        x.setClickable(true);
+        Ui.tap(x, 0.9f);
+        x.setOnClickListener(v -> { Ui.haptic(v); host.onRemoveAttachment(a); });
+        pill.addView(x);
+        return pill;
+    }
+
+    /**
+     * 后台解码缩略图（限尺寸），完成后回主线程贴图。
+     *
+     * <p>为什么必须限尺寸：相册/相机原图动辄 4000×3000，直接 decodeStream 就是几十 MB 的
+     * Bitmap，一屏放几个附件就会 OOM。这里先 inJustDecodeBounds 拿原始宽高，再按目标显示
+     * 尺寸（30dp 的 3 倍）算 inSampleSize，解码出来的位图始终是"够显示"的量级。
+     * UI 线程绝不做 IO/解码（会掉帧）。
+     */
+    private void loadThumb(final PendingAttachment a, final android.widget.ImageView target) {
+        final String key = a.key();
+        if (attachThumbLoading.contains(key)) return;
+        attachThumbLoading.add(key);
+        new Thread(() -> {
+            final android.graphics.Bitmap bmp = decodeThumb(a);
+            postOnUi(() -> {
+                attachThumbLoading.remove(key);
+                if (bmp == null) return;              // 解不出来就留灰底，不影响发送
+                attachThumbs.put(key, bmp);
+                if (key.equals(target.getTag())) target.setImageBitmap(bmp);
+            });
+        }, "attach-thumb").start();
+    }
+
+    private android.graphics.Bitmap decodeThumb(PendingAttachment a) {
+        try {
+            int targetPx = Math.max(1, Ui.dp(ctx, 30) * 3);
+            // 第一趟：只读尺寸，不分配像素
+            android.graphics.BitmapFactory.Options probe = new android.graphics.BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            java.io.InputStream is = openAttachStream(a);
+            if (is == null) return null;
+            android.graphics.BitmapFactory.decodeStream(is, null, probe);
+            is.close();
+            int sample = 1;
+            int maxSide = Math.max(probe.outWidth, probe.outHeight);
+            while (maxSide / (sample * 2) >= targetPx) sample *= 2;
+            // 第二趟：按 inSampleSize 真正解码
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inSampleSize = Math.max(1, sample);
+            is = openAttachStream(a);
+            if (is == null) return null;
+            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeStream(is, null, o);
+            is.close();
+            return bmp;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 打开附件内容的读流：优先 Uri（相册/文件选择器/相机输出），否则本机绝对路径。 */
+    private java.io.InputStream openAttachStream(PendingAttachment a) {
+        try {
+            if (a.uri != null) return ctx.getContentResolver().openInputStream(a.uri);
+            if (!a.localPath.isEmpty()) return new java.io.FileInputStream(a.localPath);
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     /**
@@ -1320,10 +1545,53 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 惯性滑动中不落地数据改动：等滑停（onScrollStateChanged 会再排一次）。
         // 结构性刷新（refreshNow：快照重建/审批卡/回滚）必须立刻可见，不受此限。
         if (listFlinging && !force) { commitDeferred = true; return; }
+        // [任务③ 复制 bug] 正在选字时也让路：气泡每次绑定都是**新建**的 TextView
+        // （ChatAdapter.getView 不复用 convertView），一次 notifyChanged 就会把用户
+        // 刚长按/点出来的选区与手柄整片销毁 —— 表现为"点了没反应、一晃就没了"。
+        // 这里推迟重建（150ms 后重试），并**封顶** SELECTION_HOLD_MAX_MS：
+        // 超时就照常刷新，宁可丢一次选区，也绝不让流式输出停在半路。
+        if (!force && listHasActiveSelection()) {
+            long now = android.os.SystemClock.uptimeMillis();
+            if (selectionHoldSince == 0L) selectionHoldSince = now;
+            if (now - selectionHoldSince < SELECTION_HOLD_MAX_MS) {
+                commitScheduled = false;
+                ui.postDelayed(commitTask, 150);
+                return;
+            }
+        }
+        selectionHoldSince = 0L;
         commitDeferred = false;
         applyFilter();
         adapter.notifyChanged();
         if (atBottom && !userTouching) scrollToBottom();
+    }
+
+    /**
+     * 消息列表里是不是"正有一段被选中的文字"（任务③ 的刷新让路判据）。
+     *
+     * <p>判据取"获得焦点的那个 TextView 有非空选区"：气泡被点/长按后会拿到焦点
+     * （ChatAdapter.makeSelectable 里显式开了 focusableInTouchMode），此时
+     * {@code getSelectionEnd() > getSelectionStart()} 就说明选区还在。
+     * 只认列表内的 View（卡片的 EditText 不算：那是输入，不是选字复制）。
+     */
+    private boolean listHasActiveSelection() {
+        try {
+            android.view.View root = getRootView();
+            if (root == null) return false;
+            android.view.View f = root.findFocus();
+            if (!(f instanceof TextView) || !f.isShown()) return false;
+            android.view.ViewParent p = f.getParent();
+            boolean inList = false;
+            while (p != null) {
+                if (p == list) { inList = true; break; }
+                p = p.getParent();
+            }
+            if (!inList) return false;
+            TextView t = (TextView) f;
+            return t.getSelectionEnd() > t.getSelectionStart();
+        } catch (Throwable ignored) {
+            return false;   // 判不出来就当"没在选字"，刷新照常（安全侧）
+        }
     }
 
     /** 合并高频刷新（流式输出每 chunk 一次）：数据改动也一并推迟到这一帧。 */
@@ -1573,12 +1841,16 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
         if (topFade != null) topFade.setBackground(buildTopFade(ctx));
         if (modelChip != null) {
-            for (TextView c : new TextView[] { projectChip, modelChip, effortChip, usageChip, taskChip }) {
+            for (TextView c : new TextView[] { projectChip, modelChip, permissionChip,
+                    artifactsChip, effortChip, usageChip, taskChip }) {
                 if (c == null) continue;
                 c.setTextColor(Ui.INK_SUB);
                 c.setBackground(Ui.pill(Ui.CHIP_BG));   // chip 底色随主题
             }
         }
+        // 附件条：胶囊底色/文字色也是创建时烘进去的，主题切换必须整条重画
+        // （缩略图有缓存，重建不会重新解码）。
+        if (attachRow != null) rebuildAttachStrip();
         // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
         if (barRow != null) barRow.setBackground(null);
         if (barLine != null) barLine.setBackgroundColor(Ui.HAIRLINE);

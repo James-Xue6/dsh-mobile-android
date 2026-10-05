@@ -63,6 +63,17 @@
             android:exported="false"
             android:grantUriPermissions="true" />
 
+        <!-- 拍照输出：MediaStore.ACTION_IMAGE_CAPTURE 的 EXTRA_OUTPUT 必须是 content://
+             （Android 7+ 禁止 file://，否则 FileUriExposedException）。本 provider 是手写的
+             极简 ContentProvider（本项目不依赖 androidx），只暴露应用私有缓存目录下的
+             capture/；URI 由 net/CaptureFileProvider.newCaptureUri() 自造（IMG_<ts>.jpg）。
+             与上面 APK 那个 provider 相互独立：暴露目录不同、可写性不同，故不复用。 -->
+        <provider
+            android:name="com.dsh.mobile.net.CaptureFileProvider"
+            android:authorities="com.dsh.mobile.capture"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <!-- 后台保持接收：只挂一条低优先级常驻通知，让进程在后台不被挂起（否则收不到
              会话事件，任务完成/待审批的通知根本发不出来）。见 notify/KeepAliveService.java。
              connectedDevice 语义最贴，但它有运行时前置条件；specialUse 作为兜底，

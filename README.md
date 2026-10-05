@@ -137,9 +137,46 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ## 下一步计划
 
-见 [NEXT-UPDATE.md](NEXT-UPDATE.md)：底部「生成物」按钮（列产物 + 打开/下载）、交付物落点规则、排队 steer 反馈、跨会话提醒的最终方案等。
+见 [NEXT-UPDATE.md](NEXT-UPDATE.md)：网关补丁工程化（P0）、大文件 `uploadStream` 分块、markdown 表格渲染、交付物落点规则、跨会话提醒的最终方案等。
 
 ## 更新日志
+
+### v0.86.9（开发中，未发布）
+
+**四项优化（用户点名）**
+- **生成物窗口**：底部 chip 行新增「生成物」——列本会话工作目录（`file-list`），可下钻目录 / 返回上级，
+  点文件下载到手机（进度原地更新），完成后尝试 `ACTION_VIEW` 打开
+- **加号 → 文件 / 相册 / 拍照**：选中的东西**先暂存在输入框上方**（缩略图 / 文件名 / ×），
+  与文字或语音**一起发送**，不再"选完立即发"
+- **修「消息文本点一次不能立即选范围」**：单击即整段选中 + 选区手柄 + 系统「复制/分享」工具条
+  （`setSelection` 后合成一次长按手势触发 ActionMode）；选字期间列表刷新让路（**封顶 4s**，不冻结流式输出）
+- **权限 chip**：chip 行新增「权限」，对齐电脑端 permission presets
+  （`read-only` / `workspace-write` / `danger-full-access`），当前值高亮、可切换
+
+**新增：通用文件附件（PDF / Office / 压缩包）**
+- 电脑端网关补丁 `pc-plugin/patches/patch-gateway-file-upload.ps1`：`message` 帧新增 `files[]`，
+  经宿主 `fileUploads` 换 receiptId，拼进 prompt content 的 `{type:'file',receiptId}`
+- 网关会在 `hello.capabilities` 宣告 **`file-uploads`**；客户端按能力门决定"发 / 明确提示暂不支持"
+  （**不盲发** —— 未打补丁的网关会静默忽略 `files[]`，文件会悄悄丢掉）
+
+**修掉的真 bug（都是端到端实测才暴露的）**
+- **`clientTimeZone` 非 IANA 名会让整条消息被网关拒绝**（`must be UTC or a valid IANA Area/Location name`）：
+  部分 ROM / 模拟器给的是 `GMT`、`GMT+08:00`，而 App 已清空输入框 → **用户以为发出去了，其实一条都没发**。
+  现在只在匹配 `Area/Location` 时才带该字段；4 个发送路径统一
+- **发送被网关拒绝后附件被清掉** → 改为失败回填（附件放回待发送）
+- `permission-options` 的当前值字段是 **`sessionPermissions.currentValue`**（原实现漏了 → 会显示错误的当前权限）
+- `TextView` **没有** `setSelection(int,int)`（改用 `android.text.Selection`）
+- 权限 chip 文案前缀重复（`权限 · 权限 完全访问`）
+- `harness/build.ps1` 原先**编不过当前 `src/`**（垫片缺 `Context` / `Log` / `Notifier`）
+
+**验证**
+- 四项 + 文件附件全部在 Android 模拟器上**实测通过**（证据 `evidence/ui-4features-manual/`、`evidence/t9-file-upload/`）
+- 协议层一键回归：`pwsh -File harness/run-protocol-v2-test.ps1`（**10/10**）
+- 设备一到位就能一键验收：`pwsh -File tools/verify-4features.ps1`
+
+**已知未覆盖**
+- 大文件未压测（单文件上限 24MB / 合计 48MB）；更大的要走 `uploadStream` 分块（未实现）
+- 网关补丁仍只活在 `node_modules`，**网关升级即失效**（P0，见 `NEXT-UPDATE.md`）
 
 ### v0.86.4
 
