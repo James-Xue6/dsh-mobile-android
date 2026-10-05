@@ -230,3 +230,30 @@ if (Test-Path $gwClient) {
 } else {
   Warn "网关插件还没落盘（$gwClient 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动跑一次 pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1"
 }
+
+# ---------------------------------------------------------------- 附：网关协议补丁（幂等、可重放）
+#
+# [2026-10-05 补] 以前这里**只跑面板补丁**，其余几个网关补丁（跨会话提醒 / hello 带公网地址 /
+# 地址变化广播 / 通用文件附件）都是**手工**打的 —— 结果它们只活在 node_modules 里，
+# 网关一升级/重装就静默失效（手机表现为：收不到跨会话提醒、出门连不上、发不了文件）。
+# 现在装完统一重放一遍：每个脚本都自带「锚点唯一性预检 + 幂等标记 + -Revert」，
+# 版本不符会报错退出而不是把插件降级，所以**重复跑是安全的**。
+$gwLib = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib'
+if (Test-Path $gwLib) {
+  Write-Host "`n[附] 叠加网关协议补丁（幂等、可重放；网关升级/重装后重跑本脚本即可）" -ForegroundColor Cyan
+  $gatewayPatches = @(
+    @{ File = 'patch-gateway-crosssession.ps1';    What = '跨会话提醒（放宽两道 waterfall 门 + 跨会话下发带 global 标记）' },
+    @{ File = 'patch-gateway-hello-publicurl.ps1'; What = 'hello 帧带上电脑当前公网(隧道)地址（隧道换域名后自动同步，不用重新扫码）' },
+    @{ File = 'patch-gateway-route-broadcast.ps1'; What = '地址变化 / 启动就绪后主动广播' },
+    @{ File = 'patch-gateway-file-upload.ps1';     What = '通用文件附件（message.files[] + hello.capabilities: file-uploads）' }
+  )
+  foreach ($p in $gatewayPatches) {
+    $s = Join-Path $PSScriptRoot "patches\$($p.File)"
+    if (-not (Test-Path $s)) { Warn "找不到 $s"; continue }
+    Write-Host "  · $($p.What)"
+    try { & $s } catch { Warn "    $($p.File) 未应用：$($_.Exception.Message)" }
+  }
+  Write-Host "  提示：这些补丁改的是 node_modules 里的网关文件，**网关升级/重装后请重跑** pwsh -File .\pc-plugin\install.ps1" -ForegroundColor Yellow
+} else {
+  Warn "网关插件还没落盘（$gwLib 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动重跑一次本脚本"
+}

@@ -1,7 +1,7 @@
 {
   "name": "dsh-mobile-access",
   "displayName": "手机接入",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "中文名：手机接入。在 DSH 设置里直接管理手机端接入——一键开关移动网关、生成配对二维码与访问令牌、查看并撤销已配对设备。协议层复用 dsh-plugin-mobile-gateway（已声明为本包依赖，装本包即自动装上），本插件只提供接入编排与界面。",
   "keywords": [
     "dsh",

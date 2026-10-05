@@ -174,9 +174,18 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 - 协议层一键回归：`pwsh -File harness/run-protocol-v2-test.ps1`（**10/10**）
 - 设备一到位就能一键验收：`pwsh -File tools/verify-4features.ps1`
 
+**PC 端（`pc-plugin`）**
+- **`install.ps1` 现在会重放全部 4 个网关协议补丁**（跨会话提醒 / hello 带公网地址 / 地址变化广播 /
+  通用文件附件）。以前它**只跑面板补丁**，其余几个都是手工打的 ⇒ **只活在 `node_modules`**，
+  网关升级/重装就静默失效（手机表现为：收不到跨会话提醒、出门连不上、发不了文件）
+- 新增 `pc-plugin/patches/patch-gateway-crosssession.ps1` —— 此前**仓库里根本没有这个脚本**，
+  改动只在线上。内容：放宽两道 waterfall 门 + 跨会话下发带 `global: true`；
+  回退用**反向替换**（不靠备份还原，避免把后来那几个补丁一起抹掉）
+- 插件版本 `1.0.2` → `1.0.3`
+
 **已知未覆盖**
 - 大文件未压测（单文件上限 24MB / 合计 48MB）；更大的要走 `uploadStream` 分块（未实现）
-- 网关补丁仍只活在 `node_modules`，**网关升级即失效**（P0，见 `NEXT-UPDATE.md`）
+- 网关补丁改的是 `node_modules`，**网关升级/重装后需重跑 `install.ps1`**（启动自检尚未做，见 `NEXT-UPDATE.md` P0）
 
 ### v0.86.4
 

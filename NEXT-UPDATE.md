@@ -23,16 +23,22 @@
 
 ## 二、待办（按优先级）
 
-### P0 · 网关插件补丁的工程化（最紧急，会静默失效）
-- [ ] **现有 4 个补丁脚本，没有一个被 `install.ps1` 调用** —— 改动只活在 `node_modules`，网关升级/重装即失效：
-  1. `patch-gateway-crosssession.ps1` —— **还没写**（放宽门 + 跨会话广播），备份在 `lib\index.mjs.bak-crosssession`；
-  2. `patch-gateway-hello-publicurl.ps1`（已有）；
-  3. `patch-gateway-route-broadcast.ps1`（已有）；
-  4. **`patch-gateway-file-upload.ps1`（2026-10-05 新增，已有）** —— `message.files[]` + `hello.capabilities: file-uploads`。
-  - 待做：让 `install.ps1` 逐个调用（都幂等、都支持 `-Revert`），并在启动自检里核对每个补丁的标记位；
+### P0 · 网关插件补丁的工程化（**2026-10-05 晚：主体已做完，只剩启动自检**）
+- [x] **4 个补丁脚本现在都由 `install.ps1` 统一重放**（此前只跑面板补丁，其余是手工打的）：
+  1. **`patch-gateway-crosssession.ps1`（2026-10-05 新增）** —— 跨会话提醒：放宽两道 waterfall 门 +
+     跨会话下发带 `global: true`。**此前仓库里根本没有这个脚本**，改动只活在线上；
+     回退用**反向替换**（不靠备份还原，否则会把后来那几个补丁一起抹掉）。
+     已沙箱验证：`node --check` 通过 / 幂等 / 3 处 `hasAnyInteractionClient` / 旧门 0 残留 / `-Revert` 逐字节还原。
+  2. `patch-gateway-hello-publicurl.ps1` —— hello 帧带上电脑当前公网(隧道)地址；
+  3. `patch-gateway-route-broadcast.ps1` —— 地址变化 / 启动就绪后主动广播；
+  4. **`patch-gateway-file-upload.ps1`** —— `message.files[]` + `hello.capabilities: file-uploads`。
+  - `pc-plugin/dsh-mobile-access/package.json` 版本 `1.0.2` → `1.0.3`。
+  - ⚠️ `patch-gateway-subagent-address.ps1` **已回滚**（线上无 `parentAddress` 标记），**不要**接进 install。
+- [ ] **还剩：启动自检**。现在靠"记得重跑 install.ps1"；应加一处启动时核对（每个补丁的功能标记在不在），
+  缺了就打印明确指引（"跑 pwsh -File pc-plugin\install.ps1"）。
+  - 手动复核判据：`lib/index.mjs` 里应有 `hasAnyInteractionClient` / `'file-uploads'` / `dsh-mobile:hello-publicurl`
+    / `dsh-mobile:route-broadcast`；`lib/dsh-host-adapter.mjs` 里应有 `uploadFile:`。
   - 补日志便于定位：`interaction replay` 打印 `session=`；门未通过时打印 `skipped (no mobile client)`。
-  - **网关升级后的手动复核**：`lib/index.mjs` 里应能搜到 `hasAnyInteractionClient` 与 `'file-uploads'`；
-    `lib/dsh-host-adapter.mjs` 里应有 `uploadFile:`。缺了就重放对应补丁脚本。
 
 ### P1 · 通知在荣耀/华为上的顽固点
 - [~] **渠道降级**：App 申请的 `IMPORTANCE_HIGH` 被 ROM 降为 DEFAULT（`mOriginalImp=4` → `mImportance=3`，`mUserLockedFields=0`）。
