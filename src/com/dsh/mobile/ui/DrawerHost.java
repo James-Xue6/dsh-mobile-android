@@ -117,7 +117,8 @@ public final class DrawerHost extends FrameLayout {
      * 抽屉里那张会话列表自己也会 applyTheme()（由宿主一并调用），这里只管容器底板。
      */
     public void applyTheme() {
-        content.setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 内容层透明：环境背景在 Activity 根容器上，这里让出来才透得出彩色下层。
+        content.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         scrim.setBackgroundColor(Ui.SCRIM);
         applyDrawerBg();
     }
@@ -135,13 +136,20 @@ public final class DrawerHost extends FrameLayout {
      */
     private void applyDrawerBg() {
         Context c = getContext();
+        // [毛玻璃 v3] 抽屉 = 厚玻璃 + 135° 斜射高光 + 白色右缘发丝线（demo 的 .drawer 制式：
+        // `--noise, --sheen, --glass-sheet` 三层 + `border: .5px solid rgba(255,255,255,.5)`）。
+        android.graphics.drawable.GradientDrawable sheen =
+                new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        new int[] { Ui.SHEEN_1, Ui.SHEEN_2, 0x00FFFFFF });
         android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
                 new android.graphics.drawable.Drawable[] {
                         Ui.round(0, Ui.GLASS_SHEET),
-                        new android.graphics.drawable.ColorDrawable(Ui.HAIRLINE) });
-        ld.setLayerGravity(1, android.view.Gravity.END);
-        ld.setLayerWidth(1, Math.max(1, Ui.dp(c, 0.5f)));
-        ld.setLayerHeight(1, LayoutParams.MATCH_PARENT);
+                        sheen,
+                        new android.graphics.drawable.ColorDrawable(Ui.GLASS_HAIRLINE) });
+        ld.setLayerGravity(2, android.view.Gravity.END);
+        ld.setLayerWidth(2, Math.max(1, Ui.dp(c, 0.5f)));
+        ld.setLayerHeight(2, LayoutParams.MATCH_PARENT);
         drawer.setBackground(ld);
     }
 

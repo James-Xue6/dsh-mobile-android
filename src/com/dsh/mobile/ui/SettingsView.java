@@ -85,7 +85,8 @@ public final class SettingsView extends LinearLayout {
     private void build() {
         removeAllViews();
         setOrientation(VERTICAL);
-        setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 透明（环境背景由 MainActivity 根容器铺）。
+        setBackgroundColor(android.graphics.Color.TRANSPARENT);
 
         // 顶部栏：iOS 导航栏（44dp 高、细箭头返回、标题 17sp 粗体、底部一条发丝线）
         // 2026-10-03 液态玻璃：底色改成半透明 GLASS_BAR，下沿发丝线改 HAIRLINE。
@@ -106,7 +107,7 @@ public final class SettingsView extends LinearLayout {
         bar.addView(barTitle);
         addView(bar, Ui.fill());
         View barLine = new View(ctx);
-        barLine.setBackgroundColor(Ui.HAIRLINE);
+        barLine.setBackgroundColor(Ui.GLASS_HAIRLINE);   // [毛玻璃 v3] 白棱发丝线
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
         // 必须用上面那条 1px 的 LayoutParams：Ui.fill() 是 WRAP_CONTENT，而普通 View 在

@@ -67,6 +67,13 @@ public final class GatewayClient {
          *
          * <p>请求用 {@link #requestFileList(String, String, String)}；下载链路另走
          * {@code file-download-*}（见 {@link #onDownload}），两者是独立通道。
+         *
+         * <p><b>⚠️ 当前 App 里没有调用点（2026-10-06）：</b>「生成物」面板已按用户要求改成
+         * **只列本会话产出的文件**（数据来自 `deliverables/presented`，见
+         * {@code ChatItem.files}），不再列工作目录、也没有目录下钻。这条协议能力与下面的
+         * {@link #requestFileList} 保留着是因为它**已被 harness 回归覆盖**
+         * （`harness/run-protocol-v2-test.ps1` 断言 file-list 回帧形状），将来要"浏览工作目录"
+         * 这类功能可以直接复用；**别误以为它是生成物面板的生效路径**。
          */
         default void onFileList(JSONObject frame) { }
 

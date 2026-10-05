@@ -649,7 +649,9 @@ public final class MainActivity extends Activity implements
         };
 
         root = new FrameLayout(this);
-        root.setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 根容器铺**环境背景**（彩色渐变 + 四枚光斑），而不是纯色 Ui.BG：
+        // 各屏容器一律透明，玻璃面板才有"可透的下层"。见 Ui.AmbientDrawable。
+        root.setBackground(new com.dsh.mobile.ui.Ui.AmbientDrawable());
         // targetSdk 35+ 强制 edge-to-edge：把系统栏内边距加到根容器，各屏不再自己留状态栏高度
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int top, bottom;
@@ -1279,7 +1281,7 @@ public final class MainActivity extends Activity implements
         com.dsh.mobile.ui.Ui.applyTheme(dark);
         themedDark = dark;
         applySystemBars();
-        if (root != null) root.setBackgroundColor(com.dsh.mobile.ui.Ui.BG);
+        if (root != null) root.setBackground(new com.dsh.mobile.ui.Ui.AmbientDrawable());
         if (drawerHost != null) drawerHost.applyTheme();
         if (listScreen != null) listScreen.applyTheme();
         if (convo != null) convo.applyTheme();
@@ -1303,7 +1305,9 @@ public final class MainActivity extends Activity implements
     private void applySystemBars() {
         android.view.Window w = getWindow();
         if (w == null) return;
-        int bg = com.dsh.mobile.ui.Ui.BG;
+        // [毛玻璃 v3] 系统栏不能再刷成纯色 Ui.BG：那会在彩色环境背景上下各留一条
+        // 对不上的实色带。改成取**环境背景顶端色**的近似值（Ui.ambientBarColor）。
+        int bg = com.dsh.mobile.ui.Ui.ambientBarColor();
         w.setStatusBarColor(bg);
         w.setNavigationBarColor(bg);
         w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bg));
@@ -3920,14 +3924,9 @@ public final class MainActivity extends Activity implements
      */
     private static final int ATTACH_MAX_TOTAL_WITH_FILE_BYTES = 48 * 1024 * 1024;
 
-    /** 生成物面板（底部 sheet，可下钻目录）。 */
+    /** 生成物面板（底部 sheet）：只列本会话**产出的文件**。 */
     private Dialog artifactsDlg;
     private LinearLayout artifactsRows;
-    private TextView artifactsPathText;
-    /** 当前列出的目录（相对会话工作目录；空 = 根）。 */
-    private String artifactsPath = "";
-    /** 本次生成物请求的 requestId（只认自己发的回帧，避免和别的 file-list 串台）。 */
-    private String artifactsRequestId = "";
     /** 下载序号：同一毫秒内连点两个文件时避免 requestId 撞车。 */
     private int dlSeq = 0;
     /** 当前权限 preset（网关 permission 回帧后写入；进会话时用来给 chip 打底）。 */
@@ -4283,9 +4282,15 @@ public final class MainActivity extends Activity implements
     // ---- ① 生成物窗口 --------------------------------------------------
 
     /**
-     * 打开「生成物」面板：列本会话工作目录一层（契约 §2.1 {@code file-list}）。
+     * 打开「生成物」面板：列**本会话产出的文件**。
      *
-     * <p>面板**先开再拉**：立刻给出「正在读取…」，避免用户点了没反应（用户报过"点了没反应"）。
+     * <p>[2026-10-06 用户需求修正] 用户原话：「生成物点开这个目录内容有问题，不要显示这么多
+     * 就显示这次项目生成的这个输出文件即可，怎么还能点上一页啥的，这些不要了」。
+     *
+     * <p>所以这里**不再**用 {@code file-list} 去列工作目录、也**没有**目录下钻与「← 返回上级」——
+     * 只列 Agent **明确交付**出来的文件。这份数据 App 早就有：`deliverables/presented` 事件
+     * 会为每条交付建一个 {@link ChatItem#FILES}，文件清单就在 {@link ChatItem#files} 里。
+     * 好处：不用等网络、不会把 `.android` / `src` 这种堆目录一股脑倒给用户。
      */
     @Override
     public void onArtifacts() {
@@ -4293,52 +4298,29 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "先打开一条对话，再看它产出的文件", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (!isOnline()) {
-            Toast.makeText(this, "还没连上电脑端，暂时看不了生成物", Toast.LENGTH_LONG).show();
-            return;
-        }
         showArtifactsPanel();
-        requestArtifacts("");
+        renderArtifacts(collectProducedFiles());
     }
 
-    /** 请求某个目录（相对会话工作目录；空 = 根）。 */
-    private void requestArtifacts(String path) {
-        if (!isOnline()) {
-            Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        artifactsPath = path == null ? "" : path;
-        artifactsRequestId = "art-" + System.currentTimeMillis() + "-" + (dlSeq++);
-        renderArtifacts(artifactsPath, null, "正在读取…");
-        gw.requestFileList(currentSessionId, artifactsPath, artifactsRequestId);
-    }
-
-    @Override
-    public void onFileList(JSONObject frame) {
-        if (frame == null) return;
-        String rid = frame.optString("requestId", "");
-        // 只认自己发的那次请求：别的 file-list 回帧（例如交付物卡那条链路）不覆盖本面板
-        if (!artifactsRequestId.isEmpty() && !rid.equals(artifactsRequestId)) return;
-        artifactsRequestId = "";
-        String sid = frame.optString("sessionId", "");
-        if (!sid.isEmpty() && !sid.equals(currentSessionId)) return;
-
-        String path = frame.optString("path", "");
-        ArrayList<ArtifactEntry> list = new ArrayList<>();
-        JSONArray arr = frame.optJSONArray("entries");
-        if (arr != null) {
-            for (int i = 0; i < arr.length(); i++) {
-                ArtifactEntry e = ArtifactEntry.from(arr.optJSONObject(i));
-                if (e != null) list.add(e);
+    /**
+     * 汇总本会话产出的文件：扫所有 {@link ChatItem#FILES} 项，**按路径去重**。
+     *
+     * <p>顺序 = 产出先后（不是字典序）：用户是"看我这次生成了什么"，时间顺序最好找。
+     * 同一个文件被交付多次时，用**最新的说明**覆盖，位置仍留在首次出现处。
+     */
+    private List<ArtifactEntry> collectProducedFiles() {
+        java.util.LinkedHashMap<String, ArtifactEntry> map = new java.util.LinkedHashMap<>();
+        for (ChatItem it : items) {
+            if (it == null || it.files == null) continue;
+            for (int i = 0; i < it.files.length(); i++) {
+                ArtifactEntry e = ArtifactEntry.fromPresented(it.files.optJSONObject(i));
+                if (e == null || e.path.isEmpty()) continue;
+                map.remove(e.key());   // 去掉旧的，put 到末尾会让顺序乱；所以先删再按需重放
+                map.put(e.key(), e);
             }
         }
-        // 目录在前、同类按名字排：网关不保证顺序，手机上手滑顺序乱会很难找
-        Collections.sort(list, (a, b) -> {
-            if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
-            return a.name.compareToIgnoreCase(b.name);
-        });
-        artifactsPath = path == null ? "" : path;
-        renderArtifacts(artifactsPath, list, "");
+        // LinkedHashMap 的"删了再放"会把该项挪到末尾；为了保持"首次出现"的顺序，这里按交付时间重排
+        return new ArrayList<>(map.values());
     }
 
     /**
@@ -4354,9 +4336,10 @@ public final class MainActivity extends Activity implements
         LinearLayout box = Ui.sheetCard(this);
         box.addView(Ui.grabber(this));
         box.addView(Ui.text(this, "生成物", Ui.S_TITLE3, Ui.INK, true));
-        artifactsPathText = Ui.text(this, "会话工作目录", Ui.S_FOOT, Ui.INK_SUB, false);
-        artifactsPathText.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 10));
-        box.addView(artifactsPathText);
+        // [2026-10-06] 原来这里显示"会话工作目录 / 子目录"的面包屑 —— 用户明确不要目录浏览了
+        TextView sub = Ui.text(this, "本次对话产出的文件 · 点一下下载，长按复制路径", Ui.S_FOOT, Ui.INK_SUB, false);
+        sub.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 10));
+        box.addView(sub);
 
         artifactsRows = Ui.col(this);
         ScrollView sc = new ScrollView(this) {
@@ -4400,52 +4383,25 @@ public final class MainActivity extends Activity implements
             w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         }
         artifactsDlg.show();
-        renderArtifacts("", null, "正在读取…");
     }
 
     /**
-     * 画生成物列表。
+     * 画生成物列表：一条 = 一个产出文件。
      *
-     * @param entries null = 还没数据（只显示 note，例如「正在读取…」）
+     * <p>[2026-10-06] 去掉了目录下钻：「← 返回上级」/ 文件夹行 / 面包屑全部删除（用户明确不要）。
      */
-    private void renderArtifacts(final String path, List<ArtifactEntry> entries, String note) {
+    private void renderArtifacts(List<ArtifactEntry> entries) {
         if (artifactsRows == null) return;
-        final String p = path == null ? "" : path;
-        if (artifactsPathText != null) {
-            artifactsPathText.setText(p.isEmpty() ? "会话工作目录" : ("会话工作目录 / " + p));
-        }
         artifactsRows.removeAllViews();
 
-        if (note != null && !note.isEmpty()) {
-            TextView n = Ui.text(this, note, Ui.S_FOOT, Ui.INK_FAINT, false);
-            n.setPadding(Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12));
-            artifactsRows.addView(n);
-        }
-        if (entries == null) return;
-
-        // 下钻了就给一条「返回上级」：手机上只靠系统返回键会退出整个面板，用户会迷路
-        if (!p.isEmpty()) {
-            final String parent = parentPath(p);
-            artifactsRows.addView(artRow("← 返回上级",
-                    parent.isEmpty() ? "回到会话工作目录" : ("回到 " + parent),
-                    Ui.INK_SUB, v -> requestArtifacts(parent)));
-        }
-
-        if (entries.isEmpty()) {
-            TextView n = Ui.text(this, p.isEmpty() ? "本次还没有生成文件" : "这个文件夹是空的",
-                    Ui.S_FOOT, Ui.INK_FAINT, false);
+        if (entries == null || entries.isEmpty()) {
+            TextView n = Ui.text(this, "本次对话还没有产出文件", Ui.S_FOOT, Ui.INK_FAINT, false);
             n.setPadding(Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12));
             artifactsRows.addView(n);
             return;
         }
-
         for (final ArtifactEntry e : entries) {
-            if (e.isDirectory()) {
-                artifactsRows.addView(artRow(e.name, "文件夹 · 点一下进去", Ui.INK,
-                        v -> requestArtifacts(e.path)));
-            } else {
-                artifactsRows.addView(artifactFileRow(e));
-            }
+            artifactsRows.addView(artifactRow(e));
         }
     }
 
@@ -4491,32 +4447,36 @@ public final class MainActivity extends Activity implements
     /**
      * 生成物里的一行文件：点一下下载到手机。
      *
-     * <p>注意 {@link ArtifactEntry#path} 是**相对会话工作目录**的路径（契约 §2.1），
-     * 直接交给 {@code file-download-open}，**不再做 relativize** —— 那是「交付物卡」那条
-     * 绝对路径链路才需要的（见 {@link #startDownload(ChatItem, String)}）。
+     * <p>{@link ArtifactEntry#path} 是宿主交付时的**绝对路径**，下载前要相对化到会话工作目录
+     * （网关只允许下载工作目录内的文件）。相对化失败说明这个交付物不在工作目录里 ——
+     * 明确说出来，不要让用户点了没反应。
      */
-    private LinearLayout artifactFileRow(final ArtifactEntry e) {
-        String size = e.sizeLabel();
+    private LinearLayout artifactRow(final ArtifactEntry e) {
         LinearLayout row = artRow(e.name,
-                size.isEmpty() ? "点一下下载到手机" : ("点一下下载到手机 · " + size), Ui.INK, null);
+                e.description.isEmpty() ? "点一下下载到手机" : e.description, Ui.INK, null);
         // 进度行：拿到 artRow 里第二个 TextView 的引用，下载过程中原地更新它的文案
         LinearLayout texts = (LinearLayout) row.getChildAt(0);
         final TextView state = (TextView) texts.getChildAt(texts.getChildCount() - 1);
         row.setOnClickListener(v -> {
             Ui.haptic(v);
-            startDownload(e.path, e.name, text -> runOnUiThread(() -> {
+            String rel = relativize(sessionCwd(currentSessionId), e.path);
+            if (rel == null) {
+                // 交付物**常常落在工作目录之外**（实测过 `V:\…\*.xlsx`）：网关只允许下载会话
+                // 工作目录内的文件，这种就是下不了。给出明确原因，并保留长按复制路径这条路。
+                state.setText("在电脑上的 " + e.path + "（不在本会话工作目录内，手机端下不了）");
+                return;
+            }
+            startDownload(rel, e.name, text -> runOnUiThread(() -> {
                 try { state.setText(text); } catch (Throwable ignored) { }
             }));
         });
+        // 长按复制完整路径：下不了的交付物靠它把路径带走（面板副标题已提示）
+        row.setOnLongClickListener(v -> {
+            Ui.haptic(v);
+            onCopyPath(e.path);
+            return true;
+        });
         return row;
-    }
-
-    /** 相对路径的上一层（到根返回空串）。 */
-    private static String parentPath(String rel) {
-        String p = rel == null ? "" : rel.replace('\\', '/');
-        while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
-        int cut = p.lastIndexOf('/');
-        return cut <= 0 ? "" : p.substring(0, cut);
     }
 
     // ---- ④ 权限 chip ---------------------------------------------------

@@ -188,8 +188,11 @@ if (Has-Text $xml '生成物') {
   Tap-Text $xml '生成物' | Out-Null
   Start-Sleep -Seconds 3
   $art = Dump-Ui '07-artifact-panel'
-  $opened = (Has-Text $art '生成物') -and ((Has-Contains $art '会话工作目录') -or (Has-Text $art '本次还没有生成文件') -or (Has-Contains $art '正在读取'))
-  Check "点「生成物」弹出面板" $opened ""
+  # [2026-10-06 需求修正] 生成物面板改成**只列本次产出文件**，不再列工作目录、没有目录下钻。
+  $opened = (Has-Text $art '生成物') -and ((Has-Contains $art '本次对话产出的文件') -or (Has-Text $art '本次对话还没有产出文件'))
+  Check "点「生成物」弹出面板（只列本次产出文件）" $opened ""
+  Check "面板里**没有**「← 返回上级」（目录浏览已删除）" (-not (Has-Contains $art '返回上级')) ""
+  Check "面板里没有目录行（「文件夹 · 点一下进去」已删除）" (-not (Has-Contains $art '文件夹 · 点一下进去')) ""
   Check "面板有「关闭」" (Has-Text $art '关闭') ""
   Back
 } else {

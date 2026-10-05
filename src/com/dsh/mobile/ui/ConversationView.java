@@ -276,17 +276,17 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         this.ctx = ctx;
         this.host = host;
         setOrientation(VERTICAL);
-        setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 透明（环境背景由 MainActivity 根容器铺）。
+        setBackgroundColor(android.graphics.Color.TRANSPARENT);
 
         // ---- 顶部栏（iOS 导航栏：44dp、细箭头返回、标题 17sp 粗体、底部一条发丝线）
-        // 2026-10-04 修用户手机实拍：GLASS_BAR（白 80%）在浅薰衣草底上渲染成"实心白条"，
-        // 和聊天区割裂。顶栏改回**透明 + 页面同底**，下沿只留一条发丝线（iOS 大标题页制式：
-        // 标题与内容同底）。preInput 同理。
+        // [毛玻璃 v3] 顶栏回到**玻璃条**（demo 的 .glass-bar）：顶栏与列表在本页是上下两行、
+        // 互不重叠（消息不会钻到顶栏底下），所以薄玻璃只透出环境背景、不会撞字。
+        // 旧注释里那条"浅底上渲染成实心白条"的前提（页面底=浅薰衣草纯色）已经不成立。
         LinearLayout bar = Ui.row(ctx);
         barRow = bar;
         barBg = Ui.glassBar();
         bar.setBackground(barBg);
-        bar.setBackground(null);   // 透明：与页面同底，白色玻璃条在浅底上=白横带（bug）
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 5), Ui.dp(ctx, 8), Ui.dp(ctx, 5));
 
@@ -325,7 +325,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         bar.addView(menu);
         addView(bar, Ui.fill());
         View barLine = new View(ctx);
-        barLine.setBackgroundColor(Ui.HAIRLINE);
+        barLine.setBackgroundColor(Ui.GLASS_HAIRLINE);   // [毛玻璃 v3] 白棱发丝线（原来是深色 HAIRLINE）
         this.barLine = barLine;
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
@@ -1144,12 +1144,12 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
     }
 
-    /** 顶部渐隐：BG → 半透明 → 全透明（从上往下），与底部渐隐镜像。 */
+    /** 顶部渐隐：GLASS_BAR → 半透明 → 全透明（从上往下），与底部渐隐镜像。 */
     private android.graphics.drawable.Drawable buildTopFade(Context c) {
-        int a = Ui.BG & 0x00FFFFFF;
+        int rgb = Ui.GLASS_BAR & 0x00FFFFFF;   // [毛玻璃 v3] 同底部渐隐：透到玻璃体，不刷实色
         return new android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { Ui.BG, a | 0xAA000000, a });
+                new int[] { Ui.GLASS_BAR, rgb | 0xAA000000, rgb });
     }
 
     /** 文字/高度变化后补算顶部留白（多次 post，覆盖"换行后高度变化"的时序）。 */
@@ -1824,20 +1824,19 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      * 所以内容的"淡出"就是能做到的磨砂替身：越接近输入条越透明，不产生两层硬字。
      */
     private static android.graphics.drawable.Drawable buildFade(Context c) {
-        int clear = Ui.BG & 0x00FFFFFF;          // 同色、全透明
-        // [P0 修复·灰框] 中段从 60% 降到 40%：改前"中段就开始压"，配上 132dp 的层高，
-        // 观感就是一块盖住列表的灰幕。层高已经大幅收窄，这里再让中段轻一点。
-        int half = clear | 0x66000000;           // 同色、40%
-        android.graphics.drawable.GradientDrawable g =
-                new android.graphics.drawable.GradientDrawable(
-                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                        new int[] { clear, half, Ui.BG });
-        g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
-        return g;
+        // [毛玻璃 v3] 渐隐不再刷纯色 Ui.BG：页面底已是彩色环境背景，刷实色会在页底留一块
+        // 对不上的灰幕。改成**透到玻璃体**（GLASS_SHEET，与悬浮胶囊同一族）——
+        // 于是"内容淡出"看起来就是玻璃自身的厚度，而不是一块盖上去的遮罩。
+        int rgb = Ui.GLASS_SHEET & 0x00FFFFFF;   // 同色、全透明
+        int half = rgb | 0x66000000;             // 同色、40%
+        return new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { rgb, half, Ui.GLASS_SHEET });
     }
 
     public void applyTheme() {
-        setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 透明（环境背景由 MainActivity 根容器铺）。
+        setBackgroundColor(android.graphics.Color.TRANSPARENT);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
         if (topFade != null) topFade.setBackground(buildTopFade(ctx));
         if (modelChip != null) {
@@ -1851,9 +1850,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 附件条：胶囊底色/文字色也是创建时烘进去的，主题切换必须整条重画
         // （缩略图有缓存，重建不会重新解码）。
         if (attachRow != null) rebuildAttachStrip();
-        // 顶栏/preInput 透明（白玻璃条 bug 修复后不再挂玻璃底），只刷下沿发丝线
-        if (barRow != null) barRow.setBackground(null);
-        if (barLine != null) barLine.setBackgroundColor(Ui.HAIRLINE);
+        // 顶栏/preInput：顶栏回到玻璃条（[毛玻璃 v3]），下沿发丝线改白色
+        if (barRow != null) barRow.setBackground(Ui.glassBar());
+        if (barLine != null) barLine.setBackgroundColor(Ui.GLASS_HAIRLINE);
         if (backBtn != null) Ui.setIcon(backBtn, com.dsh.mobile.R.drawable.ic_chevron_left, Ui.BRAND);
         if (menuBtn != null) Ui.setIcon(menuBtn, com.dsh.mobile.R.drawable.ic_more, Ui.INK_SUB);
         if (title != null) title.setTextColor(Ui.INK);

@@ -55,7 +55,8 @@ public final class SessionListView extends FrameLayout {
         super(ctx);
         this.ctx = ctx;
         this.host = host;
-        setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 透明（见 DeviceHubView 同名改动）。
+        setBackgroundColor(android.graphics.Color.TRANSPARENT);
 
         LinearLayout root = Ui.col(ctx);
         root.setLayoutParams(new FrameLayout.LayoutParams(
@@ -64,7 +65,7 @@ public final class SessionListView extends FrameLayout {
 
         // ---- 头部（iOS 大标题）
         header = Ui.col(ctx);
-        header.setBackgroundColor(Ui.BG);
+        header.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         header.setPadding(Ui.dp(ctx, Ui.M_SIDE), Ui.dp(ctx, 10), Ui.dp(ctx, 10), Ui.dp(ctx, 4));
 
         LinearLayout top = Ui.row(ctx);
@@ -166,8 +167,9 @@ public final class SessionListView extends FrameLayout {
      * 所以一次 notifyDataSetChanged() 就能让所有可见卡片换色。
      */
     public void applyTheme() {
-        setBackgroundColor(Ui.BG);
-        if (header != null) header.setBackgroundColor(Ui.BG);
+        // [毛玻璃 v3] 透明（见 DeviceHubView 同名改动）。
+        setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        if (header != null) header.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         if (headerTitle != null) headerTitle.setTextColor(Ui.INK);
         // 圆形按钮的底色（IconBg）是创建时烘死的，主题切换必须连底一起重建
         if (refreshBtn != null) {

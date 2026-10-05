@@ -234,11 +234,11 @@ public final class ChatAdapter extends BaseAdapter {
         bubble.setIncludeFontPadding(false);
         bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
         bubble.setMaxWidth(maxBubble);
-        // 助手气泡：不透明奶白实体卡（SURFACE_G1→G2 渐变）+ 2dp 阴影。
-        // 2026-10-03 终局返工：旧版半透明玻璃透出纯色页面底 = 用户点名的"透明太敷衍"；
-        // 实体卡 + 影子才是 Sadees 参考图的真实层级（奶白卡浮在灰紫底上）。
-        android.graphics.drawable.GradientDrawable abg = Ui.round(Ui.dp(ctx, 18), Ui.SURFACE_G1);
-        bubble.setBackground(abg);
+        // 助手气泡：[毛玻璃 v3] 改回**玻璃泡**（demo `.glass-bub`）—— 半透明体 + 135° 斜射高光
+        // + 内发光 + 白棱发丝线。为什么这次能透：页面底已经从均匀灰紫换成**彩色环境背景**，
+        // 半透明终于"有东西可透"；旧注释里"透出纯色底=敷衍"的前提已经不成立。
+        bubble.setBackground(new Ui.CardBg(Ui.dp(ctx, 18), Ui.SURFACE_G1,
+                Ui.dp(ctx, 1f), Ui.LINE, 0x00000000, 0f));
         bubble.setElevation(Ui.dp(ctx, 2f));
         makeSelectable(bubble);
 

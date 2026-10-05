@@ -135,28 +135,117 @@ public final class Ui {
     public static int BRAND_G1       = 0xFF7C4DFF;
     public static int BRAND_G2       = 0xFF448AFF;
 
-    // ---- 液态玻璃（Liquid Glass，2026-10-03）
+    // ---- 毛玻璃 v3（2026-10-06 同步「DSH 掌上通 · 毛玻璃质感 Demo v3」）
     //
-    // 玻璃的「体」：半透明填充。为什么浅色取 60% 而不是更透：本 App 的页面底是均匀的
-    // #F2F2F7，玻璃再透也只是透出同一块灰底 —— 真正的通透感来自**面板比页面亮一点点 +
-    // 一条纯白的上棱**（见 CardBg 的棱光层）。60% 白落在 #F2F2F7 上约 #FAFAFC，
-    // 与页面底刚好差一档，棱光才"有东西可衬"。
+    // demo 的真模糊档是 .46（卡）/.60（抽屉）/.38（顶栏）/.42（输入胶囊）；但原生 Android
+    // **没有 CSS backdrop-filter**：RenderEffect 只能糊 View 自身，applyWindowBlur 只对
+    // 独立窗口（Dialog）有效。所以面板一律走 **demo 自己给出的「仿玻璃」回退档**
+    // （存档 HTML `body[data-blur="off"]` 段：卡 .66 / 顶栏 .60 / 输入 .66 / 抽屉 .76），
+    // 再靠 demo 的另外三件（135° 斜射高光 / 内发光 / 双层投影）+ 彩色环境背景补质感。
     //
-    // GLASS_SHEET 比 GLASS 更不透明（88~90%）：底部弹窗里全是文字，玻璃再漂亮也不能
-    // 牺牲可读性；iOS 的 sheet 本来就是"厚玻璃"，不是薄玻璃。
-    public static int GLASS        = 0x99FFFFFF;   // 卡片体（浅色 60% 白 / 深色 56% 黑）
-    public static int GLASS_SHEET  = 0xE0FFFFFF;   // 弹窗 / 抽屉体（88% / 90%）
-    public static int GLASS_BAR    = 0xCCFFFFFF;   // 顶部栏 / 输入条（80% / 60%）
-    // GLASS_INPUT：**悬浮输入胶囊**专用。
-    // 2026-10-04 两轮修正：66% 太透 —— 背后的消息文字与胶囊内的文字叠在一起，用户反馈
-    // 「后面和前面重叠看不清楚了」。原生没有真·背景模糊（RenderEffect 只能糊 View 自身），
-    // 所以改成 **92% 高不透明度**（磨砂观感）+ 列表底部渐隐（ConversationView.buildFade），
-    // 既保留玻璃感，又保证输入文字清晰可读。
-    public static int GLASS_INPUT  = 0xEBFFFFFF;   // 浅色白 92% / 深色紫黑 85%
-    public static int GLASS_RIM    = 0xFFFFFFFF;   // 棱光顶部（浅色纯白 1px，深色 15% 白）
-    public static int GLASS_LO     = 0x0F000000;   // 棱光底部（浅色 6% 黑，深色 5% 白）
+    // 这一版同时换掉了「页面底」：底色从纯色 Ui.BG 改为**彩色环境背景**
+    // （AmbientDrawable，见下）—— 玻璃必须透出有颜色的下层才有意义，
+    // 透一片均匀灰底 = 白板（demo 原话）。
+    public static int GLASS        = 0xA8FFFFFF;   // 卡片体（浅 66% 白 / 深 74% 紫黑）
+    public static int GLASS_SHEET  = 0xC2FFFFFF;   // 抽屉 / 弹窗体（76% / 82%）
+    public static int GLASS_BAR    = 0x99FFFFFF;   // 顶部栏（60% / 66%）
+    public static int GLASS_INPUT  = 0xADFFFFFF;   // 输入胶囊（68% / 76%：悬浮在列表上，宁可厚一档）
+    public static int GLASS_RIM    = 0xA6FFFFFF;   // 顶部棱光（浅色 65% 白 / 深色 22% 白）
+    public static int GLASS_LO     = 0x12000000;   // 底部暗棱（浅 7% 黑 / 深 5% 白）
+    /** 玻璃件的发丝描边：**白色**（demo `--hairline: rgba(255,255,255,.50)`），不是黑边。 */
+    public static int GLASS_HAIRLINE = 0x80FFFFFF;
+    /** 内发光：`inset 0 0 26px` 的淡白雾（demo `--inner-glow`），让玻璃"厚"起来。 */
+    public static int GLASS_INNER   = 0x1FFFFFFF;
+    /** 斜射高光（135°）三段：40% → 12% → 全透明（demo `--sheen`）。 */
+    public static int SHEEN_1       = 0x6BFFFFFF;
+    public static int SHEEN_2       = 0x1FFFFFFF;
     /** 抽屉遮罩：不要死黑，25~35% 才"柔和"。 */
     public static int SCRIM        = 0x2E000000;   // #000 18%（浅色默认；深色档在 applyTheme 里改 45%）
+
+    // ---- 环境背景（玻璃的「下层内容」）6 套配色
+    //
+    // 逐值抄自存档 demo 的 `body[data-palette=...]` 与 `.ambient i` 两段：
+    // 底是一条 178°（≈上→下）三段渐变，上面再压四枚柔边光斑（左上 a / 右上 b / 左下 c / 右下 d）。
+    // 光斑用径向渐变画出柔边 —— 于是"面板后面透出来的本来就糊"，
+    // 这是原生没有真·背景模糊时最接近 demo 观感的做法。
+    public static final class Palette {
+        public final String name;
+        public final int[] bg;
+        public final int a, b, c, d;
+        public final float oa, ob, oc, od;
+        public final boolean mono;
+        Palette(String name, int[] bg, int a, int b, int c, int d,
+                float oa, float ob, float oc, float od, boolean mono) {
+            this.name = name; this.bg = bg;
+            this.a = a; this.b = b; this.c = c; this.d = d;
+            this.oa = oa; this.ob = ob; this.oc = oc; this.od = od;
+            this.mono = mono;
+        }
+    }
+
+    public static final Palette[] PALETTES = {
+        new Palette("极光", new int[] { 0xFFA892FF, 0xFF8FB0FF, 0xFFFFB0D4 },
+                0xFF7A4DFF, 0xFF2F7DFF, 0xFFFF5AA8, 0xFF3FD8B0,
+                0.55f, 0.48f, 0.40f, 0.32f, false),
+        new Palette("深海", new int[] { 0xFF1F5FD8, 0xFF2F9FE0, 0xFF57E0D8 },
+                0xFF2F4DFF, 0xFF00B8FF, 0xFF28E0C8, 0xFF7F6DFF,
+                0.55f, 0.48f, 0.40f, 0.32f, false),
+        new Palette("暮色", new int[] { 0xFFFF9A5A, 0xFFFF6F9C, 0xFF9A6BFF },
+                0xFFFF6A00, 0xFFFF3D7F, 0xFFB06BFF, 0xFFFFD45A,
+                0.55f, 0.48f, 0.40f, 0.32f, false),
+        new Palette("森林", new int[] { 0xFF2F9E78, 0xFF57C99A, 0xFFA8E6C8 },
+                0xFF0F9A6A, 0xFF2FD1A0, 0xFF8FE36F, 0xFF2F9EC9,
+                0.55f, 0.48f, 0.40f, 0.32f, false),
+        new Palette("紫罗兰", new int[] { 0xFF6A3CFF, 0xFF8B5CF6, 0xFFD18BFF },
+                0xFF4A1FD8, 0xFF8B5CF6, 0xFFE07BFF, 0xFF5F7DFF,
+                0.55f, 0.48f, 0.40f, 0.32f, false),
+        new Palette("素雅", new int[] { 0xFFF2F1F8, 0xFFE8E6F2, 0xFFF4F0F7 },
+                0xFF8B7BD8, 0xFF7FA0D8, 0xFFD8A0C0, 0xFF9FD8C8,
+                0.20f, 0.20f, 0.20f, 0.20f, true),
+    };
+
+    /** 当前配色档（0 = 极光，demo 默认档）。 */
+    private static int ambientPalette = 0;
+
+    public static void setAmbientPalette(int i) {
+        int n = PALETTES.length;
+        ambientPalette = ((i % n) + n) % n;
+    }
+
+    public static int ambientPalette() { return ambientPalette; }
+
+    public static Palette palette() { return PALETTES[ambientPalette]; }
+
+    /**
+     * 状态栏 / 导航栏用的近似底色：渐变顶端与左上光斑按透明度混合的结果。
+     * （系统栏在根容器 padding 之外，拿不到环境背景，只能给一个近似的纯色。）
+     */
+    public static int ambientBarColor() {
+        Palette p = palette();
+        int c = p.bg[0];
+        float o = dark ? (p.mono ? 0.28f : p.oa) : p.oa;
+        int a = p.a;
+        if (dark) {
+            // 深色档：环境背景整体被 brightness(.42) saturate(1.25) 压过，系统栏同口径压暗
+            float s = p.mono ? 0.30f : 0.42f;
+            c = 0xFF000000 | (Math.round(android.graphics.Color.red(c) * s) << 16)
+                    | (Math.round(android.graphics.Color.green(c) * s) << 8)
+                    | Math.round(android.graphics.Color.blue(c) * s);
+            a = 0xFF000000 | (Math.round(android.graphics.Color.red(a) * s) << 16)
+                    | (Math.round(android.graphics.Color.green(a) * s) << 8)
+                    | Math.round(android.graphics.Color.blue(a) * s);
+        }
+        return mixOpaque(c, a, o);
+    }
+
+    /** 两个不透明色按 t 混合（0=全取 base，1=全取 over）。 */
+    private static int mixOpaque(int base, int over, float t) {
+        float u = 1f - t;
+        return 0xFF000000
+                | (Math.round(android.graphics.Color.red(base) * u + android.graphics.Color.red(over) * t) << 16)
+                | (Math.round(android.graphics.Color.green(base) * u + android.graphics.Color.green(over) * t) << 8)
+                | Math.round(android.graphics.Color.blue(base) * u + android.graphics.Color.blue(over) * t);
+    }
 
     // ---- 浅灰选中胶囊（2026-10-03 对齐 iOS 健康页参考图 ref-ios-health-cards.png）
     //
@@ -257,8 +346,8 @@ public final class Ui {
             ON_WARN        = 0xFFFFFFFF;
             FIELD_BG       = 0xFF2A2835;
             FIELD_ALT_BG   = 0xFF2A2835;
-            CHIP_BG        = 0xFF2A2835;
-            STOP_BG        = 0xFF383546;
+            CHIP_BG        = 0x1AFFFFFF;   // [毛玻璃 v3] 圆形按钮底：白 10%（demo 深色 `.icon-btn`）
+            STOP_BG        = 0x26FFFFFF;
             PLAN_BG        = 0xFF1C1B22;
             SEG_BG         = 0xFF2A2835;
             SEG_THUMB      = 0xFF4A4680;
@@ -285,20 +374,24 @@ public final class Ui {
             SHADOW         = 0x33000000;   // 纯黑底上阴影不可见，留着只为代码一致
             BRAND_G1       = 0xFF9D6BFF;
             BRAND_G2       = 0xFF5C9DFF;
-            // 液态玻璃（深色）：黑 45~60% 的玻璃体；纯黑底上白棱才看得见，所以深色档
-            // 严格按规范的 15% 白（浅色档相反，见下）。
-            GLASS          = 0xE61C1B22;   // #1C1C1E 90%（与 sheet 同档：深色档太透会把黑底"洗灰"）
-            GLASS_SHEET    = 0xF21C1B22;   // 95%
-            GLASS_BAR      = 0x99000000;   // #000 60%
-            GLASS_INPUT    = 0xD91C1B22;   // 紫黑 85%（深色输入胶囊：磨砂，背后字只留影子）
-            GLASS_RIM      = 0x26FFFFFF;   // 白 15%
+            // 毛玻璃 v3（深色）：demo 的仿玻璃回退档（见文件顶部注释），
+            // 白棱降到 22%（深色玻璃的棱光本来就更弱，demo `--rim: rgba(255,255,255,.22)`）。
+            GLASS          = 0xBD1E1C28;   // rgba(30,28,40,.74)
+            GLASS_SHEET    = 0xD11C1A24;   // rgba(28,26,36,.82)
+            GLASS_BAR      = 0xA8181620;   // rgba(24,22,32,.66)
+            GLASS_INPUT    = 0xC21E1C28;   // 76%（悬浮胶囊：宁可厚一档）
+            GLASS_RIM      = 0x38FFFFFF;   // 白 22%
             GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
+            GLASS_HAIRLINE = 0x29FFFFFF;   // 白 16%
+            GLASS_INNER    = 0x0FFFFFFF;   // 白 6%
+            SHEEN_1        = 0x29FFFFFF;   // 斜射高光 16%
+            SHEEN_2        = 0x0DFFFFFF;   // 5%
             SCRIM          = 0x73000000;   // 深色遮罩 45%
             SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
-            // Sadees 深色档：坞体仍用深色（比卡片再沉一档，黑底上不刺眼），选中反白改「白底深字」不变
-            SURFACE_G1     = 0xFF1C1B22;
-            SURFACE_G2     = 0xFF1A1922;
+            // 卡体同浅色档：半透明玻璃体（毛玻璃 v3），高光/内发光由 CardBg 叠。
+            SURFACE_G1     = GLASS;
+            SURFACE_G2     = GLASS;
             SEG_DOCK_BG    = 0xFF26242E;
             SEG_DOCK_FG    = 0xFF9A96AE;
             SEG_DOCK_ON    = 0xFFF2F1FA;
@@ -327,8 +420,8 @@ public final class Ui {
             ON_WARN        = 0xFFFFFFFF;
             FIELD_BG       = 0xFFEDEBF5;
             FIELD_ALT_BG   = 0xFFEDEBF5;
-            CHIP_BG        = 0xFFE0DDEB;
-            STOP_BG        = 0xFFDCD9EA;
+            CHIP_BG        = 0x6BFFFFFF;   // [毛玻璃 v3] 圆形按钮底：白 42%（demo `.icon-btn`）
+            STOP_BG        = 0x59FFFFFF;
             PLAN_BG        = 0xFFEDEBF5;
             SEG_BG         = 0xFFDBD8E8;
             SEG_THUMB      = 0xFFFFFFFF;
@@ -355,25 +448,24 @@ public final class Ui {
             SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
             BRAND_G1       = 0xFF7C4DFF;
             BRAND_G2       = 0xFF448AFF;
-            // 液态玻璃（浅色）：卡片体 88% 白 → 落在 #F2F2F7 上约 #FDFDFE，**和 iOS 的纯白卡片同档**。
-            // 2026-10-03 从 60% 提到 88%：60% 落在 #F2F2F7 上只有 #FAFAFC，卡片和页面底只差 8 级，
-            // 截图上看就是"一整块灰，没有卡片"——这正是"不是 iOS 26、太素"的直接原因。
-            // 玻璃感不再靠"透"，改由**上棱 1px 纯白 + 下棱微暗 + 发丝描边**承担（见 CardBg）。
-            GLASS          = 0xE0FFFFFF;   // 白 88%
-            // GLASS_SHEET 提到 95%：弹窗/抽屉里全是文字，本 ROM 的真模糊不生效（实测），
-            // 88% 时背后的对话正文会以 12% 透上来（子智能体弹窗里能读出一行行"鬼影"），
-            // 可读性优先 → 直接当"厚玻璃"用。这就是规范里"模糊不可用时的回退"。
-            GLASS_SHEET    = 0xF2FFFFFF;   // 白 95%
-            GLASS_BAR      = 0xCCFFFFFF;   // 白 80%
-            GLASS_INPUT    = 0xEBFFFFFF;   // 白 92%（浅色输入胶囊：磨砂，背后字只留影子）
-            GLASS_RIM      = 0xFFFFFFFF;   // 纯白 1px
-            GLASS_LO       = 0x0F000000;   // 黑 6%（下棱微暗）
+            // 毛玻璃 v3（浅色）：demo 的仿玻璃回退档 —— 卡片 66% 白、顶栏 60%、输入 68%、抽屉 76%。
+            GLASS          = 0xA8FFFFFF;   // 白 66%
+            GLASS_SHEET    = 0xC2FFFFFF;   // 白 76%
+            GLASS_BAR      = 0x99FFFFFF;   // 白 60%
+            GLASS_INPUT    = 0xADFFFFFF;   // 白 68%
+            GLASS_RIM      = 0xA6FFFFFF;   // 白 65%（顶部棱光）
+            GLASS_LO       = 0x12000000;   // 黑 7%（下棱微暗）
+            GLASS_HAIRLINE = 0x80FFFFFF;   // 白 50%（demo 的发丝线就是白的）
+            GLASS_INNER    = 0x1FFFFFFF;   // 白 12%
+            SHEEN_1        = 0x6BFFFFFF;   // 斜射高光 42%
+            SHEEN_2        = 0x1FFFFFFF;   // 12%
         SCRIM          = 0x2E000000;   // 浅色遮罩 18%（35% 压在薰衣草底上发黑 = 用户报的黑窗口）
             SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
             SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
-            // Sadees 浅色档：不透明奶白渐变卡 + 浅灰胶囊坞（白滑块）+ 浅紫灰次按钮
-            SURFACE_G1     = 0xFFFBFAFE;
-            SURFACE_G2     = 0xFFF2F0FA;
+            // 卡体改为**半透明玻璃体**（毛玻璃 v3）：卡片的"光"不再来自不透明奶白渐变，
+            // 而来自 CardBg 新加的 135° 斜射高光层 + 内发光；卡体本身只负责"透出环境背景"。
+            SURFACE_G1     = GLASS;
+            SURFACE_G2     = GLASS;
             SEG_DOCK_BG    = 0xFFDCD9E8;
             SEG_DOCK_FG    = 0xFF5F5F66;
             SEG_DOCK_ON    = 0xFFFFFFFF;
@@ -565,7 +657,32 @@ public final class Ui {
      * {@link #barHairline} 画的 1px。
      */
     public static GradientDrawable glassBar() {
-        return round(0, GLASS_BAR);
+        // [毛玻璃 v3] 顶栏玻璃 = 体 + 135° 斜射高光。一层 GradientDrawable 就能表达：
+        // 高光压在同色体上，等价于"同一色相、更高不透明度"的 TL→BR 三段渐变
+        // （原生 GradientDrawable 不支持叠层，见 over()）。
+        return new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[] { over(GLASS_BAR, SHEEN_1), over(GLASS_BAR, SHEEN_2), GLASS_BAR });
+    }
+
+    /**
+     * 两色叠加后的等效色：{@code top} 画在 {@code base} 之上。
+     *
+     * <p>为什么要它：demo 的玻璃是 `noise + sheen + tint` 三层背景图，
+     * 而原生 {@code GradientDrawable} 只能是一层 —— 把"体 + 斜射高光"先算成一个颜色，
+     * 才能用一条三段渐变表达出同样的观感（round2 的顶栏就是这么做的）。
+     */
+    public static int over(int base, int top) {
+        float ab = android.graphics.Color.alpha(base) / 255f;
+        float at = android.graphics.Color.alpha(top) / 255f;
+        float ao = at + ab * (1f - at);
+        if (ao <= 0f) return 0;
+        int r = Math.round((android.graphics.Color.red(top) * at
+                + android.graphics.Color.red(base) * ab * (1f - at)) / ao);
+        int g = Math.round((android.graphics.Color.green(top) * at
+                + android.graphics.Color.green(base) * ab * (1f - at)) / ao);
+        int b = Math.round((android.graphics.Color.blue(top) * at
+                + android.graphics.Color.blue(base) * ab * (1f - at)) / ao);
+        return (Math.round(ao * 255f) << 24) | (r << 16) | (g << 8) | b;
     }
 
     /** 顶栏下沿的发丝线（1px、浅色 #00000014 / 深色 #FFFFFF1A）。不要用 SEP 那种明显的灰线。 */
@@ -725,14 +842,27 @@ public final class Ui {
      *
      * <p>与 CardBg 的差别：不含左侧 3dp 强调条与顶部棱光/底部暗线（那些同样依赖自绘 Path）。
      */
-    public static android.graphics.drawable.GradientDrawable cardGrad(int radiusPx, int strokePx, int lineColor) {
-        android.graphics.drawable.GradientDrawable g =
+    public static android.graphics.drawable.Drawable cardGrad(int radiusPx, int strokePx, int lineColor) {
+        // [毛玻璃 v3] 版式：半透明玻璃体 + 白色发丝线 + 135° 斜射高光。
+        // 为什么还要这一版：自绘 CardBg 在**超高卡片**上会整片压暗成灰（见上方真机教训），
+        // 提问卡/审批卡这两张长卡必须走框架版；框架版没有自绘层，所以高光用一层
+        // GradientDrawable 叠上去补（LayerDrawable = 体 + 光，两层圆角一致）。
+        android.graphics.drawable.GradientDrawable body =
                 new android.graphics.drawable.GradientDrawable(
                         android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                        new int[] { SURFACE_G1, SURFACE_G2 });
-        g.setCornerRadius(radiusPx);
-        if (strokePx > 0) g.setStroke(strokePx, lineColor);
-        return g;
+                        new int[] { GLASS, GLASS });
+        body.setCornerRadius(radiusPx);
+        if (strokePx > 0) {
+            body.setStroke(strokePx, android.graphics.Color.alpha(GLASS) < 250
+                    ? GLASS_HAIRLINE : lineColor);
+        }
+        android.graphics.drawable.GradientDrawable sheen =
+                new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        new int[] { SHEEN_1, SHEEN_2, 0x00FFFFFF });
+        sheen.setCornerRadius(radiusPx);
+        return new android.graphics.drawable.LayerDrawable(
+                new android.graphics.drawable.Drawable[] { body, sheen });
     }
 
     /**
@@ -1180,9 +1310,9 @@ public final class Ui {
         // 同亮度，整块内容看着"卡里套了个脏灰框、文字贴在灰底上"。修法：card() 分两种——
         // **大面积可展开容器用 flatCard（纯色白）**，独立信息卡才用渐变体。
         if (accent == 0x00000000) {
-            // 折叠卡/大面积容器：纯色白卡 + 发丝描边 + 阴影（无渐变无高光棱）。
-            // 内嵌 FIELD_BG 元素与白底对比清晰，层级立刻回来。
-            c0.setBackground(new CardBg(dp(c, R_CARD), SURFACE, dp(c, 1f), LINE, 0, dp(c, 3f)));
+            // 折叠卡/大面积容器：厚玻璃（GLASS_SHEET 76%）+ 发丝描边 + 阴影（无强调条）。
+            // 用比卡片更厚的一档：这类卡里嵌着不透明的 FIELD_BG 说明块，太透会显得"脏"。
+            c0.setBackground(new CardBg(dp(c, R_CARD), GLASS_SHEET, dp(c, 1f), LINE, 0, dp(c, 3f)));
             c0.setElevation(dp(c, isDark() ? 2f : 3f));
         } else {
             c0.setBackground(new CardBg(dp(c, R_CARD),
@@ -1284,6 +1414,105 @@ public final class Ui {
     }
 
     /**
+     * 环境背景：毛玻璃的「下层内容」。
+     *
+     * <p>为什么非有它不可（demo 原话）：<i>「没有下层内容，玻璃只是白板」</i>。
+     * 旧版的页面底是均匀的 #E6E4F0，玻璃再透也只是透出同一块灰 —— 这一版把整页底换成
+     * 彩色渐变 + 四枚柔边光斑，玻璃才真的有东西可透。
+     *
+     * <p>逐值抄自存档 demo 的 `.ambient` / `body[data-palette=...]` 两段：
+     * 底是一条 178°（≈上→下）三段渐变；四枚光斑几何（-90/-70 左上 300、right -80/top 150 260、
+     * left -70/bottom -50 320、right -60/bottom 130 240）与 demo 完全一致，
+     * 只是把 CSS 的 `filter: blur(42px)` 换成**径向渐变柔边**——原生没有 backdrop-filter，
+     * 但这样一来"玻璃后面透出的本来就糊"，观感与真模糊一致。
+     *
+     * <p>深色档按 demo 的口径整体压暗：`brightness(.42) saturate(1.25)`（素雅档 .30 / 1.1）。
+     */
+    public static final class AmbientDrawable extends android.graphics.drawable.Drawable {
+
+        private final android.graphics.Paint basePaint =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint[] blobPaints = new android.graphics.Paint[4];
+        private final float[] bx = new float[4], by = new float[4], br = new float[4];
+        private int cacheW = -1, cacheH = -1, cachePal = -1;
+        private boolean cacheDark;
+
+        public AmbientDrawable() {
+            for (int i = 0; i < 4; i++) {
+                blobPaints[i] = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            }
+        }
+
+        private static float dp(float v) {
+            return v * android.content.res.Resources.getSystem().getDisplayMetrics().density;
+        }
+
+        private void ensure(int w, int h) {
+            if (cacheW == w && cacheH == h && cachePal == ambientPalette && cacheDark == dark) return;
+            cacheW = w;
+            cacheH = h;
+            cachePal = ambientPalette;
+            cacheDark = dark;
+            Palette pal = palette();
+            basePaint.setShader(new android.graphics.LinearGradient(0f, 0f, 0f, Math.max(1, h),
+                    pal.bg, new float[] { 0f, 0.46f, 1f },
+                    android.graphics.Shader.TileMode.CLAMP));
+
+            android.graphics.ColorFilter filter = null;
+            if (dark) {
+                android.graphics.ColorMatrix cm = new android.graphics.ColorMatrix();
+                cm.setSaturation(pal.mono ? 1.1f : 1.25f);
+                float s = pal.mono ? 0.30f : 0.42f;
+                android.graphics.ColorMatrix bm = new android.graphics.ColorMatrix();
+                bm.setScale(s, s, s, 1f);   // 亮度：ColorMatrix 没有 postScale，用 postConcat
+                cm.postConcat(bm);
+                filter = new android.graphics.ColorMatrixColorFilter(cm);
+            }
+            basePaint.setColorFilter(filter);
+
+            // 四枚光斑：demo 用「固定尺寸的圆 + blur(42px)」，这里换算成圆心/半径 + 径向柔边。
+            float[] r = { dp(150f), dp(130f), dp(160f), dp(120f) };
+            bx[0] = -dp(90f) + r[0];      by[0] = -dp(70f) + r[0];
+            bx[1] = w + dp(80f) - r[1];   by[1] = dp(150f) + r[1];
+            bx[2] = -dp(70f) + r[2];      by[2] = h + dp(50f) - r[2];
+            bx[3] = w + dp(60f) - r[3];   by[3] = h - dp(130f) - r[3];
+            int[] colors = { pal.a, pal.b, pal.c, pal.d };
+            float[] op = { pal.oa, pal.ob, pal.oc, pal.od };
+            for (int i = 0; i < 4; i++) {
+                br[i] = r[i];
+                float o = (pal.mono && dark) ? 0.28f : op[i];
+                int solid = (colors[i] & 0x00FFFFFF) | (Math.round(255f * o) << 24);
+                int clear = colors[i] & 0x00FFFFFF;
+                blobPaints[i].setShader(new android.graphics.RadialGradient(
+                        bx[i], by[i], Math.max(1f, r[i]),
+                        new int[] { solid, solid, clear },
+                        new float[] { 0f, 0.72f, 1f },
+                        android.graphics.Shader.TileMode.CLAMP));
+                blobPaints[i].setColorFilter(filter);
+            }
+        }
+
+        @Override
+        public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            ensure(w, h);
+            cv.save();
+            cv.translate(b.left, b.top);
+            cv.drawRect(0f, 0f, w, h, basePaint);
+            for (int i = 0; i < 4; i++) {
+                cv.drawCircle(bx[i], by[i], br[i], blobPaints[i]);
+            }
+            cv.restore();
+        }
+
+        @Override public void setAlpha(int a) { basePaint.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { /* 环境背景自管滤镜 */ }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
+    }
+
+    /**
      * 卡片底：圆角填充 + 1px 发丝描边 + 可选左侧 3dp 强调条。
      *
      * <p>为什么要自绘而不是 {@code LayerDrawable}：强调条要"被卡片圆角裁掉"才不露方角，
@@ -1346,6 +1575,57 @@ public final class Ui {
         private android.graphics.drawable.GradientDrawable gd;
         private float gdW = -1f, gdH = -1f;
 
+        // ---- 毛玻璃 v3：斜射高光（135°）+ 内发光
+        //
+        // 这两层是 demo 里"玻璃 vs 磨砂塑料"的第一区别：
+        //   · 斜射高光 —— 从左上方打一束 135° 白色渐变（42% → 12% @30% → 0 @58%）；
+        //   · 内发光   —— 边缘一圈 26px 的淡白雾，让玻璃"厚"起来。
+        // 都用自绘（`LinearGradient` / 逐级描边），不引入任何依赖。
+        private final android.graphics.Paint sheenPaint =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private android.graphics.Shader sheenShader;
+        private int sheenW = -1, sheenH = -1;
+
+        /** 半透明卡（玻璃）用**白色**发丝线；不透明卡仍用调用方传的深色发丝线。 */
+        private int lineColor() {
+            return android.graphics.Color.alpha(fill) < 250 ? GLASS_HAIRLINE : line;
+        }
+
+        private boolean glassy() {
+            return android.graphics.Color.alpha(fill) < 250;
+        }
+
+        private void ensureSheen(float w, float h) {
+            if (sheenShader != null && sheenW == (int) w && sheenH == (int) h) return;
+            sheenShader = new android.graphics.LinearGradient(0f, 0f, w, h,
+                    new int[] { SHEEN_1, SHEEN_2, 0x00FFFFFF },
+                    new float[] { 0f, 0.30f, 0.58f },
+                    android.graphics.Shader.TileMode.CLAMP);
+            sheenPaint.setShader(sheenShader);
+            sheenW = (int) w;
+            sheenH = (int) h;
+        }
+
+        /** 内发光：沿边缘画三圈逐级变淡的描边（近似 CSS `inset 0 0 26px`）。 */
+        private void drawInnerGlow(android.graphics.Canvas cv, float w, float h) {
+            int glow = android.graphics.Color.alpha(GLASS_INNER);
+            if (glow <= 0) return;
+            float band = Math.max(1f, stroke * 1.6f);
+            float rad = Math.max(0f, radius - stroke);
+            p.setShader(null);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(band * 2f);
+            float[] f = { 0.85f, 0.42f, 0.18f };
+            for (int i = 0; i < f.length; i++) {
+                float in = Math.max(0f, stroke + i * band * 1.6f);
+                if (in * 2f >= w || in * 2f >= h) break;
+                int a = Math.round(glow * f[i]);
+                p.setColor((GLASS_INNER & 0x00FFFFFF) | (a << 24));
+                cv.drawRoundRect(in, in, w - in, h - in, rad, rad, p);
+            }
+            p.setStyle(android.graphics.Paint.Style.FILL);
+        }
+
         private void ensureGd(float w, float h) {
             if (gd != null && gdW == w && gdH == h) return;
             android.graphics.drawable.GradientDrawable g =
@@ -1361,7 +1641,7 @@ public final class Ui {
             } else {
                 g.setColor(fill);
             }
-            g.setStroke(Math.max(1, (int) Math.ceil(stroke)), line);
+            g.setStroke(Math.max(1, (int) Math.ceil(stroke)), lineColor());
             gd = g;
             gdW = w;
             gdH = h;
@@ -1387,6 +1667,16 @@ public final class Ui {
             gd.setBounds(b.left + (int) inset, b.top + (int) inset,
                     b.right - (int) inset, b.bottom - (int) inset);
             gd.draw(cv);
+
+            // ①.5 毛玻璃 v3：斜射高光（135°）+ 内发光 —— 只有半透明体才叠。
+            if (glassy()) {
+                cv.save();
+                cv.clipPath(shape);
+                ensureSheen(w, h);
+                cv.drawRect(0f, 0f, w, h, sheenPaint);
+                cv.restore();
+                drawInnerGlow(cv, w, h);
+            }
 
             // ② 左侧 3dp 强调条（被卡片圆角裁掉才不露方角）
             if (android.graphics.Color.alpha(accent) != 0 && barW > 0f) {
@@ -1815,14 +2105,33 @@ public final class Ui {
     }
 
     /**
+     * 玻璃次按钮底（demo 的 `.btn-ghost`）：半透明白玻璃 + 白棱发丝线。
+     *
+     * <p>用在玻璃卡上 —— 卡体本身已经是玻璃，按钮再套不透明的 {@link #BTN_SOFT}
+     * 就是在玻璃上贴一块死色块（"脏"的来源）。与 {@link #pillButton} 的尺寸/热区完全一致，
+     * 只有底色不同。
+     */
+    public static GradientDrawable ghostPill() {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { over(GLASS, SHEEN_1), GLASS });
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setCornerRadius(999f);
+        d.setStroke(1, GLASS_HAIRLINE);
+        return d;
+    }
+
+    /**
      * 主色渐变填充（上 #0A84FF → 下 #0071E3）。
      *
      * @param radiusDp 圆角；传 {@code 999} = 胶囊（按钮）。**气泡不能传 999**：
      *                 圆角会被夹到 min(宽,高)/2，多行气泡会变成"体育场形"。
      */
     public static GradientDrawable brandGradient(float radiusDp) {
+        // [毛玻璃 v3] 渐变方向 TOP_BOTTOM → **TL_BR（135°）**：demo 里用户气泡与主按钮
+        // 都是 `linear-gradient(135deg, --brand-g1, --brand-g2)` —— 光从左上来，
+        // 与玻璃件的斜射高光是同一个光源方向（同一个光源，画面才"成立"）。
         GradientDrawable d = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM, new int[] { BRAND_G1, BRAND_G2 });
+                GradientDrawable.Orientation.TL_BR, new int[] { BRAND_G1, BRAND_G2 });
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(radiusDp);
         return d;
