@@ -4107,6 +4107,14 @@ public final class MainActivity extends Activity implements
     private int dlSeq = 0;
     /** 当前权限 preset（网关 permission 回帧后写入；进会话时用来给 chip 打底）。 */
     private String lastPermissionPreset = "";
+    /**
+     * 这次「权限」回帧要不要**弹面板**。
+     *
+     * <p>[2026-10-06 用户报 bug] 进会话时会静默拉一次权限给 chip 打底，而回调原来**无条件**
+     * 弹面板 ⇒ 用户表现「每次点开任务都自动弹出权限选择」。改成只有点了 chip 才弹；
+     * 静默那次只刷 chip 文案。用户在 chip 上手动改是主要入口。
+     */
+    private boolean permissionPanelWanted = false;
 
     /** 下载进度出口：生成物面板用它原地更新某一行的文案（不依赖 ChatItem）。 */
     public interface ProgressSink {
@@ -4668,6 +4676,7 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没连上电脑端，暂时改不了权限", Toast.LENGTH_LONG).show();
             return;
         }
+        permissionPanelWanted = true;   // [2026-10-06] 只有点了 chip 才弹面板，见 onPermissionOptions
         gw.requestPermissionOptions(currentSessionId);
     }
 
@@ -4685,6 +4694,10 @@ public final class MainActivity extends Activity implements
     @Override
     public void onPermissionOptions(JSONObject frame) {
         if (frame == null) return;
+        // [2026-10-06 用户报 bug] 一次性消费：**只有用户点了 chip** 才弹面板。
+        // 进会话/切会话时那次是静默打底（requestPermissionQuietly），只刷 chip、不弹面板。
+        boolean wanted = permissionPanelWanted;
+        permissionPanelWanted = false;
         String sid = frame.optString("sessionId", "");
         if (!sid.isEmpty() && !sid.equals(currentSessionId)) return;
 
@@ -4711,6 +4724,9 @@ public final class MainActivity extends Activity implements
         // ConversationView.setPermissionChip 自己会拼 "权限 · " + label，
         // 两边都拼就会出现「权限 · 权限 完全访问」这种重复前缀（模拟器实测截图坐实）。
         if (convo != null && !cur.isEmpty()) convo.setPermissionChip(permissionLabel(cur));
+
+        // 静默打底（用户没点 chip）：chip 已刷好，到此为止 —— 不弹面板，也不提示"没有可选项"。
+        if (!wanted) return;
 
         ArrayList<com.dsh.mobile.ui.ModelSheet.Opt> opts = new ArrayList<>();
         JSONArray arr = frame.optJSONArray("options");
