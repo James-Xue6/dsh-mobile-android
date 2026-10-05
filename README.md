@@ -34,10 +34,14 @@ pwsh -File .\pc-plugin\install.ps1
 抽屉里第一屏就是「手机接入」卡片，点 **「下载 App」**：
 让**手机连同一个 WiFi** 扫弹出的二维码，直接下载安装（安装包由你这台电脑发出，局域网 8099 端口，不经网盘或 CDN）。
 
-不方便扫码也可以直接从公开地址下载：
+不方便扫码也可以直接从公开地址下载（**这两个链接永远指向最新版**）：
 
-- CDN（国内通常更快）：`https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk`
-- GitHub：`https://github.com/James-Xue6/dsh-mobile-android/raw/v0.8/dist/dsh-mobile.apk`
+- CDN（国内通常更快）：`https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/dsh-mobile.apk`
+- GitHub：`https://github.com/James-Xue6/dsh-mobile-android/raw/main/dist/dsh-mobile.apk`
+
+> 想要固定版本就把 `@main` 换成 tag，例如 `@v0.86.9`。
+> 当前最新版号可以读 `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/version.json`（`versionCode` 越大越新）。
+> 每次发版脚本都会刷新 `@main` 的 CDN 缓存，所以上面两条**不会滞后**。
 
 ### ④ 扫码配对
 
@@ -46,6 +50,23 @@ pwsh -File .\pc-plugin\install.ps1
 
 > 电脑端的协议层是第三方 MIT 插件 `dsh-plugin-mobile-gateway`，它**已声明为本插件的依赖**：
 > 安装脚本会一并登记，挂载也由本插件的组合声明负责 —— 不需要你单独装第二个插件。
+
+### ⑤ 更新（已经装过的怎么升）
+
+**手机 App** —— 打开就会提示新版本（启动时查一次，**6 小时内只查一次**）；
+没弹就去 **设置 → 关于 → 检查更新** 手动点一次。装完**不用重新扫码、不用重新配对**。
+
+**电脑端插件** —— 拉一下仓库再重跑安装脚本，然后重启一次 DSH：
+
+```powershell
+cd dsh-mobile-android
+git pull
+pwsh -File .\pc-plugin\install.ps1
+```
+
+> 为什么必须重跑：这些补丁改的是第三方网关包的 `lib/*.mjs`（在 `node_modules` 里），
+> **网关升级/重装会把它们覆盖掉**。脚本幂等，重复跑没有副作用 ——
+> 它会自动重放全部 4 个网关补丁：跨会话提醒 / hello 带公网地址 / 地址变化广播 / 通用文件附件。
 
 ---
 

@@ -37,10 +37,14 @@ The first screen of the drawer is the "Mobile access" card. Click **"Download ap
 **with your phone on the same Wi-Fi** to download and install it (the APK is served straight from your own
 computer on LAN port 8099 — no cloud drive, no CDN).
 
-You can also download the APK directly:
+You can also download the APK directly (**these two links always point to the latest build**):
 
-- CDN (usually faster in mainland China): `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.81/dist/dsh-mobile.apk`
-- GitHub: `https://github.com/James-Xue6/dsh-mobile-android/raw/v0.8/dist/dsh-mobile.apk`
+- CDN (usually faster in mainland China): `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/dsh-mobile.apk`
+- GitHub: `https://github.com/James-Xue6/dsh-mobile-android/raw/main/dist/dsh-mobile.apk`
+
+> Pin a version by replacing `@main` with a tag, e.g. `@v0.86.9`. The current version can be read from
+> `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/version.json` (larger `versionCode` = newer).
+> The release script purges the `@main` CDN cache on every release, so these links never lag behind.
 
 ### 4. Pair by QR code
 
@@ -51,6 +55,23 @@ switch to the public address when you go out, with no manual typing.
 > The protocol layer is the third-party MIT plugin `dsh-plugin-mobile-gateway`, declared as a **dependency**
 > of this plugin: the install script registers it and this plugin's own bundle patch mounts its row, so you
 > never install a second plugin by hand.
+
+### 5. Updating (if you already installed it)
+
+**Phone app** — it prompts you on launch (checked once per launch, **at most once every 6 hours**).
+If no prompt appears, use **Settings → About → Check for updates**. Updating needs **no re-scan and no re-pairing**.
+
+**PC plugin** — pull the repo and re-run the installer, then restart DSH once:
+
+```powershell
+cd dsh-mobile-android
+git pull
+pwsh -File .\pc-plugin\install.ps1
+```
+
+> Why re-run: the patches modify the third-party gateway package's `lib/*.mjs` (inside `node_modules`), and a
+> gateway upgrade/reinstall **overwrites them**. The script is idempotent — re-running is safe, and it replays
+> all four gateway patches: cross-session notifications / hello carries the public URL / route broadcast / generic file attachments.
 
 ---
 
