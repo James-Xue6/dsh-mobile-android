@@ -194,6 +194,12 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
   `total = billedInput + outputTokens`、`缓存命中 = cacheReadTokens / billedInput`
   —— 用真实数字反验过：`2,599,058 + 233,278,208 + 436,079 = 236,313,345`、命中 99%，与电脑端逐位一致
 
+**修「进会话自动弹权限面板」（用户点名）**
+- 用户反馈：「每次点开任务都会自动弹出权限选择，这个不用这样吧，我手动改不就行了」
+- 根因：进/切会话时会**静默**拉一次权限给 chip 打底，而 `onPermissionOptions()` 末尾
+  **无条件**弹面板 ⇒ 那次静默回帧也把面板弹了出来
+- 现在只有**点了 chip** 才弹；静默那次只刷 chip 文案就返回（连"没有可选项"的 Toast 也不再弹）
+
 ### v0.86.9（已发布）
 
 **四项优化（用户点名）**
