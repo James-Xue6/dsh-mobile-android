@@ -3171,45 +3171,218 @@ public final class MainActivity extends Activity implements
                 });
     }
 
-    /** 用量帧：算上下文占用百分比填到 chip 上。 */
+    /**
+     * 用量帧：算上下文占用百分比填到 chip 上。
+     *
+     * <p>[2026-10-06 实测修正] 真实回帧的 {@code contextPressure} 只有
+     * {@code contextWindow / pressureTokens / projectedTokens}，**没有** {@code surfaceTokens}
+     * —— 原来算的是 {@code pressureTokens + surfaceTokens}，等于把后一项当 0。
+     */
     @Override
     public void onContextUsage(org.json.JSONObject frame) {
         if (frame == null) return;
         lastUsage = frame;
-        org.json.JSONObject cp = frame.optJSONObject("contextPressure");
-        if (cp == null || convo == null) return;
-        long window = cp.optLong("contextWindow", 0L);
-        long used = cp.optLong("pressureTokens", 0L) + cp.optLong("surfaceTokens", 0L);
-        if (window <= 0L) return;
-        int pct = (int) Math.round(100.0 * used / (double) window);
-        convo.setUsageLabel(pct + "%");
+        updateUsageChip(frame);
     }
 
-    /** 点「用量」chip：把 token 与上下文占用的明细说清楚。 */
+    /** 执行统计帧（点开「用量」面板时按需拉的那一份）。 */
+    @Override
+    public void onSessionStats(org.json.JSONObject frame) {
+        if (frame == null) return;
+        String sid = frame.optString("sessionId", "");
+        if (!sid.isEmpty() && !currentSessionId.isEmpty() && !sid.equals(currentSessionId)) return;
+        lastUsage = frame;                  // 它比 context-usage 更全（多 sessionStats），直接顶掉
+        updateUsageChip(frame);
+        if (usageDlg != null) renderUsage(frame);
+    }
+
+    /** 用一份用量帧刷「用量」chip 上的上下文占用百分比。 */
+    private void updateUsageChip(org.json.JSONObject frame) {
+        if (frame == null || convo == null) return;
+        org.json.JSONObject cp = frame.optJSONObject("contextPressure");
+        if (cp == null) return;
+        long window = cp.optLong("contextWindow", 0L);
+        if (window <= 0L) return;
+        convo.setUsageLabel(Math.round(100.0 * contextUsedTokens(cp) / window) + "%");
+    }
+
+    /** 上下文已用：优先 {@code projectedTokens}（含本轮预计），退回 {@code pressureTokens}。 */
+    private static long contextUsedTokens(org.json.JSONObject cp) {
+        if (cp == null) return 0L;
+        long projected = cp.optLong("projectedTokens", 0L);
+        return projected > 0L ? projected : cp.optLong("pressureTokens", 0L);
+    }
+
+    /**
+     * 取 token 用量四件套。
+     *
+     * <p>**真实回帧是扁平的**（`uncachedInputTokens` 直接挂在 `tokenUsage` 上，实测于
+     * 2026-10-06），但协议文档的示例多了一层 `totals` —— 两种都兼容。
+     */
+    private static org.json.JSONObject usageTotals(org.json.JSONObject frame) {
+        if (frame == null) return null;
+        org.json.JSONObject tu = frame.optJSONObject("tokenUsage");
+        if (tu == null) return null;
+        org.json.JSONObject nested = tu.optJSONObject("totals");
+        return nested != null ? nested : tu;
+    }
+
+    /**
+     * 点「用量」chip：弹面板说清本会话的 token 用量。
+     *
+     * <p>**公式与 PC 端同源**（抄自 DSH 客户端 StatsPills 的实现）：
+     * <pre>
+     * billedInput = uncachedInputTokens + cacheReadTokens + cacheWriteTokens
+     * total       = billedInput + outputTokens
+     * 缓存命中率   = cacheReadTokens / billedInput
+     * </pre>
+     * 数据源用 {@code session-stats}（比 {@code context-usage} 多一份 sessionStats：
+     * 轮数/步数/耗时/解码速率，PC 端底部那条统计就是它）。
+     */
     @Override
     public void onUsageTap() {
-        org.json.JSONObject f = lastUsage;
-        if (f == null) {
-            Toast.makeText(this, "还没拿到用量（等连上电脑端再试）", Toast.LENGTH_SHORT).show();
+        if (currentSessionId.isEmpty()) {
+            Toast.makeText(this, "先打开一条对话，再看它的用量", Toast.LENGTH_SHORT).show();
             return;
         }
-        org.json.JSONObject cp = f.optJSONObject("contextPressure");
-        org.json.JSONObject tu = f.optJSONObject("tokenUsage");
-        org.json.JSONObject totals = tu == null ? null : tu.optJSONObject("totals");
-        StringBuilder sb = new StringBuilder();
+        if (!isOnline()) {
+            Toast.makeText(this, "还没连上电脑端，看不了用量", Toast.LENGTH_LONG).show();
+            return;
+        }
+        showUsagePanel();
+        renderUsage(lastUsage);                    // 手上那份先画出来（秒出，不空等）
+        gw.requestSessionStats(currentSessionId);  // 再拉最新的
+    }
+
+    /** 建「用量」面板（配方与生成物面板一致：面板底 + 抓柄 + 遮罩，不挂窗口模糊）。 */
+    private void showUsagePanel() {
+        if (usageDlg != null) {
+            try { usageDlg.dismiss(); } catch (Throwable ignored) { }
+            usageDlg = null;
+        }
+        usageDlg = new Dialog(this);
+        LinearLayout box = Ui.sheetCard(this);
+        box.addView(Ui.grabber(this));
+        box.addView(Ui.text(this, "用量", Ui.S_TITLE3, Ui.INK, true));
+        TextView sub = Ui.text(this, "本会话累计 · 与电脑端同一套算法", Ui.S_FOOT, Ui.INK_SUB, false);
+        sub.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
+        box.addView(sub);
+
+        usageRows = Ui.col(this);
+        box.addView(usageRows);
+
+        TextView close = Ui.secondaryButton(this, "关闭");
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(this, 10);
+        close.setLayoutParams(clp);
+        close.setOnClickListener(v -> usageDlg.dismiss());
+        box.addView(close);
+
+        usageDlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        usageDlg.setContentView(box);
+        usageDlg.setCanceledOnTouchOutside(true);
+        Window w = usageDlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT);
+            Ui.applyScreenshotPolicy(w);
+            w.setDimAmount(0.35f);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        usageDlg.show();
+    }
+
+    /** 画用量明细。{@code frame} 为 null 时给空态。 */
+    private void renderUsage(org.json.JSONObject frame) {
+        if (usageRows == null) return;
+        usageRows.removeAllViews();
+        if (frame == null) {
+            usageRows.addView(usageHint("还没有用量（跑一轮对话后再看）"));
+            return;
+        }
+        org.json.JSONObject t = usageTotals(frame);
+        if (t == null) {
+            usageRows.addView(usageHint("这条会话还没有 token 用量"));
+        } else {
+            long uncached = t.optLong("uncachedInputTokens", t.optLong("inputTokens", 0L));
+            long cacheRead = t.optLong("cacheReadTokens", 0L);
+            long cacheWrite = t.optLong("cacheWriteTokens", 0L);
+            long output = t.optLong("outputTokens", 0L);
+            long billed = uncached + cacheRead + cacheWrite;   // 与 PC 端 billedInputTokens 一致
+            long total = billed + output;
+            usageRows.addView(usageRow("合计", fmtTokens(total) + " tok", true));
+            usageRows.addView(usageRow("缓存命中",
+                    billed <= 0L ? "—" : Math.round(100.0 * cacheRead / billed) + "%", false));
+            usageRows.addView(usageRow("未缓存输入", fmtTokens(uncached) + " tok", false));
+            usageRows.addView(usageRow("缓存读取", fmtTokens(cacheRead) + " tok", false));
+            if (cacheWrite > 0L) usageRows.addView(usageRow("缓存写入", fmtTokens(cacheWrite) + " tok", false));
+            usageRows.addView(usageRow("输出", fmtTokens(output) + " tok", false));
+        }
+        org.json.JSONObject cp = frame.optJSONObject("contextPressure");
         if (cp != null) {
             long window = cp.optLong("contextWindow", 0L);
-            long used = cp.optLong("pressureTokens", 0L) + cp.optLong("surfaceTokens", 0L);
-            sb.append("上下文 ").append(fmtTokens(used)).append(" / ").append(fmtTokens(window));
-            if (window > 0) sb.append("（").append(Math.round(100.0 * used / window)).append("%）");
+            long used = contextUsedTokens(cp);
+            if (window > 0L) {
+                usageRows.addView(usageRow("上下文占用", fmtTokens(used) + " / " + fmtTokens(window)
+                        + "（" + Math.round(100.0 * used / window) + "%）", false));
+            }
         }
-        if (totals != null) {
-            if (sb.length() > 0) sb.append("\n");
-            sb.append("累计输入 ").append(fmtTokens(totals.optLong("inputTokens", 0L)))
-              .append(" · 输出 ").append(fmtTokens(totals.optLong("outputTokens", 0L)))
-              .append(" · 缓存读 ").append(fmtTokens(totals.optLong("cacheReadTokens", 0L)));
+        org.json.JSONObject st = frame.optJSONObject("sessionStats");
+        if (st != null) {
+            usageRows.addView(usageRow("轮数 · 步数",
+                    st.optInt("turns", 0) + " 轮 · " + st.optInt("steps", 0) + " 步", false));
+            long decodeMs = st.optLong("decodeMs", 0L);
+            long decodeTokens = st.optLong("decodeTokens", 0L);
+            if (decodeMs > 0L && decodeTokens > 0L) {
+                usageRows.addView(usageRow("解码速率",
+                        Math.round(decodeTokens * 1000.0 / decodeMs) + " tok/s", false));
+            }
+            long llmMs = st.optLong("llmMs", 0L);
+            long toolMs = st.optLong("toolMs", 0L);
+            if (llmMs > 0L || toolMs > 0L) {
+                usageRows.addView(usageRow("耗时",
+                        "模型 " + fmtDuration(llmMs) + " · 工具 " + fmtDuration(toolMs), false));
+            }
+            long ttftMs = st.optLong("ttftMs", 0L);
+            int ttftSteps = st.optInt("ttftSteps", 0);
+            if (ttftMs > 0L && ttftSteps > 0) {
+                usageRows.addView(usageRow("首 token 平均", fmtDuration(ttftMs / ttftSteps), false));
+            }
         }
-        Toast.makeText(this, sb.length() == 0 ? "暂无用量数据" : sb.toString(), Toast.LENGTH_LONG).show();
+    }
+
+    /** 用量面板的一行：左标签、右数值。 */
+    private LinearLayout usageRow(String label, String value, boolean strong) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(Ui.dp(this, 2), Ui.dp(this, strong ? 7 : 5), Ui.dp(this, 2), Ui.dp(this, strong ? 7 : 5));
+        TextView l = Ui.text(this, label, strong ? Ui.S_BODY : Ui.S_CAP1, Ui.INK_SUB, false);
+        TextView v = Ui.text(this, value, strong ? Ui.S_TITLE3 : Ui.S_BODY, Ui.INK, strong);
+        v.setGravity(Gravity.END);
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        r.addView(l);
+        r.addView(v, vlp);
+        return r;
+    }
+
+    /** 用量面板里的一行提示（空态 / 说明）。 */
+    private TextView usageHint(String text) {
+        TextView n = Ui.text(this, text, Ui.S_FOOT, Ui.INK_FAINT, false);
+        n.setPadding(Ui.dp(this, 2), Ui.dp(this, 10), Ui.dp(this, 2), Ui.dp(this, 10));
+        return n;
+    }
+
+    /** 时长可读写法：1h23m / 2m27s / 8.3s。 */
+    private static String fmtDuration(long ms) {
+        if (ms <= 0L) return "—";
+        if (ms >= 3600_000L) return (ms / 3600_000L) + "h" + ((ms % 3600_000L) / 60_000L) + "m";
+        if (ms >= 60_000L) return (ms / 60_000L) + "m" + ((ms % 60_000L) / 1000L) + "s";
+        return String.format(java.util.Locale.US, "%.1fs", ms / 1000.0);
     }
 
     /**
@@ -3927,6 +4100,9 @@ public final class MainActivity extends Activity implements
     /** 生成物面板（底部 sheet）：只列本会话**产出的文件**。 */
     private Dialog artifactsDlg;
     private LinearLayout artifactsRows;
+    /** 「用量」面板（底部 sheet）：token 用量 + 上下文占用 + 执行统计。 */
+    private Dialog usageDlg;
+    private LinearLayout usageRows;
     /** 下载序号：同一毫秒内连点两个文件时避免 requestId 撞车。 */
     private int dlSeq = 0;
     /** 当前权限 preset（网关 permission 回帧后写入；进会话时用来给 chip 打底）。 */

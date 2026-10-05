@@ -172,6 +172,28 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
   **打开即出、不用等网络**（不再有「正在读取…」）；**目录下钻 / 「← 返回上级」/ 面包屑全部删除**
 - 顺带删掉旧方案的 `ui/ArtifactSheet.java`（无调用点、且依赖旧的目录型模型）
 
+**新增「用量」面板（用户点名）**
+- 底部 chip 行的「用量」原来是**弹个 Toast**，而且读的字段是错的 —— 它取
+  `tokenUsage.totals.inputTokens` 和 `contextPressure.surfaceTokens`，**这两个字段在真实回帧里根本不存在**，
+  所以「累计输入」恒显示 0
+- 现在点开是**完整数据面板**（公式与电脑端**同源**，抄自 DSH 客户端 StatsPills）：
+  ```
+  合计        265.0M tok
+  缓存命中    99%
+  未缓存输入  2.9M tok
+  缓存读取    261.7M tok
+  输出        474.0k tok
+  ────────────────────
+  上下文占用  228.6k / 1.0M（23%）
+  轮数 · 步数 29 轮 · 510 步
+  解码速率    267 tok/s
+  耗时        模型 1h23m · 工具 2m27s
+  ```
+- 数据源改用 `session-stats`（比 `context-usage` 多一份 `sessionStats`，也就是 PC 端底部那条统计）
+- 公式：`billedInput = uncachedInputTokens + cacheReadTokens + cacheWriteTokens`、
+  `total = billedInput + outputTokens`、`缓存命中 = cacheReadTokens / billedInput`
+  —— 用真实数字反验过：`2,599,058 + 233,278,208 + 436,079 = 236,313,345`、命中 99%，与电脑端逐位一致
+
 ### v0.86.9（已发布）
 
 **四项优化（用户点名）**

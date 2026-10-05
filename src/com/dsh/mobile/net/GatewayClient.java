@@ -111,9 +111,25 @@ public final class GatewayClient {
 
         /**
          * 用量（PROTOCOL §5 context-usage）：
-         * {@code {tokenUsage:{totals:{…}}, contextPressure:{contextWindow,pressureTokens,surfaceTokens}}}
+         * {@code {tokenUsage:{uncachedInputTokens,outputTokens,cacheReadTokens,cacheWriteTokens},
+         * contextPressure:{contextWindow,pressureTokens,projectedTokens}}}
+         *
+         * <p><b>2026-10-06 实测修正</b>：真实回帧里 {@code tokenUsage} 是**扁平**的
+         * （`uncachedInputTokens` 等直接挂在上层），**没有** `totals` 包装、
+         * 也**没有** `inputTokens` / `surfaceTokens` 这两个字段（协议文档里的示例是旧的）。
+         * 解析时两种情况都要兼容，见 {@code MainActivity#usageTotals}。
          */
         default void onContextUsage(JSONObject frame) { }
+
+        /**
+         * 执行统计（PROTOCOL §5 session-stats）：
+         * {@code {sessionId, asOfSeq, sessionStats:{turns,steps,llmMs,toolMs,ttftMs,ttftSteps,
+         * decodeMs,decodeTokens}, tokenUsage:{…}, contextPressure:{…}}}。
+         *
+         * <p>比 {@code context-usage} 多一份 {@code sessionStats}（轮数 / 步数 / 耗时 / 解码速率），
+         * 正好是 PC 端「用量」面板 + 底部统计条的那套数据 —— 手机端「用量」面板用它。
+         */
+        default void onSessionStats(JSONObject frame) { }
 
         /** 因失败而安排重连时回调（用于自动切换内网/公网）。 */
         default void onReconnectScheduled(String reason) { }
@@ -1118,6 +1134,21 @@ public final class GatewayClient {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * 执行统计 + token 用量（「用量」面板的数据源）。
+     *
+     * <p>与 {@link #requestContextUsage} 的区别：这条**多给 {@code sessionStats}**
+     * （轮数 / 步数 / LLM 与工具耗时 / 首 token / 解码速率），也就是 PC 端底部那条
+     * 「28 轮 470 步 · 267 tok/s」的来源。点开用量面板时按需拉一次最新的。
+     */
+    public void requestSessionStats(String sessionId) {
+        try {
+            JSONObject o = base("session-stats");
+            o.put("sessionId", sessionId);
+            sendRaw(o);
+        } catch (Throwable ignored) { }
+    }
+
     /** 任务列表基线（进会话时拉一次；之后由 tasks-updated 实时推）。 */
     // requestTasks 在下方（原本就有），这里不再重复定义。
 
@@ -1619,6 +1650,9 @@ public final class GatewayClient {
                 break;
             case "context-usage":
                 l.onContextUsage(f);
+                break;
+            case "session-stats":
+                l.onSessionStats(f);
                 break;
             case "tasks":
             case "tasks-updated":

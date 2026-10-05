@@ -71,6 +71,21 @@
 - [x] **通用文件附件（PDF / Office / 压缩包）** —— 见「四」表 ⑤；网关补丁 `patch-gateway-file-upload.ps1`。
 - [x] **消息文本「点一次不能立即选范围」** —— 见「四」表 ③。
 - [x] **chip 行「权限」（对齐 PC 端 permission presets）** —— 见「四」表 ④。
+- [x] **「用量」面板（2026-10-06 用户点名）**：原来点「用量」只弹个 Toast，而且读的字段
+  (`tokenUsage.totals.inputTokens` / `contextPressure.surfaceTokens`) **在真实回帧里不存在** ⇒ 恒显示 0。
+  现在点开是完整面板（合计 / 缓存命中 / 未缓存输入 / 缓存读取 / 缓存写入 / 输出 / 上下文占用 /
+  轮数·步数 / 解码速率 / 耗时 / 首 token）。
+  - **公式与 PC 端同源**：`billedInput = uncachedInputTokens + cacheReadTokens + cacheWriteTokens`、
+    `total = billedInput + outputTokens`、`缓存命中 = cacheReadTokens / billedInput`
+    （抄自 DSH 客户端 `StatsPills` 的 `billedInputTokens` / `cacheHitPercent`）。
+  - **真实回帧形状（实测 2026-10-06，很关键）**：`tokenUsage` 是**扁平**的
+    （`{uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens}`），
+    **没有 `totals` 包装**、**没有 `inputTokens`**；`contextPressure` 只有
+    `{contextWindow, pressureTokens, projectedTokens}`，**没有 `surfaceTokens`**。
+    协议文档 PROTOCOL.md 里的示例是**旧的**。代码两种都兼容（见 `usageTotals()`）。
+  - 数据源：`session-stats`（比 `context-usage` 多 `sessionStats`：轮数/步数/耗时/解码速率）。
+  - 数值反验：`2,599,058 + 233,278,208 + 436,079 = 236,313,345`、命中 99%，与 PC 端逐位一致；
+    本会话实测 267 tok/s，与 PC 端底部条一致。
 - [ ] 助手消息里的 **markdown 表格**未渲染（当前按纯文本显示）。
 - [ ] 大文件（>24MB）走 `uploadStream` 分块上传（**未实现**；当前单帧 base64 上限单文件 24MB / 合计 48MB，**未压测**）。
 

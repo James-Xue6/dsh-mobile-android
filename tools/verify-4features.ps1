@@ -84,7 +84,7 @@ function Tap-Text([string]$xml, [string]$text) {
 function Back { Adb @('shell', 'input', 'keyevent', '4') | Out-Null; Start-Sleep -Milliseconds 800 }
 
 # ---- 0. 设备与安装 ---------------------------------------------------
-Step "0/6 设备与安装"
+Step "0/7 设备与安装"
 $devs = (Adb @('devices')) -join "`n"
 Say ($devs.Trim())
 $online = [regex]::Matches($devs, '(\S+)\s+device\b')
@@ -106,7 +106,7 @@ if ($SkipInstall) {
 }
 
 # ---- 1. 打开 App 并进对话页 -----------------------------------------
-Step "1/6 打开 App"
+Step "1/7 打开 App"
 Adb @('shell', 'am', 'force-stop', 'com.dsh.mobile') | Out-Null
 Start-Sleep -Milliseconds 600
 Adb @('shell', 'am', 'start', '-n', 'com.dsh.mobile/.MainActivity') | Out-Null
@@ -134,7 +134,7 @@ else {
 }
 
 # ---- 2. 任务④ 权限 chip --------------------------------------------
-Step "2/6 任务④：chip 行有没有「权限」"
+Step "2/7 任务④：chip 行有没有「权限」"
 Check "chip 行出现「权限」" (Has-Text $xml '权限') ""
 Check "chip 行出现「生成物」" (Has-Text $xml '生成物') ""
 if (Has-Text $xml '权限') {
@@ -152,7 +152,7 @@ if (Has-Text $xml '权限') {
 }
 
 # ---- 3. 任务② 加号三选项 + 附件条 -----------------------------------
-Step "3/6 任务②：加号弹「文件 / 相册 / 拍照」"
+Step "3/7 任务②：加号弹「文件 / 相册 / 拍照」"
 $xml = Dump-Ui '04-chat'
 # 加号在输入条最左侧；uiautomator 拿不到 contentDescription 时按坐标兜底
 $tapPlus = $false
@@ -182,7 +182,7 @@ Check "面板说明了「先暂存、一起发送」" ((Has-Contains $att '一�
 Back
 
 # ---- 4. 任务① 生成物面板 -------------------------------------------
-Step "4/6 任务①：点「生成物」出面板"
+Step "4/7 任务①：点「生成物」出面板"
 $xml = Dump-Ui '06-chat-again'
 if (Has-Text $xml '生成物') {
   Tap-Text $xml '生成物' | Out-Null
@@ -199,8 +199,28 @@ if (Has-Text $xml '生成物') {
   Fail "对话页没有「生成物」chip"
 }
 
+# ---- 4.5 「用量」面板（2026-10-06 新增）-----------------------------
+Step "5/7 用量：点「用量」出数据面板"
+$xml = Dump-Ui '07b-chat-usage'
+if (Has-Text $xml '用量') {
+  Tap-Text $xml '用量' | Out-Null
+  Start-Sleep -Seconds 3
+  $u = Dump-Ui '07c-usage-panel'
+  # 面板要么有数据（「缓存命中」/「合计」），要么是空态；两种情况都算"开了"
+  $empty = Has-Contains $u '还没有用量'
+  $openedU = (Has-Text $u '用量') -and ($empty -or ((Has-Contains $u '合计') -and (Has-Contains $u '缓存命中')))
+  Check "点「用量」弹出面板" $openedU ""
+  Check "面板有「合计」行" ($empty -or (Has-Contains $u '合计')) ""
+  Check "面板有「缓存命中」行" ($empty -or (Has-Contains $u '缓存命中')) ""
+  Check "面板有「输出」行" ($empty -or (Has-Contains $u '输出')) ""
+  Check "面板有「关闭」" (Has-Text $u '关闭') ""
+  Back
+} else {
+  Fail "对话页没有「用量」chip"
+}
+
 # ---- 5. 任务③ 消息文本可选中 ---------------------------------------
-Step "5/6 任务③：消息文本点一下能不能出选区"
+Step "6/7 任务③：消息文本点一下能不能出选区"
 $xml = Dump-Ui '08-chat-before-tap'
 # 找一条**真正的消息气泡**：避开顶部标题区（y<420）和底部 chip/输入区（y>1900），
 # 并且排除 chip 文案本身 —— 否则会点到标题或 chip，测的就不是"消息文本能不能选"。
@@ -229,7 +249,7 @@ if ($tapped) {
 }
 
 # ---- 6. 结论 --------------------------------------------------------
-Step "6/6 结论"
+Step "7/7 结论"
 Say ("证据目录：{0}" -f $ev)
 if ($script:fail -eq 0) {
   Write-Host "`n✅ 四项预期控件全部看到" -ForegroundColor Green
