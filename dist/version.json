@@ -1,11 +1,11 @@
 {
-  "versionCode": 25,
-  "versionName": "0.86.8",
-  "notes": "连接稳定性：手动「重连」不再卡死（清退避+清内网失败记录+立即重新发现地址）；网络恢复后自动重连（实测约4秒）；修复 hostOf 未剥端口导致同步失败；应用内更新复用已下载包（切窗口回来不再重下）+ 回前台提示安装；移除多余的连接页卡片；地址自动同步（hello 带 publicUrl + 启动/变化广播）",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.8/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.8/dist/dsh-mobile.apk",
-  "sha256": "9e467541cc17922fd06d2f88577c669dab5bfb66aa6bdcf3ce711aa7299b34fd",
-  "size": 1038252,
+  "versionCode": 26,
+  "versionName": "0.86.9",
+  "notes": "四项优化：①底部新增「生成物」窗口（列本会话产出文件，点一下下载到手机）②输入框加号改为弹「文件/相册/拍照」，选中后先暂存在输入框上方，与文字或语音一起发送③修「消息文本点一次不能立即选择范围」（现在单击即选中并弹出复制工具条）④模型那一排新增「权限」（对齐电脑端：只读/工作区可写/完全访问）。新增：可发送任意文件（PDF/Office/压缩包）。另修一个会让消息发不出去的问题（时区字段被网关拒绝）。",
+  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.9/dist/dsh-mobile.apk",
+  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.9/dist/dsh-mobile.apk",
+  "sha256": "34ae328060f396a84bc5ef96b81fb9975681bde8529cf7dbd16c3e00c9800a1b",
+  "size": 1083595,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",
