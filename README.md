@@ -325,4 +325,11 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ## 许可
 
-本仓库尚未附 `LICENSE` 文件。在二次分发或商用前，请先与作者确认授权方式。
+见 [LICENSE](LICENSE)。一句话：**公开源码供学习与群内使用，但不是 OSI 自由软件**——
+商用、对外二次分发、改名换皮发布需要事先取得作者书面许可。
+提交 Issue / Pull Request 参与改进是欢迎的。
+
+## 一起维护
+
+想一起改这个项目？看 **[CONTRIBUTING.md](CONTRIBUTING.md)**——面向不熟 git 的人写的，
+全是"点哪里"，三条路任选（加协作者 / Fork + Pull Request / 直接发给我）。
