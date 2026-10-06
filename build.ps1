@@ -1,4 +1,4 @@
-# =====================================================================
+﻿# =====================================================================
 #  DSH Mobile — 免 Gradle 的 APK 构建脚本
 #  管线: 暂存到 ASCII 路径 -> aapt2 compile/link -> javac -> d8 -> 打包 -> zipalign -> apksigner
 #
@@ -15,7 +15,11 @@ param(
   [string]$Stage      = 'C:\dshstage',
   [int]   $MinSdk     = 26,
   [int]   $TargetSdk  = 36,
-  [switch]$NoOptimize
+  [switch]$NoOptimize,
+  # 没有官方密钥库时，用本机专用密钥构建（fork / 本机二次开发用）。
+  # 默认关闭：换密钥后所有已装旧版的用户覆盖安装都会报「应用未安装」。
+  # 即使打开，指纹校验也不会被取消 —— 只是从「报错」降级为「醒目警告」（见第 7 步）。
+  [switch]$AllowLocalKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -208,9 +212,15 @@ $ks = Join-Path $ksDir 'dshmobile.jks'
 # 其次仓库根目录下的 keystore.local.ps1（内含 $KsPass = '...'，已被 .gitignore 忽略）
 $ksPass = $env:DSH_KS_PASS
 $ksLocal = Join-Path $root 'keystore.local.ps1'
-if ((-not $ksPass) -and (Test-Path $ksLocal)) {
+# keystore.local.ps1 除了 $KsPass，还可以给 $KsExpectedFp（fork 声明自己的密钥指纹）：
+# 声明之后指纹校验**照样严格生效**，只是期望值换成 fork 自己的那把密钥。
+# ⚠️ 变量名必须写成 $KsExpectedFp，不能写成 $ExpectedFp：PowerShell 变量名大小写不敏感，
+# 后者会和本文件下面的 $expectedFp 撞成同一个变量，dot-source 之后立刻被那行覆盖。
+$ksExpectedFp = ''
+if (Test-Path $ksLocal) {
   . $ksLocal
-  $ksPass = $KsPass
+  if (-not $ksPass) { $ksPass = $KsPass }
+  if ($KsExpectedFp) { $ksExpectedFp = $KsExpectedFp }
 }
 if (-not $ksPass) {
   throw "缺少签名口令：请设置环境变量 DSH_KS_PASS，或创建 $ksLocal 写入 `$KsPass = '你的口令'"
@@ -219,16 +229,30 @@ if (-not $ksPass) {
 # 期望的证书指纹（SHA-256，大写、无冒号）。换密钥对老用户是灾难性事件：
 # 新密钥签名后覆盖安装一律报「应用未安装」，因此密钥缺失时绝不自动重建。
 $expectedFp = '2E518D756794EB72864B5A7C21849EA39FD27754EED0B60B74B2C7E12D8ECE8E'
+if ($ksExpectedFp) {
+  $expectedFp = $ksExpectedFp.Trim().ToUpperInvariant()
+  Write-Host "    （按 keystore.local.ps1 的 `$KsExpectedFp 校验指纹：$expectedFp）" -ForegroundColor Yellow
+}
 
 if (-not (Test-Path $ks)) {
-  Write-Host "`n[!] 签名密钥库缺失: $ks" -ForegroundColor Red
-  Write-Host "    alias                 : dshmobile"
-  Write-Host "    期望证书 SHA-256 指纹 : $expectedFp"
-  Write-Host "    证书有效期至          : 2056-09-23"
-  Write-Host "    本脚本拒绝自动生成新密钥（评审 P0-5 ②）：换新密钥后，所有已装旧版本的用户"
-  Write-Host "    覆盖安装都会报「应用未安装」。请从备份恢复该 .jks（口令见 keystore.local.ps1"
-  Write-Host "    或环境变量 DSH_KS_PASS）后重试。"
-  throw "签名密钥库缺失，已终止构建（绝不自动重签）"
+  if (-not $AllowLocalKey) {
+    Write-Host "`n[!] 签名密钥库缺失: $ks" -ForegroundColor Red
+    Write-Host "    alias                 : dshmobile"
+    Write-Host "    期望证书 SHA-256 指纹 : $expectedFp"
+    Write-Host "    证书有效期至          : 2056-09-23"
+    Write-Host "    本脚本拒绝自动生成新密钥（评审 P0-5 ②）：换新密钥后，所有已装旧版本的用户"
+    Write-Host "    覆盖安装都会报「应用未安装」。请从备份恢复该 .jks（口令见 keystore.local.ps1"
+    Write-Host "    或环境变量 DSH_KS_PASS）后重试。"
+    Write-Host "    做本机构建 / 二次开发时，可显式加 -AllowLocalKey 生成一把本机专用密钥。"
+    throw "签名密钥库缺失，已终止构建（绝不自动重签）"
+  }
+  Write-Host "`n[!] -AllowLocalKey：生成本机专用签名密钥" -ForegroundColor Yellow
+  Write-Host "    这个包**只能自己装**：指纹与官方不同，已装官方版的用户覆盖安装会失败。" -ForegroundColor Yellow
+  & $keytool -genkeypair -keystore $ks -alias dshmobile -keyalg RSA -keysize 2048 -validity 10000 `
+    -storepass $ksPass -keypass $ksPass `
+    -dname "CN=DSH Mobile Local Build, OU=local, O=local, L=local, ST=local, C=CN"
+  if ($LASTEXITCODE -ne 0) { throw "生成本机签名密钥失败 (exit $LASTEXITCODE)" }
+  Write-Host "    已生成 $ks（本机专用）" -ForegroundColor Yellow
 }
 
 $signed = Join-Path $out 'dsh-mobile.apk'
@@ -249,9 +273,20 @@ $fpMatch = [regex]::Match(($certOut -join "`n"), 'SHA-256 digest:\s*([0-9a-fA-F:
 if (-not $fpMatch.Success) { throw '无法从 apksigner verify 输出中读到证书指纹，拒绝产出未验证的包' }
 $fp = $fpMatch.Groups[1].Value.Replace(':', '').ToUpperInvariant()
 if ($fp -ne $expectedFp) {
-  throw "签名证书 SHA-256 指纹不符！`n  实际: $fp`n  期望: $expectedFp`n该包不能分发给老用户（覆盖安装会失败），请用正确密钥库重新签名。"
+  # 默认（无 -AllowLocalKey）：指纹不符一律终止 —— 这道校验是本项目 P0 修复，不许绕过。
+  # 例外：显式 -AllowLocalKey 的本机构建，指纹本来就该不同 —— 那时降级为醒目警告。
+  if (-not $AllowLocalKey) {
+    throw "签名证书 SHA-256 指纹不符！`n  实际: $fp`n  期望: $expectedFp`n该包不能分发给老用户（覆盖安装会失败），请用正确密钥库重新签名。"
+  }
+  Write-Host "`n[!] 指纹与期望不同（-AllowLocalKey 的本机构建，已按预期放行）" -ForegroundColor Yellow
+  Write-Host "    实际: $fp" -ForegroundColor Yellow
+  Write-Host "    期望: $expectedFp" -ForegroundColor Yellow
+  Write-Host "    这个 APK **只能自己装**；要分发给已装官方版的用户，必须用官方密钥库重新签名。" -ForegroundColor Yellow
+  Write-Host "    想以后继续用这把本机密钥并保持严格校验：把上面的实际指纹写进" -ForegroundColor Yellow
+  Write-Host "    keystore.local.ps1 的 `$KsExpectedFp，之后指纹不符仍会直接终止构建。" -ForegroundColor Yellow
+} else {
+  Write-Host "    证书 SHA-256 指纹与期望一致: $fp" -ForegroundColor Green
 }
-Write-Host "    证书 SHA-256 指纹与期望一致: $fp" -ForegroundColor Green
 
 Write-Host "`n===== APK 信息 =====" -ForegroundColor Green
 & "$bt\aapt2.exe" dump badging $signed |

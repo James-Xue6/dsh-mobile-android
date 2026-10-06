@@ -54,6 +54,15 @@
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme.Translucent" />
 
+        <!-- [2026-10-07 合并朋友 fork] 交付物（生成物）应用内预览：点一下就在这里看，
+             不用先下载到手机、再离开 App 去文件管理里找。只读本 App 自己 cache 下的文件，
+             exported="false"（只有本 App 能拉起），不新增任何对外暴露面。 -->
+        <activity
+            android:name="com.dsh.mobile.ui.ArtifactActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme" />
+
         <!-- 应用内更新：把下载好的 APK 以 content:// 交给系统安装器（Android 7+ 禁止 file://）。
              自写极简 provider（本项目不依赖 androidx，见 net/ApkFileProvider.java）：
              只读、只暴露 getExternalFilesDir(null)/updates 下的文件。 -->

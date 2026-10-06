@@ -25,6 +25,7 @@ import com.dsh.mobile.model.PendingAttachment;
 import com.dsh.mobile.model.MessageSource;
 import com.dsh.mobile.model.SessionInfo;
 import com.dsh.mobile.model.WorkspaceGroup;
+import com.dsh.mobile.net.AddressSync;
 import com.dsh.mobile.net.GatewayClient;
 import com.dsh.mobile.net.LanAddress;
 import com.dsh.mobile.net.LanScan;
@@ -2610,16 +2611,13 @@ public final class MainActivity extends Activity implements
         // 不依赖推送/轮询/手动按钮（用户最想要的效果）。
         try {
             String pub = hello.optString("publicUrl", "");
-            if (pub != null && !pub.isEmpty() && !pub.equals(store.wanUrl())) {
-                store.setWanUrl(pub);
-                pairTraceReconnect("hello 同步公网地址", "已更新为新地址");
-                updateHint("已更新公网地址");
-                if (settingsView != null) {
-                    settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
-                            store.deviceName(), store.netMode());
+            // [2026-10-07 合并朋友 fork] 不再直接 store.setWanUrl(pub)：改走 AddressSync 判据 ——
+            // ① hello 里的 publicUrl 可能是电脑本机的 ws://127.0.0.1（存下来手机永远连不上）；
+            // ② 用户自己填的固定公网地址（Tailscale / 自建 wss）不该被自动覆盖。
+            if (pub != null && !pub.isEmpty()) {
+                if (applyAddressSync(gid, pub, null, "hello 同步地址")) {
+                    Toast.makeText(this, "已同步电脑的公网地址", Toast.LENGTH_SHORT).show();
                 }
-                Toast.makeText(this, "已同步电脑的公网地址", Toast.LENGTH_SHORT).show();
-                refreshRouteUI();
             }
         } catch (Throwable ignored) { }
         // 网关告诉我们的身份/版本落进"当前这台设备"：离线时卡片也能显示名字与版本标签
@@ -4637,7 +4635,7 @@ public final class MainActivity extends Activity implements
      */
     private LinearLayout artifactRow(final ArtifactEntry e) {
         LinearLayout row = artRow(e.name,
-                e.description.isEmpty() ? "点一下下载到手机" : e.description, Ui.INK, null);
+                e.description.isEmpty() ? "点一下在应用内看 · 长按可下载到手机" : e.description, Ui.INK, null);
         // 进度行：拿到 artRow 里第二个 TextView 的引用，下载过程中原地更新它的文案
         LinearLayout texts = (LinearLayout) row.getChildAt(0);
         final TextView state = (TextView) texts.getChildAt(texts.getChildCount() - 1);
@@ -4647,17 +4645,39 @@ public final class MainActivity extends Activity implements
             if (rel == null) {
                 // 交付物**常常落在工作目录之外**（实测过 `V:\…\*.xlsx`）：网关只允许下载会话
                 // 工作目录内的文件，这种就是下不了。给出明确原因，并保留长按复制路径这条路。
-                state.setText("在电脑上的 " + e.path + "（不在本会话工作目录内，手机端下不了）");
+                state.setText("在电脑上的 " + e.path + "（不在本会话工作目录内，手机端看不了/下不了）");
                 return;
             }
+            // [2026-10-07 合并朋友 fork] 点一下 = **应用内预览**（下到 cache 后交给 ArtifactActivity）：
+            // 原来点一下只会「下载到手机」，下完还得离开 App、去文件管理里找、再交给别的应用打开。
             startDownload(rel, e.name, text -> runOnUiThread(() -> {
                 try { state.setText(text); } catch (Throwable ignored) { }
-            }));
+            }), true);
         });
-        // 长按复制完整路径：下不了的交付物靠它把路径带走（面板副标题已提示）
+        // 长按：下载到手机 / 复制完整路径
+        // （点一下的默认动作已经改成"应用内看"，下载得另给一个入口；路径仍可带走）
         row.setOnLongClickListener(v -> {
             Ui.haptic(v);
-            onCopyPath(e.path);
+            final String rel = relativize(sessionCwd(currentSessionId), e.path);
+            Ui.dialog(MainActivity.this)
+                    .setTitle("这个生成物")
+                    .setItems(new String[] { "下载到手机", "复制路径" }, (dlg, w) -> {
+                        if (w == 0) {
+                            if (rel == null) {
+                                state.setText("在电脑上的 " + e.path + "（不在本会话工作目录内，手机端下不了）");
+                                Toast.makeText(MainActivity.this,
+                                        "不在本会话工作目录内，手机端下不了", Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                            startDownload(rel, e.name, text -> runOnUiThread(() -> {
+                                try { state.setText(text); } catch (Throwable ignored) { }
+                            }));
+                        } else {
+                            onCopyPath(e.path);
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
             return true;
         });
         return row;
@@ -4802,6 +4822,12 @@ public final class MainActivity extends Activity implements
         /** 非空 = 这次下载是生成物面板发起的，进度走 sink（不碰 ChatItem）。 */
         ProgressSink sink;
         /**
+         * [2026-10-07 合并朋友 fork] true = 这次下载只为**应用内预览**：
+         * 落到 App 私有 cache/artifact/（不下到「下载」目录、不调系统应用），下完交给
+         * {@link com.dsh.mobile.ui.ArtifactActivity} 看。false = 原来的「下载到手机」。
+         */
+        boolean preview;
+        /**
          * 保存成功后的可读 Uri（API 29+ 由 MediaStore 返回）。
          * 生成物面板下载完用它尝试 {@code ACTION_VIEW} 打开；取不到就只提示"已保存到下载目录"。
          */
@@ -4893,6 +4919,17 @@ public final class MainActivity extends Activity implements
      * 分块链路，只把进度出口换成 {@code sink}（既有语义一字未改）。
      */
     private void startDownload(final String relPath, final String displayName, final ProgressSink sink) {
+        startDownload(relPath, displayName, sink, false);
+    }
+
+    /**
+     * 同上，外加「这次下载是给应用内预览用的」。
+     *
+     * @param previewInApp true = 落到 App 私有 cache 后打开 {@link com.dsh.mobile.ui.ArtifactActivity}
+     *                     （点生成物那一行的默认动作）；false = 存进手机「下载」目录（长按菜单里的「下载到手机」）
+     */
+    private void startDownload(final String relPath, final String displayName, final ProgressSink sink,
+                               final boolean previewInApp) {
         if (!isOnline()) {
             if (sink != null) sink.onProgress("还没连上电脑端");
             Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
@@ -4910,6 +4947,7 @@ public final class MainActivity extends Activity implements
             d.relPath = rel;
             d.itemKey = "";                 // 没有 ChatItem；进度由 sink 承接
             d.sink = sink;
+            d.preview = previewInApp;
             d.name = safeDownloadName(displayName);
             d.temp = java.io.File.createTempFile("dl-", ".part", getCacheDir());
             d.md = java.security.MessageDigest.getInstance("SHA-256");
@@ -4977,20 +5015,69 @@ public final class MainActivity extends Activity implements
         dlExec.execute(() -> {
             String actual = hex(d.md.digest());
             boolean match = expectedSha.isEmpty() || expectedSha.equalsIgnoreCase(actual);
-            String saved = match ? saveToDownloads(d) : null;
+            // [2026-10-07 合并朋友 fork] 预览模式落到 App 私有 cache（WebView 一定读得到 file://），
+            // 否则照旧存进手机「下载」目录。
+            java.io.File previewFile = (match && d.preview) ? copyToPreviewCache(d) : null;
+            String saved = (match && !d.preview) ? saveToDownloads(d) : null;
+            final java.io.File pf = previewFile;
+            final String savedText = saved;
             runOnUiThread(() -> {
                 if (!match) { failDownload(d, "校验失败（sha256 不一致）"); return; }
-                if (saved == null) { failDownload(d, "保存失败"); return; }
-                setDownloadState(d, "已下载 ✓ " + saved);
-                Toast.makeText(this, "已保存到 " + saved, Toast.LENGTH_LONG).show();
-                // [2026-10-05 主理人约束④] 生成物面板：下载完顺手尝试打开一次；
-                // 打不开（没有对应应用）就只留"已保存到下载目录"这句，不新建 provider。
-                if (d.sink != null) tryOpenDownloaded(d);
+                if (d.preview) {
+                    if (pf == null) { failDownload(d, "写入预览缓存失败"); return; }
+                    setDownloadState(d, "已就绪 ✓ 正在打开预览");
+                    openArtifactPreview(pf);
+                } else {
+                    if (savedText == null) { failDownload(d, "保存失败"); return; }
+                    setDownloadState(d, "已下载 ✓ " + savedText);
+                    Toast.makeText(this, "已保存到 " + savedText, Toast.LENGTH_LONG).show();
+                    // [2026-10-05 主理人约束④] 生成物面板：下载完顺手尝试打开一次；
+                    // 打不开（没有对应应用）就只留"已保存到下载目录"这句，不新建 provider。
+                    if (d.sink != null) tryOpenDownloaded(d);
+                }
                 dlByRequest.remove(d.requestId);
                 dlByTransfer.remove(d.transferId);
                 try { d.temp.delete(); } catch (Throwable ignored) { }
             });
         });
+    }
+
+    /**
+     * 把刚下好的临时文件拷进 {@code cache/artifact/}，供 {@link com.dsh.mobile.ui.ArtifactActivity} 预览。
+     *
+     * <p>为什么不直接预览「下载」目录那一份：Android 10+ 分区存储下，写走 MediaStore、
+     * 读要另开流，App 未必能拿到一个可用的 {@code file://} 路径；而 cache 里的文件是本 App
+     * 自己的，{@code file://} 一定读得到，也不需要任何权限。
+     */
+    private java.io.File copyToPreviewCache(Dl d) {
+        try {
+            java.io.File dir = new java.io.File(getCacheDir(), "artifact");
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            java.io.File out = new java.io.File(dir, safeDownloadName(d.name));
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(d.temp);
+                 java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = fis.read(buf)) > 0) fos.write(buf, 0, n);
+            }
+            return out;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 打开交付物 / 生成物的**应用内预览**（见 ui/ArtifactActivity）。 */
+    private void openArtifactPreview(java.io.File f) {
+        if (f == null || !f.exists()) return;
+        try {
+            android.content.Intent i = new android.content.Intent(
+                    this, com.dsh.mobile.ui.ArtifactActivity.class);
+            i.putExtra(com.dsh.mobile.ui.ArtifactActivity.EXTRA_PATH, f.getAbsolutePath());
+            i.putExtra(com.dsh.mobile.ui.ArtifactActivity.EXTRA_NAME, f.getName());
+            startActivity(i);
+        } catch (Throwable t) {
+            Toast.makeText(this, "打不开预览：" + t.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     /**
@@ -5205,17 +5292,9 @@ public final class MainActivity extends Activity implements
         // 这条推送在手机用**局域网**连着时到达 —— 正是"DSH 重启后主动替换"成立的场景。
         if ("route-updated".equals(kind)) {
             final String url = frame.optString("publicUrl", "");
-            if (url != null && !url.isEmpty() && store != null && !url.equals(store.wanUrl())) {
-                store.setWanUrl(url);
-                pairTraceReconnect("推送[route-updated]", "公网地址已更新为新地址");
-                updateHint("已更新公网地址");
-                if (settingsView != null) {
-                    settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
-                            store.deviceName(), store.netMode());
-                }
-                Toast.makeText(this, "电脑已更新公网地址", Toast.LENGTH_SHORT).show();
-                refreshRouteUI();
-                refreshDiagnostics();
+            // [2026-10-07 合并朋友 fork] 同样改走 AddressSync 判据（理由见 applyAddressSync 的注释）
+            if (url != null && !url.isEmpty() && store != null) {
+                applyAddressSync(frame.optString("gatewayId", ""), url, null, "推送[route-updated]");
             }
             return;
         }
@@ -7675,6 +7754,14 @@ public final class MainActivity extends Activity implements
     // 清单放在仓库的 dist/version.json（随每次发版更新）：
     //   { versionCode, versionName, notes, url, mirror }
     // 先走 CDN（国内通常更快），失败再走 GitHub raw。
+    /**
+     * [2026-10-07 合并朋友 fork] 更新检查增加 **Gitee 源**并排在最前。
+     * 为什么：国内直连 jsDelivr / raw.githubusercontent.com 经常很慢或直接不通，
+     * 而本仓库本来就会把每次发版同步到 Gitee 镜像 —— 用户「检查更新」先走这条最快。
+     * 三个源**内容相同**（都是本仓库 main 分支的 dist/version.json），失败自动降级到下一个。
+     */
+    private static final String UPDATE_MANIFEST_GITEE =
+            "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/main/dist/version.json";
     private static final String UPDATE_MANIFEST_CDN =
             "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/version.json";
     private static final String UPDATE_MANIFEST_GH =
@@ -7706,7 +7793,8 @@ public final class MainActivity extends Activity implements
         // 而更新弹窗另有「同一版本不再弹」的去重，不会因为这里变频繁而打扰用户。
         if (manual) updateHint("正在检查…");
         new Thread(() -> {
-            JSONObject m = fetchJson(UPDATE_MANIFEST_CDN);
+            JSONObject m = fetchJson(UPDATE_MANIFEST_GITEE);   // 国内最快，优先
+            if (m == null) m = fetchJson(UPDATE_MANIFEST_CDN);
             if (m == null) m = fetchJson(UPDATE_MANIFEST_GH);
             final JSONObject manifest = m;
             runOnUiThread(() -> {
@@ -7752,6 +7840,55 @@ public final class MainActivity extends Activity implements
     /** 节流：30s 内只刷一次（手动触发不受限）。 */
     private long lastWanRefreshAt = 0L;
 
+    /**
+     * [2026-10-07 合并朋友 fork 的 AddressSync] 把「电脑报来的地址」按安全判据落盘。
+     *
+     * <p>为什么不能直接 {@code store.setWanUrl(报来的地址)}：两条真机踩过的坑 ——
+     * ① 网关报的 {@code publicUrl} 有时是电脑本机的 {@code ws://127.0.0.1:19387/ws/mobile}
+     *    （只对电脑自己有效），直接存下来手机永远连不上；
+     * ② 用户可能自己填了固定地址（Tailscale 的 {@code ws://100.x}、自建 {@code wss://}、企业内网），
+     *    被自动覆盖后会莫名其妙「昨天还能用、今天连不上」。
+     * 判据全部收在 {@link AddressSync}（纯逻辑 + JVM 断言，见 harness/src/AddressSyncTest.java），
+     * 这里只负责接线 —— **接线错误正是这一版第一次在真机上一次都没触发的原因**，
+     * 所以本方法不许自己再写一份地址判据。
+     *
+     * @param reportedGatewayId  电脑报的网关 id（可空）
+     * @param reportedPublicUrl  电脑报的公网地址（可空、也可能是个没用的本机地址）
+     * @param endpoints          电脑报的全部候选地址（可空）
+     * @param trace              诊断轨迹前缀；null = 不记轨迹
+     * @return true 表示地址真的变了
+     */
+    private boolean applyAddressSync(String reportedGatewayId, String reportedPublicUrl,
+                                     java.util.List<String> endpoints, String trace) {
+        try {
+            AddressSync.Result r = AddressSync.decide(
+                    store.gatewayId(), reportedGatewayId,
+                    store.lanUrl(), store.wanUrl(), endpoints, reportedPublicUrl);
+            if (!r.changed) {
+                if (trace != null) {
+                    pairTraceAdd(trace + " → 地址无需更新"
+                            + (r.note == null || r.note.isEmpty() ? "" : "（" + r.note + "）"));
+                }
+                return false;
+            }
+            boolean lanChanged = r.lanUrl != null && !r.lanUrl.isEmpty() && !r.lanUrl.equals(store.lanUrl());
+            boolean wanChanged = r.wanUrl != null && !r.wanUrl.isEmpty() && !r.wanUrl.equals(store.wanUrl());
+            if (lanChanged) store.setLanUrl(r.lanUrl);
+            if (wanChanged) store.setWanUrl(r.wanUrl);
+            if (trace != null) pairTraceAdd(trace + " → " + r.note);
+            updateHint("已更新连接地址");
+            if (settingsView != null) {
+                settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
+                        store.deviceName(), store.netMode());
+            }
+            refreshRouteUI();
+            refreshDiagnostics();
+            return lanChanged || wanChanged;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /** [方案5] 触发入口：READY / 回前台 / 网络变化。 */
     private void maybeRefreshWanUrl(String source) { maybeRefreshWanUrl(source, false); }
 
@@ -7792,6 +7929,8 @@ public final class MainActivity extends Activity implements
                     + " → 面板 " + targetHost + ":8099";
             new Thread(() -> {
                 String got = null;
+                String gwId = "";
+                java.util.List<String> eps = new java.util.ArrayList<>();
                 String note;
                 try {
                     java.net.HttpURLConnection c = (java.net.HttpURLConnection)
@@ -7807,6 +7946,11 @@ public final class MainActivity extends Activity implements
                     while (in != null && (n = in.read(buf)) > 0) bo.write(buf, 0, n);
                     JSONObject o = new JSONObject(new String(bo.toByteArray(), "UTF-8"));
                     got = o.optString("publicUrl", "");
+                    // [2026-10-07] 一并取回网关身份与候选地址：AddressSync 要用它们判「是不是同一台电脑」
+                    // 以及「这个 publicUrl 是不是本机地址（那对手机没用）→ 改用 endpoints 里的真实地址」。
+                    gwId = o.optString("gatewayId", "");
+                    JSONArray la = o.optJSONArray("lanUrls");
+                    if (la != null) for (int i = 0; i < la.length(); i++) eps.add(la.optString(i, ""));
                     note = "HTTP " + code + " · " + ((got == null || got.isEmpty())
                             ? ("无公网地址：" + o.optString("reason", "")) : "拿到地址");
                 } catch (Throwable t) {
@@ -7814,6 +7958,8 @@ public final class MainActivity extends Activity implements
                 }
                 final String url = got;
                 final String res = note;
+                final String rGwId = gwId;
+                final java.util.List<String> rEps = eps;
                 runOnUiThread(() -> {
                     try {
                         if (url == null || url.isEmpty()) {
@@ -7821,23 +7967,16 @@ public final class MainActivity extends Activity implements
                             if (manual) Toast.makeText(this, "没取到公网地址：" + res, Toast.LENGTH_LONG).show();
                             return;
                         }
-                        String old = store.wanUrl();
-                        if (url.equals(old)) {
-                            pairTraceAdd(trace + " → " + res + " · 与本地一致");
+                        // [2026-10-07 合并朋友 fork] 落盘改走 AddressSync 的安全判据：
+                        // 不覆盖用户自己填的固定公网地址，也不把 ws://127.0.0.1 这类本机地址当公网地址存下来。
+                        boolean changed = applyAddressSync(rGwId, url, rEps, trace);
+                        if (!changed) {
+                            pairTraceAdd(trace + " → " + res + " · 与本地一致或按判据不更新");
                             if (manual) Toast.makeText(this, "公网地址已是最新", Toast.LENGTH_SHORT).show();
                             return;
                         }
-                        store.setWanUrl(url);
-                        pairTraceAdd(trace + " → " + res + " · 已更新为新地址");
-                        updateHint("已更新公网地址");
-                        if (settingsView != null) {
-                            settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
-                                    store.deviceName(), store.netMode());
-                        }
-                        Toast.makeText(this, manual ? ("已同步：" + url) : "已更新公网地址（在家自动同步）",
+                        Toast.makeText(this, manual ? ("已同步：" + store.wanUrl()) : "已更新公网地址（在家自动同步）",
                                 Toast.LENGTH_SHORT).show();
-                        refreshRouteUI();
-                        refreshDiagnostics();
                     } catch (Throwable ignored) { }
                 });
             }, "wan-url-refresh").start();
@@ -8218,9 +8357,17 @@ public final class MainActivity extends Activity implements
                                 + LanAddress.hostOf(newLan) + ":" + LanAddress.portOf(newLan));
                     }
                     if (newWan != null && !newWan.isEmpty() && !newWan.equals(store.wanUrl())) {
-                        store.setWanUrl(newWan);
-                        changed = true;
-                        discoverLogAdd("地址发现：公网地址已更新");
+                        // [2026-10-07 合并朋友 fork] 公网槽位按 AddressSync 判据：
+                        // 面板报的 publicUrl 可能是电脑本机地址（对手机没用），
+                        // 用户自己填的固定公网地址也不能被自动顶掉。
+                        if (AddressSync.isPublicUrl(newWan)
+                                && (store.wanUrl().isEmpty() || AddressSync.isEphemeralWan(store.wanUrl()))) {
+                            store.setWanUrl(newWan);
+                            changed = true;
+                            discoverLogAdd("地址发现：公网地址已更新");
+                        } else {
+                            discoverLogAdd("地址发现：公网地址按判据保持不变（用户自填地址或不是公网地址）");
+                        }
                     }
                 } catch (Throwable ignored) { }
                 gateReason = "";

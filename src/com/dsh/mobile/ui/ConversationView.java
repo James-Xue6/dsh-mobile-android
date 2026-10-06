@@ -106,6 +106,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private final TextView banner;
     private final ListView list;
     private final ChatAdapter adapter;
+    /**
+     * [2026-10-07 合并朋友 fork] 右侧「消息定位条」：长对话里按用户消息逐条跳。
+     * 只对**用户消息**建刻度（agent 的过程项没意义）；刻度下标 → 列表下标存在
+     * {@link #userMsgPositions}（紧凑模式折叠过程行之后，两者不再一一对应）。
+     */
+    private MessageScrubber scrubber;
+    private final java.util.List<Integer> userMsgPositions = new java.util.ArrayList<>();
     private final EditText input;
     private final TextView action;
     /**
@@ -495,6 +502,28 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         FrameLayout.LayoutParams ffLp = (FrameLayout.LayoutParams) bottomFade.getLayoutParams();
         ffLp.gravity = Gravity.BOTTOM;
         stage.addView(bottomFade, ffLp);
+
+        // ---- [2026-10-07 合并朋友 fork] 右侧「消息定位条」（长对话按用户消息跳转）
+        //
+        // 铺满整个舞台宽度：预览气泡要 300dp，只给窄条会把气泡左侧裁掉（真机上表现为
+        // "左边直角、右边圆角、内容缺一半"）。不会挡住列表 —— MessageScrubber 只在右缘
+        // 40dp 内吃触摸事件，其余位置返回 false，滚动/点击照旧落到 ListView。
+        // 用 elevation 保证画在消息列表之上（bringToFront 在真机上不够：消息卡片仍会压住它）。
+        scrubber = new MessageScrubber(ctx);
+        FrameLayout.LayoutParams scLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        scLp.gravity = Gravity.END;
+        scrubber.setLayoutParams(scLp);
+        scrubber.setOnPick(index -> {
+            if (index < 0 || index >= userMsgPositions.size()) return;
+            final int pos = userMsgPositions.get(index);
+            atBottom = false;          // 这是"去看某一条"，显式退出贴底态
+            list.post(() -> {
+                try { list.setSelectionFromTop(pos, Ui.dp(ctx, 90)); } catch (Throwable ignored) { }
+            });
+        });
+        stage.addView(scrubber);
+        scrubber.setElevation(Ui.dp(ctx, 12f));
 
         // ---- 顶部「待处理交互」提示栏（2026-10-04 用户要求「顶部给一个信息栏提示」）：
         // 别的会话里有待回答的**提问/审批**时，这条栏会露出来；点它切到那条会话 ——
@@ -1423,6 +1452,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 view.add(it);
             }
             adapter.setItems(view);
+            syncScrubber();
             return;
         }
 
@@ -1462,6 +1492,34 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             view.add(hint);
         }
         adapter.setItems(view);
+        syncScrubber();
+    }
+
+    /**
+     * [2026-10-07 合并朋友 fork] 把「用户消息」同步成右侧定位条的刻度。
+     *
+     * <p>位置取的是它在**当前显示列表**里的下标（= ListView 的 position），
+     * 所以紧凑模式把过程行折叠成一条摘要之后，跳转依然准确 —— 这正是需要
+     * {@link #userMsgPositions} 这张映射表、而不是直接用刻度序号的原因。
+     */
+    private void syncScrubber() {
+        if (scrubber == null) return;
+        // 每次同步钉一遍最上层：列表是别处 addView 进来的，后加的子 View 会盖在它上面，
+        // 真机上就是"预览气泡被聊天气泡压掉半截"。
+        scrubber.bringToFront();
+        java.util.List<ChatItem> shown = adapter.items();
+        java.util.List<String> labels = new java.util.ArrayList<>();
+        userMsgPositions.clear();
+        if (shown != null) {
+            for (int i = 0; i < shown.size(); i++) {
+                ChatItem it = shown.get(i);
+                if (it != null && it.kind == ChatItem.USER) {
+                    labels.add(it.text == null ? "" : it.text);
+                    userMsgPositions.add(i);
+                }
+            }
+        }
+        scrubber.setLabels(labels);
     }
 
     /**
