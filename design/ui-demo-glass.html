@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>DSH 掌上通 · 毛玻璃质感 Demo v3</title>
+<style>
+/* ==========================================================================
+   DSH 掌上通 · 毛玻璃质感 Demo v3
+   v2 → v3：
+     · 玻璃细节打磨：折射高光斜射层 + 磨砂噪点 + 内发光 + 双层投影 + 细描边
+     · 背景 6 套配色
+     · 底部控制条**锁定**（翻到哪儿都能切）
+   ========================================================================== */
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  color:var(--ink);background:#0b0a10;min-height:100vh;
+  padding:22px 20px calc(118px + env(safe-area-inset-bottom,0px));
+}
+
+/* ---------------------------------------------------------------- 玻璃变量 */
+:root{
+  --glass-card:rgba(255,255,255,.46);
+  --glass-sheet:rgba(255,255,255,.60);
+  --glass-bar:rgba(255,255,255,.38);
+  --glass-input:rgba(255,255,255,.42);
+  --rim:rgba(255,255,255,.92);
+  --rim-lo:rgba(0,0,0,.055);
+  --hairline:rgba(255,255,255,.50);
+  --inner-glow:rgba(255,255,255,.12);
+  --sheen:linear-gradient(135deg,rgba(255,255,255,.42) 0%,rgba(255,255,255,.12) 30%,rgba(255,255,255,0) 58%);
+  --noise:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4'/></filter><rect width='100' height='100' filter='url(%23n)' opacity='.22'/></svg>");
+  --tint:linear-gradient(var(--glass-card),var(--glass-card));
+
+  --ink:#0f0e14;--ink-sub:#3a3a46;--ink-faint:#565663;
+  --brand:#5444c8;--brand-g1:#7c4dff;--brand-g2:#448aff;
+  --brand-soft:rgba(84,68,200,.14);--ok:#2eb85c;
+
+  --shadow-card:0 18px 44px rgba(26,16,66,.22),0 3px 10px rgba(26,16,66,.12);
+  --shadow-bar:0 10px 30px rgba(26,16,66,.18),0 2px 6px rgba(26,16,66,.10);
+  --blur-card:28px;--blur-bar:34px;--blur-input:26px;
+  --sat:190%;--bri:1.05;--radius-card:28px;
+}
+body[data-theme="dark"]{
+  --glass-card:rgba(26,24,34,.50);--glass-sheet:rgba(26,24,34,.68);
+  --glass-bar:rgba(22,20,28,.44);--glass-input:rgba(26,24,34,.54);
+  --rim:rgba(255,255,255,.22);--rim-lo:rgba(255,255,255,.05);
+  --hairline:rgba(255,255,255,.16);--inner-glow:rgba(255,255,255,.06);
+  --sheen:linear-gradient(135deg,rgba(255,255,255,.16) 0%,rgba(255,255,255,.05) 30%,rgba(255,255,255,0) 58%);
+  --ink:#ffffff;--ink-sub:#c9c8d4;--ink-faint:#9a99a6;
+  --shadow-card:0 20px 46px rgba(0,0,0,.50),0 3px 10px rgba(0,0,0,.34);
+  --shadow-bar:0 10px 32px rgba(0,0,0,.44);
+}
+
+/* 对比模式：还原 App 当前样式 */
+body[data-style="current"]{--glass-card:#fff;--glass-sheet:#fff;--glass-bar:rgba(255,255,255,.82);--glass-input:#fff;
+  --rim:rgba(0,0,0,0);--rim-lo:rgba(0,0,0,0);--hairline:rgba(0,0,0,.04);--inner-glow:rgba(0,0,0,0);
+  --sheen:none;--noise:none;--blur-card:0px;--blur-bar:0px;--blur-input:0px;--sat:100%;--bri:1;
+  --shadow-card:0 1px 3px rgba(0,0,0,.07);--shadow-bar:0 1px 0 rgba(0,0,0,.06)}
+body[data-style="current"] .ambient i{display:none}
+body[data-style="current"] .ambient{background:#e6e4f0!important;filter:none!important}
+body[data-style="current"] .grain{display:none}
+body[data-theme="dark"][data-style="current"]{--glass-card:#1c1b22;--glass-sheet:#1c1b22;--glass-bar:rgba(28,27,34,.94);--glass-input:#1c1b22}
+body[data-theme="dark"][data-style="current"] .ambient{background:#15141a!important}
+
+/* 仿玻璃（不依赖 backdrop-filter） */
+body[data-blur="off"] .glass,body[data-blur="off"] .glass-bar,body[data-blur="off"] .glass-input,
+body[data-blur="off"] .glass-bub,body[data-blur="off"] .tool-row,body[data-blur="off"] .dock-inner,
+body[data-blur="off"] .drawer,body[data-blur="off"] .meta span{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+body[data-blur="off"]{--glass-card:rgba(255,255,255,.66);--glass-bar:rgba(255,255,255,.60);--glass-input:rgba(255,255,255,.66);--glass-sheet:rgba(255,255,255,.76)}
+body[data-blur="off"][data-theme="dark"]{--glass-card:rgba(30,28,40,.74);--glass-bar:rgba(24,22,32,.66);--glass-input:rgba(30,28,40,.74);--glass-sheet:rgba(28,26,36,.82)}
+
+/* ---------------------------------------------------------------- 背景配色（6 套） */
+body[data-palette="aurora"]{--p-bg:linear-gradient(178deg,#a892ff 0%,#8fb0ff 46%,#ffb0d4 100%);--p-a:#7a4dff;--p-b:#2f7dff;--p-c:#ff5aa8;--p-d:#3fd8b0}
+body[data-palette="ocean"]{--p-bg:linear-gradient(178deg,#1f5fd8 0%,#2f9fe0 48%,#57e0d8 100%);--p-a:#2f4dff;--p-b:#00b8ff;--p-c:#28e0c8;--p-d:#7f6dff}
+body[data-palette="sunset"]{--p-bg:linear-gradient(178deg,#ff9a5a 0%,#ff6f9c 46%,#9a6bff 100%);--p-a:#ff6a00;--p-b:#ff3d7f;--p-c:#b06bff;--p-d:#ffd45a}
+body[data-palette="forest"]{--p-bg:linear-gradient(178deg,#2f9e78 0%,#57c99a 46%,#a8e6c8 100%);--p-a:#0f9a6a;--p-b:#2fd1a0;--p-c:#8fe36f;--p-d:#2f9ec9}
+body[data-palette="violet"]{--p-bg:linear-gradient(178deg,#6a3cff 0%,#8b5cf6 44%,#d18bff 100%);--p-a:#4a1fd8;--p-b:#8b5cf6;--p-c:#e07bff;--p-d:#5f7dff}
+body[data-palette="mono"]{--p-bg:linear-gradient(178deg,#f2f1f8 0%,#e8e6f2 52%,#f4f0f7 100%);--p-a:#8b7bd8;--p-b:#7fa0d8;--p-c:#d8a0c0;--p-d:#9fd8c8}
+
+.ambient{position:absolute;inset:0;z-index:0;overflow:hidden;background:var(--p-bg)}
+.ambient i{position:absolute;display:block;border-radius:50%;filter:blur(42px)}
+.ambient .a{width:300px;height:300px;left:-90px;top:-70px;background:var(--p-a);opacity:.55}
+.ambient .b{width:260px;height:260px;right:-80px;top:150px;background:var(--p-b);opacity:.48}
+.ambient .c{width:320px;height:320px;left:-70px;bottom:-50px;background:var(--p-c);opacity:.40}
+.ambient .d{width:240px;height:240px;right:-60px;bottom:130px;background:var(--p-d);opacity:.32}
+body[data-theme="dark"] .ambient{filter:brightness(.42) saturate(1.25)}
+body[data-palette="mono"] .ambient i{opacity:.20}
+body[data-theme="dark"][data-palette="mono"] .ambient{filter:brightness(.30) saturate(1.1)}
+body[data-theme="dark"][data-palette="mono"] .ambient i{opacity:.28}
+.grain{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+  background-image:var(--noise);background-size:100px 100px}
+
+/* ---------------------------------------------------------------- 玻璃件（v3 打磨） */
+.glass,.glass-bar,.glass-input{
+  background-image:var(--noise),var(--sheen),var(--tint);
+  background-blend-mode:soft-light,normal,normal;
+  background-size:100px 100px,auto,auto;
+  backdrop-filter:blur(var(--blur-card)) saturate(var(--sat)) brightness(var(--bri));
+  -webkit-backdrop-filter:blur(var(--blur-card)) saturate(var(--sat)) brightness(var(--bri));
+  border:.5px solid var(--hairline);
+}
+.glass{border-radius:var(--radius-card);
+  box-shadow:var(--shadow-card),inset 0 1px 0 var(--rim),inset 0 -1px 0 var(--rim-lo),inset 0 0 26px var(--inner-glow)}
+.glass-bar{--tint:linear-gradient(var(--glass-bar),var(--glass-bar));
+  backdrop-filter:blur(var(--blur-bar)) saturate(var(--sat)) brightness(var(--bri));
+  -webkit-backdrop-filter:blur(var(--blur-bar)) saturate(var(--sat)) brightness(var(--bri));
+  box-shadow:var(--shadow-bar),inset 0 1px 0 var(--rim),inset 0 -1px 0 var(--rim-lo),inset 0 0 20px var(--inner-glow)}
+.glass-input{--tint:linear-gradient(var(--glass-input),var(--glass-input));
+  backdrop-filter:blur(var(--blur-input)) saturate(var(--sat)) brightness(var(--bri));
+  -webkit-backdrop-filter:blur(var(--blur-input)) saturate(var(--sat)) brightness(var(--bri));
+  border-radius:999px;
+  box-shadow:0 12px 30px rgba(26,16,66,.22),inset 0 1px 0 var(--rim),inset 0 -1px 0 var(--rim-lo),inset 0 0 18px var(--inner-glow)}
+
+/* ---------------------------------------------------------------- 排版 */
+.t-large{font-size:29px;font-weight:700;letter-spacing:.2px}
+.t-head{font-size:15.5px;font-weight:600}
+.t-sub{font-size:13.5px;color:var(--ink-sub)}
+.t-foot{font-size:12.5px;color:var(--ink-faint)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 9px;border-radius:999px;background:rgba(52,199,89,.22);color:#0f7a35;font-weight:600}
+.badge.now{background:var(--brand-soft);color:#3a2fa8}
+body[data-theme="dark"] .badge{background:rgba(52,199,89,.24);color:#6ff0a0}
+body[data-theme="dark"] .badge.now{background:rgba(139,125,255,.24);color:#c3b8ff}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.btn{appearance:none;font:inherit;font-size:14.5px;font-weight:600;border-radius:999px;padding:11px 18px;border:0;cursor:pointer}
+.btn-primary{background:linear-gradient(135deg,var(--brand-g1),var(--brand-g2));color:#fff;box-shadow:0 10px 24px rgba(80,50,220,.38),inset 0 1px 0 rgba(255,255,255,.35)}
+.btn-ghost{background:rgba(255,255,255,.44);color:var(--ink);border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+body[data-theme="dark"] .btn-ghost{background:rgba(255,255,255,.10)}
+.btn-danger{background:rgba(255,59,48,.16);color:#d52015;border:.5px solid rgba(255,59,48,.28)}
+.btn-sm{padding:8px 14px;font-size:13.5px}
+
+.head{max-width:1860px;margin:0 auto 18px;color:#fff}
+.head h1{margin:0 0 6px;font-size:21px}
+.head p{margin:0;color:rgba(255,255,255,.60);font-size:13px;line-height:1.65}
+.head code{background:rgba(255,255,255,.10);padding:1px 5px;border-radius:5px;font-size:12px}
+
+.stage{display:flex;gap:34px;justify-content:center;flex-wrap:wrap;max-width:1860px;margin:0 auto}
+.col{display:flex;flex-direction:column;align-items:center;gap:11px}
+.col h2{color:rgba(255,255,255,.85);font-size:13.5px;font-weight:600;margin:0}
+.col .hint{color:rgba(255,255,255,.42);font-size:12px;margin:-5px 0 0;text-align:center}
+.phone{width:392px;height:812px;border-radius:46px;padding:10px;flex:none;
+  background:linear-gradient(160deg,#3a3a44,#191920);
+  box-shadow:0 30px 70px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07) inset}
+.screen{width:100%;height:100%;border-radius:38px;overflow:hidden;position:relative;color:var(--ink);isolation:isolate}
+.statusbar{position:absolute;top:0;left:0;right:0;height:46px;z-index:9;display:flex;align-items:center;
+  justify-content:space-between;padding:0 24px;font-size:12.5px;font-weight:600;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.35)}
+
+/* ① 对话 */
+.msgs-full{position:absolute;inset:0;z-index:2;padding:56px 14px 118px;display:flex;flex-direction:column;gap:13px;overflow:hidden}
+.bub-user{align-self:flex-end;max-width:82%;padding:11px 14px;border-radius:20px 20px 6px 20px;
+  background:linear-gradient(135deg,var(--brand-g1),var(--brand-g2));color:#fff;font-size:14.5px;line-height:1.5;
+  box-shadow:0 10px 24px rgba(80,50,220,.34),inset 0 1px 0 rgba(255,255,255,.32)}
+.glass-bub{padding:11px 14px;border-radius:20px;font-size:14.5px;line-height:1.5;align-self:flex-start;max-width:88%;
+  background-image:var(--noise),var(--sheen),linear-gradient(rgba(255,255,255,.56),rgba(255,255,255,.56));
+  background-blend-mode:soft-light,normal,normal;background-size:100px 100px,auto,auto;
+  backdrop-filter:blur(20px) saturate(var(--sat)) brightness(var(--bri));
+  -webkit-backdrop-filter:blur(20px) saturate(var(--sat)) brightness(var(--bri));
+  border:.5px solid var(--hairline);
+  box-shadow:0 10px 26px rgba(26,16,66,.16),inset 0 1px 0 var(--rim),inset 0 -1px 0 var(--rim-lo),inset 0 0 18px var(--inner-glow)}
+body[data-theme="dark"] .glass-bub{background-image:var(--noise),var(--sheen),linear-gradient(rgba(28,26,38,.60),rgba(28,26,38,.60))}
+body[data-style="current"] .glass-bub{background-image:none;background:#fff;backdrop-filter:none;box-shadow:0 1px 3px rgba(0,0,0,.06);border-color:rgba(0,0,0,.04)}
+.tool-row{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-sub);padding:7px 11px;border-radius:12px;align-self:flex-start;
+  background-image:var(--noise),var(--sheen),linear-gradient(rgba(255,255,255,.46),rgba(255,255,255,.46));
+  background-blend-mode:soft-light,normal,normal;background-size:100px 100px,auto,auto;
+  backdrop-filter:blur(16px) saturate(var(--sat));-webkit-backdrop-filter:blur(16px) saturate(var(--sat));
+  border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+body[data-style="current"] .tool-row{background-image:none;background:#fff;backdrop-filter:none;border-color:rgba(0,0,0,.04)}
+.tool-row .ok{color:var(--ok);font-weight:600}
+.chat-top{position:absolute;top:44px;left:8px;right:8px;z-index:6;padding:7px 9px;border-radius:22px;display:flex;align-items:center;gap:8px}
+.icon-btn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;flex:none;font-size:15px;color:var(--ink);
+  background:rgba(255,255,255,.38);border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+body[data-theme="dark"] .icon-btn{background:rgba(255,255,255,.10)}
+.chat-title{flex:1;min-width:0;text-align:center}
+.chat-title .p{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-title .s{font-size:11.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-bottom{position:absolute;left:0;right:0;bottom:0;z-index:6;padding:10px 14px 16px;display:flex;flex-direction:column;gap:9px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;font-size:11px;color:var(--ink-sub)}
+.meta span{background:rgba(255,255,255,.40);border:.5px solid var(--hairline);border-radius:999px;padding:3px 9px;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+body[data-theme="dark"] .meta span{background:rgba(255,255,255,.10)}
+.inputbar{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 18px}
+.inputbar .ph{flex:1;font-size:14.5px;color:var(--ink-faint)}
+.send{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;color:#fff;font-size:16px;
+  background:linear-gradient(135deg,var(--brand-g1),var(--brand-g2));box-shadow:0 8px 18px rgba(80,50,220,.40)}
+
+/* ② 我的设备 */
+.dev-wrap{position:absolute;inset:0;z-index:2;padding:56px 16px 0;display:flex;flex-direction:column;gap:14px}
+.dev-head{padding:6px 4px 0}
+.dev-card{padding:16px;display:flex;flex-direction:column;gap:12px}
+.dev-row{display:flex;align-items:center;gap:12px}
+.dev-icon{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;flex:none;font-size:20px;
+  background:rgba(255,255,255,.40);border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+.dev-name{font-size:17.5px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.kv{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-sub)}
+.kv b{font-weight:600;color:var(--ink)}
+.line-row{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink-sub);padding:9px 11px;border-radius:14px;
+  background:rgba(255,255,255,.36);border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+body[data-theme="dark"] .line-row{background:rgba(255,255,255,.08)}
+.actions{display:flex;gap:9px}.actions .btn{flex:1}
+.add-dev{padding:15px;display:flex;align-items:center;justify-content:center;gap:9px}
+.add-dev .plus{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:16px;font-weight:700;color:#fff;
+  background:linear-gradient(135deg,var(--brand-g1),var(--brand-g2))}
+.foot-note{margin-top:auto;text-align:center;padding:10px 0 26px;font-size:11.5px;color:rgba(255,255,255,.80);text-shadow:0 1px 3px rgba(0,0,0,.32)}
+body[data-theme="dark"] .foot-note{color:rgba(255,255,255,.5)}
+body[data-palette="mono"] .foot-note{color:var(--ink-sub);text-shadow:none}
+
+/* ③ 会话抽屉 */
+.chat-behind{position:absolute;inset:0;z-index:2;padding:96px 14px 0;display:flex;flex-direction:column;gap:12px}
+.drawer-scrim{position:absolute;inset:0;z-index:5;background:rgba(18,12,40,.18);backdrop-filter:blur(3px)}
+.drawer{position:absolute;top:0;bottom:0;left:0;width:82%;z-index:6;border-radius:0 34px 34px 0;padding:52px 16px 20px;
+  display:flex;flex-direction:column;gap:10px;
+  background-image:var(--noise),var(--sheen),linear-gradient(var(--glass-sheet),var(--glass-sheet));
+  background-blend-mode:soft-light,normal,normal;background-size:100px 100px,auto,auto;
+  backdrop-filter:blur(var(--blur-bar)) saturate(var(--sat)) brightness(var(--bri));
+  -webkit-backdrop-filter:blur(var(--blur-bar)) saturate(var(--sat)) brightness(var(--bri));
+  border:.5px solid var(--hairline);border-left:0;
+  box-shadow:14px 0 44px rgba(26,16,66,.26),inset 0 1px 0 var(--rim),inset 0 0 30px var(--inner-glow)}
+body[data-style="current"] .drawer{background-image:none;background:#fff;backdrop-filter:none}
+body[data-theme="dark"][data-style="current"] .drawer{background:#1c1b22}
+.drawer .dt{font-size:22px;font-weight:700;padding:0 4px 6px}
+.sess{padding:12px 14px;border-radius:18px;display:flex;flex-direction:column;gap:4px;
+  background:rgba(255,255,255,.32);border:.5px solid var(--hairline);box-shadow:inset 0 1px 0 var(--rim)}
+.sess.on{background:linear-gradient(135deg,rgba(124,77,255,.36),rgba(68,138,255,.32))}
+body[data-theme="dark"] .sess{background:rgba(255,255,255,.08)}
+.grp{font-size:11.5px;color:var(--ink-faint);padding:6px 4px 0}
+
+/* 底部固定控制条 */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:200;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));
+  display:flex;justify-content:center;pointer-events:none}
+.dock-inner{pointer-events:auto;width:100%;max-width:860px;border-radius:22px;padding:9px 11px;display:flex;flex-direction:column;gap:8px;
+  background-image:var(--noise),var(--sheen),linear-gradient(rgba(255,255,255,.30),rgba(255,255,255,.30));
+  background-blend-mode:soft-light,normal,normal;background-size:100px 100px,auto,auto;
+  backdrop-filter:blur(22px) saturate(200%) brightness(1.06);
+  -webkit-backdrop-filter:blur(22px) saturate(200%) brightness(1.06);
+  border:.5px solid rgba(255,255,255,.42);
+  box-shadow:0 14px 40px rgba(0,0,0,.30),inset 0 1px 0 rgba(255,255,255,.55)}
+body[data-theme="dark"] .dock-inner{background-image:none;background:rgba(20,18,26,.68);border-color:rgba(255,255,255,.14)}
+body[data-style="current"] .dock-inner{background-image:none;background:rgba(255,255,255,.88);border-color:rgba(0,0,0,.06)}
+.dock-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+.seg{display:inline-flex;background:rgba(255,255,255,.28);border:.5px solid var(--hairline);border-radius:999px;padding:2px}
+body[data-theme="dark"] .seg{background:rgba(255,255,255,.08)}
+body[data-style="current"] .seg{background:rgba(0,0,0,.05)}
+.seg button{appearance:none;border:0;background:transparent;color:var(--ink-sub);font:inherit;font-size:12.5px;padding:6px 13px;border-radius:999px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:#fff;color:#16151c;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.20)}
+body[data-theme="dark"] .seg button[aria-pressed="true"]{background:rgba(255,255,255,.92);color:#16151c}
+.seg .lbl{align-self:center;padding:0 8px 0 10px;font-size:11.5px;color:var(--ink-faint)}
+.swatches{display:flex;gap:7px;align-items:center;flex-wrap:wrap;justify-content:center}
+.swatches .sl{font-size:11.5px;color:var(--ink-faint);margin-right:2px}
+.sw{width:30px;height:22px;border-radius:8px;border:1.5px solid rgba(255,255,255,.6);cursor:pointer;padding:0;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.sw[aria-pressed="true"]{outline:2px solid #fff;outline-offset:1px}
+.sw-aurora{background:linear-gradient(135deg,#a892ff,#8fb0ff 50%,#ffb0d4)}
+.sw-ocean{background:linear-gradient(135deg,#1f5fd8,#2f9fe0 50%,#57e0d8)}
+.sw-sunset{background:linear-gradient(135deg,#ff9a5a,#ff6f9c 50%,#9a6bff)}
+.sw-forest{background:linear-gradient(135deg,#2f9e78,#57c99a 50%,#a8e6c8)}
+.sw-violet{background:linear-gradient(135deg,#6a3cff,#8b5cf6 50%,#d18bff)}
+.sw-mono{background:linear-gradient(135deg,#f2f1f8,#e8e6f2 50%,#f4f0f7)}
+
+.legend{max-width:1860px;margin:30px auto 0;color:rgba(255,255,255,.62);font-size:12.5px;line-height:1.8}
+.legend h3{color:#fff;font-size:14px;margin:0 0 8px}
+.legend b{color:#fff}
+.legend .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:6px}
+.legend .box{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.10);border-radius:13px;padding:12px 14px}
+.legend code{background:rgba(255,255,255,.12);padding:1px 5px;border-radius:5px;font-size:11.5px}
+
+@media (max-width:900px){
+  html,body{overflow-x:hidden}
+  body{padding:14px 12px calc(142px + env(safe-area-inset-bottom,0px))}
+  .head h1{font-size:17px}.head p{font-size:12px}
+  .stage{gap:24px;flex-direction:column;align-items:stretch;max-width:100%}
+  .col{width:100%;min-width:0}
+  .phone{width:100%;max-width:392px;margin:0 auto;height:auto;aspect-ratio:392/812;padding:9px;border-radius:42px}
+  .legend .grid{grid-template-columns:1fr}
+  .dock{padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px))}
+  .dock-inner{border-radius:20px;padding:8px 9px;gap:7px}
+  .seg button{font-size:12px;padding:6px 11px}
+  .seg .lbl{font-size:11px;padding:0 6px 0 8px}
+  .sw{width:28px;height:21px}
+}
+
+/* ---------------------------------------------------------------- 截图模式（?shot=1）
+   给 README / 商店页出图用：隐藏设计稿的页头、每列标题与控制条，只留手机画面本身
+   （底部控制条是给设计评审切主题/配色用的，出图时是噪音）。
+   例：design/ui-demo-glass.html?shot=1&theme=dark&palette=aurora */
+body[data-shot="1"]{padding:16px 20px calc(16px + env(safe-area-inset-bottom,0px))}
+body[data-shot="1"] .head,
+body[data-shot="1"] .col h2,
+body[data-shot="1"] .col .hint,
+body[data-shot="1"] .legend,
+body[data-shot="1"] .dock{display:none}
+</style>
+</head>
+
+<body data-theme="light" data-blur="on" data-style="glass" data-palette="aurora">
+
+<div class="head">
+  <h1>DSH 掌上通 · 毛玻璃质感 Demo <span style="font-size:13px;color:rgba(255,255,255,.5)">v3</span></h1>
+  <p>
+    <b>底部控制条已锁定</b>：翻到哪儿都能切配色 / 风格 / 主题 / 模糊。<br>
+    v3 打磨了玻璃细节：<b>折射高光斜射层 + 磨砂噪点 + 内发光 + 双层投影</b>。
+  </p>
+</div>
+
+<main class="stage">
+
+  <div class="col">
+    <h2>① 对话</h2>
+    <p class="hint">消息从玻璃下面滚过 → 糊掉的正是「下层」</p>
+    <div class="phone"><div class="screen">
+      <div class="ambient"><i class="a"></i><i class="b"></i><i class="c"></i><i class="d"></i></div>
+      <div class="grain"></div>
+      <div class="statusbar"><span>00:12</span><span>📶 🔋</span></div>
+      <div class="msgs-full">
+        <div class="bub-user">收到了。先把「玻璃要透的东西」搭出来 —— 没有下层内容，玻璃只是白板。</div>
+        <div class="glass-bub">玻璃细节这次加了三样：<b>斜射高光</b>（左上那束亮）、<b>磨砂噪点</b>（表面纹理）、<b>内发光</b>（边缘一圈淡雾）。</div>
+        <div class="tool-row">▸ <b>pwsh</b> · 渲染 demo <span class="ok">完成</span></div>
+        <div class="bub-user">对，就是这种能透出下层的模糊感 ✨</div>
+        <div class="glass-bub">顶栏与输入胶囊都是玻璃：消息滚到它们下面时会被糊掉，露出的色块也会晕开。</div>
+        <div class="tool-row">▸ <b>read</b> · Ui.java <span class="ok">完成</span></div>
+        <div class="glass-bub">卡片同样是玻璃，只是模糊半径更小、白度更高，保证字清楚。</div>
+        <div class="bub-user">配色多给几种，我挑一个</div>
+        <div class="bub-user">对 —— 这就是层次：越靠上的玻璃越"实"。</div>
+      </div>
+      <div class="glass-bar chat-top">
+        <div class="icon-btn">☰</div>
+        <div class="chat-title"><div class="p">L:\DSH日常问题</div><div class="s">走内网 · 自动 · 已连 WiFi</div></div>
+        <div class="icon-btn">⋯</div>
+      </div>
+      <div class="chat-bottom">
+        <div class="meta"><span>项目 · DSH日常问题</span><span>模型 · Deepseek-V4.1-Flash</span><span>用量 · 55%</span></div>
+        <div class="glass-input inputbar"><div class="ph">给 Agent 派个任务…</div><div class="send">➤</div></div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="col">
+    <h2>② 我的设备</h2>
+    <p class="hint">卡片浮在光晕上 → 棱光、透色、内发光</p>
+    <div class="phone"><div class="screen">
+      <div class="ambient"><i class="a"></i><i class="b"></i><i class="c"></i><i class="d"></i></div>
+      <div class="grain"></div>
+      <div class="statusbar"><span>00:12</span><span>📶 🔋</span></div>
+      <div class="dev-wrap">
+        <div class="dev-head">
+          <div class="t-large">我的设备</div>
+          <div class="t-sub" style="margin-top:5px">管理你的电脑 · 连接后进入对话</div>
+        </div>
+        <div class="glass dev-card">
+          <div class="dev-row">
+            <div class="dev-icon">🖥</div>
+            <div style="flex:1;min-width:0">
+              <div class="dev-name">MY-DESKTOP
+                <span class="badge"><span class="dot"></span>在线</span>
+                <span class="badge now">当前</span>
+              </div>
+              <div class="t-foot" style="margin-top:3px">桌面端</div>
+            </div>
+          </div>
+          <div class="kv"><span><b>内网</b> · 固定</span><span><b>公网</b></span><span><b>DSH</b> 0.2.0-rc.2</span></div>
+          <div class="line-row">🛜 已连接 · 走内网 · 自动 · 已连 WiFi</div>
+          <div class="actions">
+            <button class="btn btn-primary">进入对话</button>
+            <button class="btn btn-ghost btn-sm">修改名称</button>
+            <button class="btn btn-danger btn-sm">删除</button>
+          </div>
+        </div>
+        <div class="glass add-dev"><span class="plus">＋</span><span class="t-head">添加设备</span></div>
+        <div class="t-foot" style="text-align:center;margin-top:-6px">扫码或输入设备连接</div>
+        <div class="foot-note">DSH 掌上通 · 与电脑端 DSH 直连<br>数据只在你的设备之间流转</div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="col">
+    <h2>③ 会话抽屉</h2>
+    <p class="hint">抽屉玻璃盖住对话 → 背后内容被糊掉、压暗</p>
+    <div class="phone"><div class="screen">
+      <div class="ambient"><i class="a"></i><i class="b"></i><i class="c"></i><i class="d"></i></div>
+      <div class="grain"></div>
+      <div class="chat-behind">
+        <div class="glass-bub">背后这段对话不会被删掉 —— 抽屉合上就能看到它。</div>
+        <div class="glass-bub">抽屉是更高一层的玻璃：模糊更大、白度更高。</div>
+        <div class="tool-row">▸ <b>pwsh</b> · 完成</div>
+        <div class="glass-bub">多层玻璃叠在一起时，越靠上层越"实"，文字才读得清。</div>
+      </div>
+      <div class="drawer-scrim"></div>
+      <div class="glass drawer">
+        <div class="dt">会话</div>
+        <div class="grp">L:\DSH日常问题</div>
+        <div class="sess on"><div class="t-head">界面毛玻璃质感 demo</div><div class="t-foot">现在 · 正在进行</div></div>
+        <div class="sess"><div class="t-head">发布到 Gitee 并标注第三方</div><div class="t-foot">昨天 23:12</div></div>
+        <div class="grp">L:\DSH自制插件</div>
+        <div class="sess"><div class="t-head">热更新功能实测</div><div class="t-foot">今天 01:06</div></div>
+      </div>
+      <div class="statusbar"><span>00:12</span><span>📶 🔋</span></div>
+    </div></div>
+  </div>
+
+</main>
+
+<div class="legend">
+  <h3>v3 打磨了什么</h3>
+  <div class="grid">
+    <div class="box"><b>① 折射高光（斜射层）</b><br>从左上方打一束 <code>135°</code> 白色渐变 —— 这是"玻璃"和"磨砂塑料"的最大区别，v2 缺这层所以发闷。</div>
+    <div class="box"><b>② 磨砂噪点</b><br>每块玻璃自带 <code>fractalNoise</code> 细噪点（<code>soft-light</code> 混合），表面有颗粒感，不再像纯色贴片。</div>
+    <div class="box"><b>③ 内发光</b><br>边缘一圈 <code>inset 0 0 26px</code> 淡白雾，让玻璃"厚"起来 —— 真实玻璃边缘的观感。</div>
+    <div class="box"><b>④ 双层投影</b><br>近处紧实的暗 + 远处大范围柔光：玻璃是"浮"在背景上的，不是贴在墙上。</div>
+    <div class="box"><b>⑤ 背景 6 套配色</b><br>极光 / 深海 / 暮色 / 森林 / 紫罗兰 / 素雅 —— 底部色块直接切，看哪套配玻璃最好看。</div>
+    <div class="box"><b>⑥ 底部控制条锁定</b><br>固定在最下方（本身也是玻璃），翻到任何一屏都能切「风格 / 主题 / 模糊 / 配色」。</div>
+  </div>
+</div>
+
+<div class="dock">
+  <div class="dock-inner">
+    <div class="dock-row">
+      <div class="seg">
+        <span class="lbl">风格</span>
+        <button id="btn-glass" aria-pressed="true">新玻璃</button>
+        <button id="btn-current" aria-pressed="false">当前样式</button>
+      </div>
+      <div class="seg">
+        <span class="lbl">主题</span>
+        <button id="btn-light" aria-pressed="true">浅色</button>
+        <button id="btn-dark" aria-pressed="false">深色</button>
+      </div>
+      <div class="seg">
+        <span class="lbl">模糊</span>
+        <button id="btn-blur-on" aria-pressed="true">真模糊</button>
+        <button id="btn-blur-off" aria-pressed="false">仿玻璃</button>
+      </div>
+    </div>
+    <div class="swatches">
+      <span class="sl">配色</span>
+      <button class="sw sw-aurora" data-palette="aurora" aria-pressed="true" title="极光"></button>
+      <button class="sw sw-ocean" data-palette="ocean" aria-pressed="false" title="深海"></button>
+      <button class="sw sw-sunset" data-palette="sunset" aria-pressed="false" title="暮色"></button>
+      <button class="sw sw-forest" data-palette="forest" aria-pressed="false" title="森林"></button>
+      <button class="sw sw-violet" data-palette="violet" aria-pressed="false" title="紫罗兰"></button>
+      <button class="sw sw-mono" data-palette="mono" aria-pressed="false" title="素雅"></button>
+      <span class="sl" id="palette-name">极光</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var body = document.body;
+  var q = new URLSearchParams(location.search);
+  var hash = (location.hash || '').toLowerCase();
+  // 截图模式：只留手机画面（样式见样式表末尾的 body[data-shot="1"]）
+  if (q.get('shot')) body.dataset.shot = '1';
+
+  // ---- README 场景（?scene=readme）
+  // 把演示文案换成「这个 App 能做什么」，并把演示里的真实路径换成占位符。
+  // 只改文字、不动结构与样式 —— 出图的观感仍然是 App 现有实现。
+  if (q.get('scene') === 'readme') {
+    var setText = function (sel, texts) {
+      var els = document.querySelectorAll(sel);
+      for (var i = 0; i < els.length && i < texts.length; i++) els[i].innerHTML = texts[i];
+    };
+    setText('.msgs-full .bub-user', [
+      '读一下 HANDOFF.md，把里面写着「待做」的三件做完',
+      '好，发版吧',
+      '这次在手机上就全干完了',
+      '不用开电脑 👍'
+    ]);
+    setText('.msgs-full .glass-bub', [
+      '三件都做完了 ✓　① 抽屉里加了<b>会话搜索</b>　② 输入区的 ＋ 能<b>拍照</b>了　③ 交付物<b>点一下就在应用内预览</b>',
+      '已发版 <b>v0.86.42</b> —— App 里「设置 → 关于 → 检查更新」就能收到',
+      '点交付物就能在应用内看 HTML / 图片 / 文本，长按可下载到手机。'
+    ]);
+    setText('.msgs-full .tool-row', [
+      '▸ <b>pwsh</b> · 构建 APK <span class="ok">完成</span>',
+      '▸ <b>adb</b> · 安装到手机 <span class="ok">完成</span>'
+    ]);
+    setText('.chat-behind .glass-bub', [
+      '抽屉里可以直接按标题搜会话 —— 一百多条也不用一条条翻。',
+      '搜索时折叠的子会话会自动展开，折在里面的也搜得到。',
+      '搜到就直接进去，会话列表的滚动位置不会被打乱。'
+    ]);
+    setText('.chat-behind .tool-row', ['▸ <b>read</b> · SessionListView.java <span class="ok">完成</span>']);
+    setText('.chat-title .p', ['D:\\projects\\demo']);
+    setText('.meta span', ['项目 · demo', '模型 · Deepseek-V4.1-Flash', '用量 · 55%']);
+    setText('.drawer .grp', ['D:\\projects\\demo', 'D:\\projects\\plugins']);
+    setText('.drawer .sess .t-head', ['会话搜索 / 拍照 / 产物预览', '交付物应用内预览', 'v0.86.42 已发版']);
+  }
+  var NAMES = { aurora:'极光', ocean:'深海', sunset:'暮色', forest:'森林', violet:'紫罗兰', mono:'素雅' };
+
+  function press(a, b, on) {
+    document.getElementById(a).setAttribute('aria-pressed', String(on));
+    document.getElementById(b).setAttribute('aria-pressed', String(!on));
+  }
+  function setStyle(glass) { body.dataset.style = glass ? 'glass' : 'current'; press('btn-glass','btn-current',glass); }
+  function setTheme(dark) { body.dataset.theme = dark ? 'dark' : 'light'; press('btn-light','btn-dark',!dark); }
+  function setBlur(on) { body.dataset.blur = on ? 'on' : 'off'; press('btn-blur-on','btn-blur-off',on); }
+  function setPalette(name) {
+    if (!NAMES[name]) name = 'aurora';
+    body.dataset.palette = name;
+    document.getElementById('palette-name').textContent = NAMES[name];
+    Array.prototype.forEach.call(document.querySelectorAll('.sw'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.palette === name));
+    });
+  }
+
+  document.getElementById('btn-glass').onclick = function () { setStyle(true); };
+  document.getElementById('btn-current').onclick = function () { setStyle(false); };
+  document.getElementById('btn-light').onclick = function () { setTheme(false); };
+  document.getElementById('btn-dark').onclick = function () { setTheme(true); };
+  document.getElementById('btn-blur-on').onclick = function () { setBlur(true); };
+  document.getElementById('btn-blur-off').onclick = function () { setBlur(false); };
+  Array.prototype.forEach.call(document.querySelectorAll('.sw'), function (b) {
+    b.onclick = function () { setPalette(b.dataset.palette); };
+  });
+
+  if (q.get('style') === 'current' || hash === '#current') setStyle(false);
+  if (q.get('theme') === 'dark' || hash === '#dark') setTheme(true);
+  if (q.get('blur') === 'off' || hash === '#blur-off') setBlur(false);
+  if (q.get('palette')) setPalette(q.get('palette'));
+
+  if (q.has('debug')) {
+    document.documentElement.setAttribute('data-geo', [innerWidth, document.documentElement.scrollWidth].join('/'));
+  }
+})();
+</script>
+</body>
+</html>

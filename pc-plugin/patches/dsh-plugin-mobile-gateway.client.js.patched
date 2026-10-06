@@ -94,7 +94,11 @@ window.__ModuleLoader__.load({
       const tunnelUrl = status.cloudflare?.enabled ? status.cloudflare.publicUrl || '' : ''
       if (route === 'lan') return lanUrl
       if (route === 'cloudflare') return tunnelUrl
-      if (status.cloudflare?.enabled && status.cloudflare.mode === 'quick') return tunnelUrl
+      // Quick Tunnel 开着、但地址还没拿到（首次要下载 cloudflared，国内常失败）时**不能就此返回空串**：
+      // 原来这里直接 return tunnelUrl，于是「自动选择」把地址框留空、按钮永远卡在
+      // 「等待连接地址」——局域网明明可用却生成不了二维码。加上 tunnelUrl 判据后，
+      // 隧道没就绪就继续往下走，落到局域网地址上，至少在家能用。
+      if (status.cloudflare?.enabled && status.cloudflare.mode === 'quick' && tunnelUrl) return tunnelUrl
       return tunnelUrl || status.publicUrl || lanUrl || inferredUrl(status.wsPath)
     }
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 安装 DSH 掌上通 的 PC 端插件（dsh-mobile-access）。
 
 用法（在仓库根目录执行）：
@@ -23,6 +23,29 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ── [2026-10-07 合并朋友 fork] 文本一律显式按 UTF-8（无 BOM）读写 ──────────────
+# 为什么不用 Get-Content / Set-Content 的默认行为：
+#   · Windows PowerShell 5.1 的 Get-Content 默认按 ANSI 代码页解码，而 profile 的
+#     package.json / cordis.patch.yml 里有中文（例如 link:L:/DSH自制插件/...）——
+#     读成乱码再写回去就会**把用户的中文路径写坏**；
+#   · Set-Content -Encoding utf8 在 5.1 会写出 BOM，JSON/YAML 前面的 BOM 会让一些
+#     解析器报错，version.txt 也会带上看不见的字符。
+# 注意：**本脚本自身的 [1/4] 备份位置等修复照旧**（朋友那一版把它们退回去了，没有采用）。
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+function Read-Text([string]$p) { return [System.IO.File]::ReadAllText($p, $utf8) }
+function Write-Text([string]$p, [string]$t) { [System.IO.File]::WriteAllText($p, $t, $utf8) }
+# 写 JSON：5.1 的 ConvertTo-Json 会把中文转义成 \uXXXX（仍合法、DSH 读得懂，但人看着累），
+# 还原成字符后再解析校验一次，不过就用转义版兜底。
+function Write-JsonFile([string]$p, $o) {
+  $json = $o | ConvertTo-Json -Depth 20
+  $unescaped = [System.Text.RegularExpressions.Regex]::Replace(
+    $json, '(?<!\\)\\u([0-9a-fA-F]{4})',
+    [System.Text.RegularExpressions.MatchEvaluator] { param($m) [string][char]([Convert]::ToInt32($m.Groups[1].Value, 16)) })
+  $text = $json
+  try { $null = $unescaped | ConvertFrom-Json; $text = $unescaped } catch { }
+  Write-Text $p $text
+}
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $dshHome = Join-Path $env:USERPROFILE '.dsh'
 $profileDir = Join-Path $dshHome "profiles\$Profile"
@@ -82,17 +105,17 @@ if (Test-Path $apkSrc) {
   $verName = ''
   $manifestPath = Join-Path $repoRoot 'AndroidManifest.xml'
   if (Test-Path $manifestPath) {
-    $mName = [regex]::Match((Get-Content $manifestPath -Raw), 'android:versionName="([^"]+)"')
+    $mName = [regex]::Match((Read-Text $manifestPath), 'android:versionName="([^"]+)"')
     if ($mName.Success) { $verName = $mName.Groups[1].Value.Trim() }
   }
   if (-not $verName) {
     $verJson = Join-Path $repoRoot 'dist\version.json'
     if (Test-Path $verJson) {
-      try { $verName = (Get-Content $verJson -Raw | ConvertFrom-Json).versionName } catch { }
+      try { $verName = (Read-Text $verJson | ConvertFrom-Json).versionName } catch { }
     }
   }
   if ($verName) {
-    Set-Content -Path (Join-Path $appDir 'version.txt') -Value $verName -Encoding utf8 -NoNewline
+    Write-Text (Join-Path $appDir 'version.txt') $verName
     Ok "app\version.txt = $verName（与 APK 的 versionName 一致）"
   } else {
     Warn "没能读到 versionName，app\version.txt 未更新（面板会显示成兜底版本 0.2）"
@@ -105,7 +128,7 @@ if (Test-Path $apkSrc) {
 Write-Host "`n[3/4] 登记到 profile 的 package.json" -ForegroundColor Cyan
 $pkgPath = Join-Path $profileDir 'package.json'
 Copy-Item $pkgPath "$pkgPath.bak-install" -Force
-$pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
+$pkg = Read-Text $pkgPath | ConvertFrom-Json
 
 if (-not $pkg.dependencies.PSObject.Properties[$gatewayName]) {
   $pkg.dependencies | Add-Member -NotePropertyName $gatewayName -NotePropertyValue $gatewayVersion
@@ -142,10 +165,10 @@ if ($bundles -contains $gatewayName) {
   Ok "bundles - $gatewayName（改由本插件的 patch 挂载，避免重复行）"
 }
 $pkg.dsh.profile.bundles = @($bundles)
-$pkg | ConvertTo-Json -Depth 20 | Set-Content $pkgPath -Encoding utf8
+Write-JsonFile $pkgPath $pkg
 Ok "package.json 已更新（备份：package.json.bak-install）"
 # 落盘后复核：只看"没报错"不算验证 —— bundles 写坏了会直接把 DSH 卡在启动
-$verify = @((Get-Content $pkgPath -Raw | ConvertFrom-Json).dsh.profile.bundles)
+$verify = @((Read-Text $pkgPath | ConvertFrom-Json).dsh.profile.bundles)
 $dup = @($verify | Group-Object | Where-Object { $_.Count -gt 1 })
 if ($dup.Count -gt 0) { throw "package.json 里 bundles 仍有重复项：$($dup.Name -join ', ')" }
 if (@($verify | Where-Object { $_ -eq $pluginName }).Count -ne 1) {
@@ -156,7 +179,7 @@ Ok "复核通过：bundles 无重复，$pluginName 恰好 1 次（共 $($verify.
 # ---------------------------------------------------------------- 4. 补网关配置
 Write-Host "`n[4/4] 补 mobile-gateway 配置（lanPort 3091）" -ForegroundColor Cyan
 $patchPath = Join-Path $profileDir 'cordis.patch.yml'
-$patch = Get-Content $patchPath -Raw
+$patch = Read-Text $patchPath
 if ($patch -match 'id:\s*mobile-gateway') {
   Info "cordis.patch.yml 已有 mobile-gateway 配置，跳过"
 } else {
@@ -177,7 +200,7 @@ if ($patch -match 'id:\s*mobile-gateway') {
     lanHost: 0.0.0.0
     lanPort: 3091
 '@
-  Add-Content -Path $patchPath -Value $block -Encoding utf8
+  Write-Text $patchPath ($patch + $block)
   Ok "cordis.patch.yml 已追加配置（备份：cordis.patch.yml.bak-install）"
 }
 

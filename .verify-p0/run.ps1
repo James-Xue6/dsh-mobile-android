@@ -1,4 +1,4 @@
-# P0-2 离线验证 runner：真实 net 层源码（GatewayClient+WsClient）+ 模拟网关
+﻿# P0-2 离线验证 runner：真实 net 层源码（GatewayClient+WsClient）+ 模拟网关
 # 用法:
 #   pwsh -File .verify-p0\run.ps1 -OutDir .verify-p0\out-new -MaxMs 30000 -Tag new
 #   pwsh -File .verify-p0\run.ps1 -OutDir .verify-p0\out-old -MaxMs 95000 -Tag old

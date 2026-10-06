@@ -1,4 +1,4 @@
-# 跑 LanScan / LanAddress 纯逻辑断言（JVM 直编真实源码，不用 Gradle / Android SDK）。
+﻿# 跑 LanScan / LanAddress 纯逻辑断言（JVM 直编真实源码，不用 Gradle / Android SDK）。
 #
 # 为什么单独一个脚本：harness/build.ps1 只编 GatewayClient+WsClient+Harness，
 # 而「地址自动重新发现」这条链上的纯逻辑（网段枚举 / 面板识别 / 地址重建）在

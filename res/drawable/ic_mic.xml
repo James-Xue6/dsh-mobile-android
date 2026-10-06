@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 话筒头 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,14.5c1.66,0 2.99,-1.34 2.99,-3L15,5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v6.5C9,13.16 10.34,14.5 12,14.5z" />
+    <!-- 支架 + 底座 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17.3,11.5c0,2.9 -2.4,5.3 -5.3,5.3s-5.3,-2.4 -5.3,-5.3H5c0,3.4 2.5,6.2 5.8,6.7V21h2.4v-2.8c3.3,-0.5 5.8,-3.3 5.8,-6.7H17.3z" />
+</vector>

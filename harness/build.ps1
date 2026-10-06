@@ -1,4 +1,4 @@
-# 编译 JVM harness（复用 App 真实 net 层源码 + Android 垫片），不需要 Gradle/Android SDK
+﻿# 编译 JVM harness（复用 App 真实 net 层源码 + Android 垫片），不需要 Gradle/Android SDK
 # 用法:
 #   pwsh -File harness/build.ps1                      # 默认用工作区当前源码 src/ -> harness/out
 #   pwsh -File harness/build.ps1 -NetRoot src -OutName out-ab   # 换输出目录（做新旧对照时用）
