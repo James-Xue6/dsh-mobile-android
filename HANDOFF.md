@@ -96,6 +96,7 @@
 ## 3. 上传规则（硬规则 · 逐条）
 
 1. **只推 `origin` 和 `gitee`**；`friend` 只读。禁止 force push / rebase 已推提交 / 删 tag。
+   **禁止 `git push --tags` 盲推** —— 本地残留着对方 fork 的 33 个 tag，盲推会把它们灌进公开仓库（见第 4.5 节）。
 2. **分支规则**：`main` 只由作者合并。共创者一律开 `feat/<短描述>` 分支 → 提 PR；
    不熟 git 就直接把改好的文件交给作者（作者代提交）。
 3. **禁止手工改**：`versionCode`、`versionName`、`dist/version.json`、任何 `v*` tag。
@@ -184,6 +185,41 @@ pwsh -File .\release.ps1 -Version 0.86.10 -Notes "…" -SkipPush    # 只做本�
 2. **tag 撞车**：两边共用 `v0.86.x` 命名空间，同名 tag 一推就冲突或被拒。
 3. **签名不同 → 覆盖安装失败**：不同密钥签的包，老用户装新包一律报「应用未安装」（见第 5 节）。
 
+### 4.5 ⚠️ 本地残留的对方 tag（**推之前必须处理**）
+
+实测（2026-10-07）：
+
+| 位置 | tag 数 | 说明 |
+|---|---|---|
+| 本地仓库 | **57** | 含对方 fork 带进来的 33 个 |
+| `origin` / `gitee` 远端 | **24** | **只有本仓库自己的 tag**，对方那 33 个都**不在**远端 |
+
+- 对方那 33 个 = `v0.86.10` ~ `v0.86.42`（`git merge-base --is-ancestor <tag> main` 判定为非 main 历史）。
+- 它们是从 `git fetch friend` 带进本地的**引用**，不是本仓库的版本线。
+
+**⚠️ 危险点**：`tools/push-gitee.ps1` 第 70 行用的是 `git push gitee --tags` ——
+**它会把本地全部 tag 推上去**，也就是把对方那 33 个一起灌进 Gitee 公开仓库的 tag 命名空间。
+跑这个脚本之前，先确认下面这条输出**只剩本仓库自己的 tag**：
+
+```powershell
+# 列出「不属于 main 历史」的 tag（这些是对方的，不该推）
+git tag | Where-Object { git merge-base --is-ancestor $_ main 2>$null; $LASTEXITCODE -ne 0 }
+```
+
+**两种正确做法（任选一种）**：
+
+```powershell
+# 做法 A（推荐）：不盲推，只推本次自己的 tag
+git push gitee v0.86.10
+
+# 做法 B：先清掉本地残留的对方 tag（可从 friend 远程重新取回，不会丢），再跑 push-gitee.ps1
+git tag | Where-Object { git merge-base --is-ancestor $_ main 2>$null; $LASTEXITCODE -ne 0 } |
+  ForEach-Object { git tag -d $_ }
+```
+
+> 清理前请**先跑一次上面那条列出命令**，肉眼确认列出来的都是 `v0.86.10~v0.86.42` 这一类对方 tag，
+> 再执行删除 —— 别把本仓库自己的 tag 删了（自己的 tag 都是 `main` 历史的祖先，不会被列出来）。
+
 ---
 
 ## 5. 签名规则
@@ -234,6 +270,7 @@ $KsExpectedFp = '实际构建输出的那串大写无冒号指纹'
 node tools\verify-live.js
 
 # ② Gitee 侧一致性：main 与全部 tag 是否都到位
+#    ⚠️ 这条会盲推本地全部 tag —— 先按第 4.5 节确认本地没有对方的 tag
 pwsh -File .\tools\push-gitee.ps1 -GiteeUser yuan-junqian
 
 # ③ 装机核对（有设备时）
@@ -310,6 +347,8 @@ pwsh -File .\release.ps1 -Version 0.86.10 -Notes "这次改了什么"
 pwsh -File .\release.ps1 -Version 0.86.10 -Notes "…" -SkipPush     # 只做本地
 
 # 6) 同步 Gitee（main + 全部 tag）+ 一致性校验
+#    ⚠️ 它会 `git push gitee --tags`（盲推本地全部 tag）—— 本地有对方的 33 个 tag，
+#       跑之前先看第 4.5 节：要么先清理，要么改用 `git push gitee v<版本>` 单推
 pwsh -File .\tools\push-gitee.ps1 -GiteeUser yuan-junqian
 
 # 7) 发版后线上核验（必做）
