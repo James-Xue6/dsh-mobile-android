@@ -5,6 +5,15 @@
 
 [English](README.en.md) | **简体中文**
 
+<p align="center">
+  <img src="docs/screenshots/chat.png" width="30%" alt="对话页" />
+  <img src="docs/screenshots/drawer.png" width="30%" alt="会话抽屉" />
+  <img src="docs/screenshots/home.png" width="30%" alt="我的设备" />
+</p>
+
+> 左起：**对话页**（玻璃气泡 + 目标卡 + 权限 / 模型 / 思考胶囊）、**会话抽屉**、**我的设备**。
+> 界面为**液态玻璃**质感（折射 / 磨砂两档可切）。截图为内置演示页，**不含任何真实数据**。
+
 ---
 
 ## 装它（约 3 分钟）

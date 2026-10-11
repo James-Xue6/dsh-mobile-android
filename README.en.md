@@ -6,6 +6,16 @@ Control **DeepSeek Harness** on your PC from your phone. A native Android client
 chat products like Doubao / Trae: session list → bubble chat → real-time streaming output → inline approval
 and question cards.
 
+<p align="center">
+  <img src="docs/screenshots/chat.png" width="30%" alt="Chat" />
+  <img src="docs/screenshots/drawer.png" width="30%" alt="Session drawer" />
+  <img src="docs/screenshots/home.png" width="30%" alt="My devices" />
+</p>
+
+> Left to right: **chat** (glass bubbles, goal card, permission / model / thinking chips),
+> **session drawer**, **my devices**. The UI is **liquid glass** (refraction / frosted, switchable).
+> Screenshots come from the built-in demo pages and contain **no real data**.
+
 ---
 
 ## Install it (about 3 minutes)
