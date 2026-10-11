@@ -1,0 +1,388 @@
+package com.dsh.mobile.proto;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+
+import com.dsh.mobile.ui.Ui;
+
+import java.util.Random;
+
+/**
+ * 毛玻璃面板：绑定一块"内容层"(target)，玻璃显示 target 在自己背后区域的
+ * 实时模糊快照，并叠加玻璃质感（斜射高光 / 内发光 / 磨砂噪点 / 白棱）。
+ *
+ * 帧同步：由宿主 FrostedHomeView 在"内容层画完的同一帧"调用 refreshFrost()
+ * 重新捕获，再让本面板用这份快照绘制 → 保证模糊严格跟随界面滚动，不滞后。
+ */
+public class FrostedPanelView extends android.widget.FrameLayout {
+
+    private final View target;
+    private float corner = 0f;
+    private int tint = 0x59FFFFFF;      // 玻璃体：半透明白（可调）
+    private int hairline = 0x80FFFFFF;  // 发丝白棱
+    private int downscale = 6;          // 降采样倍数
+    private boolean lensEnabled = false; // AndroidLiquidGlass 式 lens 折射（SDF shader，在捕获阶段完成）
+    private float lensH = 28f;           // 折射环带高（默认）
+    private float lensAmt = 38f;         // 折射幅度（默认）
+
+    private volatile Bitmap lastBitmap; // 宿主每帧刷新
+
+    /** 内容容器：玻璃底之上承载业务内容（保持纵向布局语义）。 */
+    private final LinearLayout content;
+    public LinearLayout content() { return content; }
+
+    public FrostedPanelView(Context c, View target) {
+        super(c);
+        this.target = target;
+        setWillNotDraw(false);
+        content = new LinearLayout(c);
+        content.setOrientation(LinearLayout.VERTICAL);
+        addView(content, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+    }
+
+    public FrostedPanelView corner(float r) { this.corner = r; return this; }
+    public FrostedPanelView tint(int c) { this.tint = c; return this; }
+    public FrostedPanelView hairline(int c) { this.hairline = c; return this; }
+    public FrostedPanelView downscale(int s) { this.downscale = s; return this; }
+    /** 启用 AndroidLiquidGlass 式 lens 折射（SDF 边缘环带折射）。 */
+    public FrostedPanelView lens() { this.lensEnabled = true; return this; }
+    /** 面板级自定义折射：h=环带高(px)，amt=折射幅度(px)。不调用时用默认 28/38。 */
+    public FrostedPanelView lens(float h, float amt) {
+        this.lensEnabled = true;
+        this.lensH = h;
+        this.lensAmt = amt;
+        return this;
+    }
+
+    /** 折射环带高（px）：玻璃边缘多宽的区域内做平滑折射。 */
+    private float lensRefrHeight() { return lensEnabled ? lensH : 0f; }
+    /** 折射幅度（px）：边缘环带内容被平滑推移的量。 */
+    private float lensRefrAmount() { return lensEnabled ? lensAmt : 0f; }
+
+    /** true = 抓取源改用**应用根容器**（见 {@link #targetRoot()}）。 */
+    private boolean useAppRoot;
+
+    /**
+     * [2026-10-07 **整页玻璃质感缺失的真因**] 抓取源改用「应用根容器」。
+     *
+     * <p>为什么必须开：本项目的**环境背景挂在 MainActivity 的根容器上**，而
+     * `target`（如设备页的 `scrollHost`、对话页的列表）自己的背景是**透明**的。
+     * 只抓 target 等于抓到一个"没有背景的空层" —— 糊完就是一片平白，
+     * 完全没有玻璃该有的"背后是什么就糊什么"的质感（用户原话：
+     * 「这个我的设备这页完全也没有啊」）。
+     * Demo 之所以好看，是因为它的 ScrollView **里面自带那张极光底图**；
+     * App 的滚动层没有，背景在更上一层 —— 所以抓取源必须上提。
+     *
+     * <p>根容器不滚动，`getScrollY()` 恒为 0，坐标换算天然成立。
+     */
+    public FrostedPanelView targetRoot() { this.useAppRoot = true; return this; }
+
+    /**
+     * 滚动补偿量（**是否要减，取决于抓取源**）。
+     *
+     * <p>[2026-10-07 实测定位 · 用户截图直证] 这是"玻璃里显示上面那张卡片内容"的真因：
+     * <ul>
+     *   <li>抓取源 = **内容层**（ScrollView，规范 §二-35 的场景）：软件绘制时 ScrollView 把子 View
+     *       画在滚动后的位置，所以要 `top = winTop - targetTop - getScrollY()`（**减**）。</li>
+     *   <li>抓取源 = **应用根容器**（本工程 `targetRoot()`，为了让玻璃糊到挂在根上的环境背景）：
+     *       内容在**根容器坐标系里已经就是"当前可见位置"**，再减一次 scrollY ＝ **减两倍** ——
+     *       玻璃里就会显示"上面那段内容"。此时补偿必须是 **0**。</li>
+     * </ul>
+     * 我把两者混用过（根容器 + 减滚动量），结果就是上面那张卡片的内容漏进下面那张卡的玻璃里。
+     */
+    private int scrollComp() {
+        int s = target == null ? 0 : target.getScrollY();
+        if (compMode == 0) return 0;          // 自测：不加
+        if (compMode == 1) return s;          // 自测：加
+        if (compMode == 2) return -s;         // 自测：减
+        return useAppRoot ? 0 : s;
+    }
+
+    /** [仅对齐自测] 强制滚动补偿档位：0=不加 1=加 2=减；-1=自动。 */
+    private int compMode = -1;
+    public FrostedPanelView debugComp(int m) { this.compMode = m; return this; }
+    /** 实际抓取源：默认 target；开了 targetRoot 就一路向上找到"应用根容器"。 */
+    private android.view.View srcView() {
+        if (!useAppRoot) return target;
+        android.view.View v = this;
+        while (v.getParent() instanceof android.view.View) {
+            android.view.View pv = (android.view.View) v.getParent();
+            if (!(pv.getParent() instanceof android.view.View)) return v;
+            v = pv;
+        }
+        return target;
+    }
+
+    /** 由宿主在内容层画完的同一帧调用：基于当前内容状态重新捕获+模糊。 */
+    private long lastFrost;
+    public void refreshFrost() {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - lastFrost < 30L) return;   // 节流：软件捕获重，防抽屉打开等连触发压垮主线程
+        lastFrost = now;
+        Bitmap old = lastBitmap;
+        int v = getVisibility();
+        // 捕获前（可见状态）取窗口坐标：INVISIBLE 状态下 getLocationInWindow 会返回错乱位置，
+        // 导致捕获的背景错位（这是玻璃背景错乱的根因）。
+        int[] pl = new int[2];
+        getLocationInWindow(pl);
+        // 捕获时自身 INVISIBLE：若本面板位于 target(ScrollView) 内容区内，
+        // 可避免 target.draw 把本面板自己画进快照（否则玻璃捕获含自身 → 错乱）。
+        // 对位于 target 之外的悬浮面板（顶栏胶囊）无害。
+        setVisibility(View.INVISIBLE);
+        try {
+            // 捕获滚动内容前挂起阴影容器：阴影不混入磨砂背景（解决"卡片背后还有阴影"）
+            if (getParent() instanceof Frost.ShadowSuppressible) {
+                ((Frost.ShadowSuppressible) getParent()).setShadowSuppressed(true);
+            }
+            // [性能] 抓取源＝应用根容器时走"整页共享抓取"：一帧内 7 个玻璃件只做 1 次全树重绘
+            Bitmap nb = null;
+            if (useAppRoot && downscale == Frost.SHARED_DS) {
+                nb = Frost.captureShared(srcView(), pl[0], pl[1], getWidth(), getHeight(),
+                        corner, lensRefrHeight(), lensRefrAmount());
+            }
+            if (nb == null) {
+                nb = Frost.capture(srcView(), pl[0], pl[1], getWidth(), getHeight(),
+                        downscale, corner, lensRefrHeight(), lensRefrAmount(), scrollComp());
+            }
+            lastBitmap = nb;
+        } finally {
+            if (getParent() instanceof Frost.ShadowSuppressible) {
+                ((Frost.ShadowSuppressible) getParent()).setShadowSuppressed(false);
+            }
+            setVisibility(v);
+        }
+        if (old != null && old != lastBitmap && !old.isRecycled()) old.recycle();
+    }
+
+    /** 挂载时一次性捕获背景 + 请求一次绘制，保证玻璃首次上屏（不持续重绘）。 */
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        post(() -> {
+            if (lastBitmap == null || lastBitmap.isRecycled()) refreshFrost();
+            invalidate();
+        });
+    }
+
+    @Override
+        protected void onDraw(Canvas cv) {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        Bitmap b = lastBitmap;
+        if (b == null || b.isRecycled()) {
+            // self capture 同样临时 INVISIBLE：本面板位于 target(ScrollView) 内容区内时，
+            // 避免 target.draw 把自身画进快照导致递归（capture → draw → onDraw → self capture）。
+            int v = getVisibility();
+            int[] pl = new int[2];
+            getLocationInWindow(pl);  // 必须在 INVISIBLE 前取，否则位置错乱
+            setVisibility(View.INVISIBLE);
+            try {
+                // 捕获滚动内容前挂起阴影容器：阴影不混入磨砂背景（避免"背景对不上/错位"）
+                if (getParent() instanceof Frost.ShadowSuppressible) {
+                    ((Frost.ShadowSuppressible) getParent()).setShadowSuppressed(true);
+                }
+                if (useAppRoot && downscale == Frost.SHARED_DS) {
+                    b = Frost.captureShared(srcView(), pl[0], pl[1], w, h,
+                            corner, lensRefrHeight(), lensRefrAmount());
+                }
+                if (b == null) {
+                    b = Frost.capture(srcView(), pl[0], pl[1], w, h, downscale, corner, lensRefrHeight(), lensRefrAmount(),
+                            scrollComp());
+                }
+                lastBitmap = b;
+            } finally {
+                if (getParent() instanceof Frost.ShadowSuppressible) {
+                    ((Frost.ShadowSuppressible) getParent()).setShadowSuppressed(false);
+                }
+                setVisibility(v);
+            }
+            // 注意：不在 onDraw 里 postInvalidate —— 会与 refreshFrost/滚动形成持续重绘循环，导致主线程过载退出。
+        }
+        // 捕获位图含四周 padding 溢出区（容纳 blur 溢出 + 折射环带），玻璃区域在 (pad,pad) 处
+        int pad = (int) Frost.padFor(Frost.BLUR_RADIUS, lensRefrHeight());
+        int save = cv.save();
+        // 圆角裁剪（玻璃面板形状）
+        if (corner > 0) {
+            Path clip = new Path();
+            clip.addRoundRect(0, 0, w, h, corner, corner, Path.Direction.CW);
+            cv.clipPath(clip);
+        }
+        // 玻璃区域从位图取 (pad,pad)-(pad+w,pad+h)，铺满面板 → 背后内容经 blur+lens 后精确对位
+        if (b != null) {
+            float ds = (float) downscale;
+            cv.scale(ds, ds);
+            Paint base = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+            cv.drawBitmap(b, -pad / ds, -pad / ds, base);
+            cv.scale(1f / ds, 1f / ds);
+        }
+        // 玻璃体：半透明白 tint（色彩基调）
+        Paint tp = new Paint();
+        tp.setColor(tint);
+        cv.drawRect(0, 0, w, h, tp);
+        // 边缘受光：极细亮边（iOS 毛玻璃同款），左上角受光(白高光) + 右下角受光，
+        // 沿边框柔和渐变，过渡自然（0→透明，不生硬不抢背景）
+        // 边缘受光：沿圆角轮廓一圈极细亮边（iOS 毛玻璃同款），inset 内描边避免被圆角 clip 裁掉，
+        // 左上角受光(白高光)→中部最淡→右下角受光，对角柔和渐变，过渡自然不生硬
+        // 边缘受光：整圈圆角环（含圆角，连贯不断）+ 对角渐变（左上受光→右下受光），极细柔和过渡
+        float eInset = Ui.dp(getContext(), 1f);
+        Path ringOut = new Path();
+        ringOut.addRoundRect(0, 0, w, h, corner, corner, Path.Direction.CW);
+        Path ringIn = new Path();
+        float er = Math.max(0f, corner - eInset);
+        ringIn.addRoundRect(eInset, eInset, w - eInset, h - eInset, er, er, Path.Direction.CW);
+        ringOut.op(ringIn, Path.Op.DIFFERENCE);
+        Paint ringP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        ringP.setShader(new LinearGradient(0, 0, w, h,
+                new int[]{RIM_1, RIM_2, RIM_3},
+                new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+        cv.drawPath(ringOut, ringP);
+        // [2026-10-07 回退] 我曾在这里补过一道"真实 1px 描边"，但用户明确指出**正确参照**是
+        // 隔离 Demo 的「中间方形胶囊」和「底部输入胶囊」—— 它们的配方里**没有**这道描边：
+        //     corner(24/28) + tint(0x42FFFFFF) + hairline(0x1EFFFFFF) + downscale(5) + lens()
+        // 边界感来自 lens 折射把边缘内容弯折 + 那圈对角渐变高光，不是一条硬边。
+        // 硬描边反而让玻璃显得"塑料"，故撤掉。
+        // 磨砂噪点：极淡白色颗粒，只留"雾面"层次，不脏
+        grain(cv, w, h, GRAIN_ALPHA);
+        cv.restore();
+    }
+
+    /**
+     * [2026-10-07] 「正确玻璃」的两件套：**边缘受光环**（对角渐变）+ **磨砂噪点**。
+     *
+     * <p>为什么抽成 public static：用户点名"只有 Demo 的中间方形 / 底部胶囊那种质感才是正确的"，
+     * 而列表内的消息卡走的是 {@code Ui.AmbientGlassDrawable}（静态环境底 + lens），
+     * **原来完全没有这两件套** —— 所以它看着就是一块平的半透明白，跟"正确玻璃"不像。
+     * 抽出来给两边共用，保证全工程玻璃的"解剖结构"一致：底图 → 玻璃体 → 受光环 → 噪点。
+     */
+    public static void rim(android.graphics.Canvas cv, float density, int w, int h, float corner) {
+        if (w <= 0 || h <= 0) return;
+        float eInset = Math.max(1f, density);
+        Path ringOut = new Path();
+        ringOut.addRoundRect(0, 0, w, h, corner, corner, Path.Direction.CW);
+        Path ringIn = new Path();
+        float er = Math.max(0f, corner - eInset);
+        ringIn.addRoundRect(eInset, eInset, w - eInset, h - eInset, er, er, Path.Direction.CW);
+        ringOut.op(ringIn, Path.Op.DIFFERENCE);
+        Paint ringP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        ringP.setShader(new LinearGradient(0, 0, w, h,
+                new int[]{RIM_1, RIM_2, RIM_3},
+                new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+        cv.drawPath(ringOut, ringP);
+    }
+
+    /** 边缘受光环的三个色标（左上受光 → 中部最淡 → 右下受光）—— **逐值对齐 Demo 正确参照**。 */
+    private static final int RIM_1 = 0x7AFFFFFF;
+    private static final int RIM_2 = 0x0CFFFFFF;
+    private static final int RIM_3 = 0x50FFFFFF;
+    /** 磨砂噪点强度（与 Demo 一致）。 */
+    private static final int GRAIN_ALPHA = 10;
+
+    /** 在画布上铺一层极淡白色颗粒（磨砂的"雾面"层次）。 */
+    public static void grain(android.graphics.Canvas cv, int w, int h, int maxAlpha) {
+        Bitmap n = noise();
+        if (n == null || w <= 0 || h <= 0) return;
+        int save = cv.save();
+        cv.scale(w / (float) n.getWidth(), h / (float) n.getHeight());
+        Paint g = new Paint();
+        g.setAlpha(maxAlpha);
+        cv.drawBitmap(n, 0, 0, g);
+        cv.restoreToCount(save);
+    }
+
+    // ---- 柔和外投影：玻璃悬浮感的来源（缓存位图，画在玻璃背后） ----
+    private Bitmap shadowBmp;
+    private float shadowPad = -1f;
+
+    public Bitmap shadowBitmap() {
+        if (shadowBmp != null) return shadowBmp;
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return null;
+        float pad = Ui.dp(getContext(), 23f);   // [规范] 卡阴影 pad 18+5dp
+        int W = (int) (w + pad * 2), H = (int) (h + pad * 2);
+        Bitmap bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(0x33000000);   // [规范] 20% 黑（旧 0x75=46% 被用户反复否"太黑太实"）
+        p.setMaskFilter(new android.graphics.BlurMaskFilter(Ui.dp(getContext(), 11f), android.graphics.BlurMaskFilter.Blur.NORMAL));   // [规范] blur 11dp
+        float off = Ui.dp(getContext(), 5f);
+        c.drawRoundRect(pad, pad + off + Ui.dp(getContext(), 3f), pad + w, pad + h + off - Ui.dp(getContext(), 3f), corner, corner, p);   // [规范] ins 3dp
+        shadowBmp = bmp;
+        shadowPad = pad;
+        return bmp;
+    }
+
+    public float shadowPad() { return shadowPad; }
+
+    // ---- 透过玻璃的体积感形变：drawBitmapMesh 边缘折射 ----
+    // 中心不动、越靠边缘内容被轻微向外"推"，smoothstep 曲线让过渡柔和，
+    // 模拟光线穿过玻璃边缘时的折射/放大，配合圆角 clip 产生"玻璃边切"的体积感。
+    private void drawFrostedBitmap(Canvas cv, Bitmap b, int w, int h, Paint paint) {
+        int bw = b.getWidth(), bh = b.getHeight();
+        if (bw <= 0 || bh <= 0) { cv.drawBitmap(b, 0, 0, paint); return; }
+        int meshW = 20, meshH = 20;
+        int n = (meshW + 1) * (meshH + 1);
+        float[] verts = new float[n * 2];
+        // 形变幅度：宽度的 4.8%，1080 → 约 50px 内收（凸透镜感：中心内容相对放大、边缘强烈弯曲收拢）
+        // 用户反馈"跨越很多但扭曲不足"：加大到边缘可感知的折射体积感
+        float amt = Math.max(6f, w * 0.012f);   // ≈13px：轻柔折射，非整体夸张弯折
+        for (int j = 0; j <= meshH; j++) {
+            for (int i = 0; i <= meshW; i++) {
+                float u = i / (float) meshW, v = j / (float) meshH;
+                float nx = u * 2f - 1f, ny = v * 2f - 1f;
+                float rn = (float) Math.max(1e-4, Math.sqrt(nx * nx + ny * ny));
+                float r = rn / 1.41421356f;            // 0(中心)..1(角落)
+                float t = r * r * (3f - 2f * r);       // 全域平滑 smoothstep：无突变，柔和折射
+                float push = t * amt;
+                // 沿径向向中心收拢（桶形畸变）：中心不动、边缘内容被"弯"向中心，
+                // 模拟透过带厚度的凸透镜玻璃看背景的折射放大感。
+                verts[(j * (meshW + 1) + i) * 2]     = u * w - nx / rn * push;
+                verts[(j * (meshW + 1) + i) * 2 + 1] = v * h - ny / rn * push;
+            }
+        }
+        cv.drawBitmapMesh(b, meshW, meshH, verts, 0, null, 0, paint);
+    }
+
+    // ---- 磨砂噪点：预生成一张白色极淡颗粒纹理，绘制时拉伸铺满 ----
+    private static Bitmap sNoise;    private static final Object sNoiseLock = new Object();
+
+    private static Bitmap noise() {
+        if (sNoise != null) return sNoise;
+        synchronized (sNoiseLock) {
+            if (sNoise != null) return sNoise;
+            int N = 64;
+            sNoise = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888);
+            Random r = new Random(20261006L);
+            for (int y = 0; y < N; y++) {
+                for (int x = 0; x < N; x++) {
+                    int v = r.nextInt(60);
+                    int a = Math.min(26, v);
+                    sNoise.setPixel(x, y, Color.argb(a, 255, 255, 255));
+                }
+            }
+            return sNoise;
+        }
+    }
+
+    private void drawGrain(Canvas cv, int w, int h, int maxAlpha) {
+        Bitmap n = noise();
+        if (n == null) return;
+        int save = cv.save();
+        cv.scale(w / (float) n.getWidth(), h / (float) n.getHeight());
+        Paint g = new Paint();
+        g.setAlpha(maxAlpha);
+        cv.drawBitmap(n, 0, 0, g);
+        cv.restoreToCount(save);
+    }
+}
+

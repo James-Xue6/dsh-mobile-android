@@ -1,0 +1,503 @@
+package com.dsh.mobile.proto;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.view.View;
+
+/**
+ * 自包含的毛玻璃工具（另起的原型，不依赖第三方库）。
+ *
+ * 核心 = 文章里 BlurView 的逻辑：把"内容层"在自己背后的一片区域
+ * 离屏渲染 + 降采样 + 盒式模糊，得到一张"被糊掉的背景"小图；
+ * 调用方 draw 时放大（bilinear 柔边）就得到真·磨砂。
+ *
+ * 关键：模糊的不是自己，而是 target（目标内容层）。
+ */
+public final class Frost {
+
+    /** 阴影容器可挂起接口：玻璃面板捕获滚动内容时，宿主（如悬浮阴影容器）临时停画自身阴影，
+     *  避免阴影混入磨砂背景造成"背景对不上/错位"。 */
+    public interface ShadowSuppressible {
+        void setShadowSuppressed(boolean suppressed);
+    }
+
+    // AGSL lens 折射 shader —— 严格复刻 AndroidLiquidGlass(com.kyant.backdrop) 的
+    // RoundedRectRefractionShaderString：圆角矩形 SDF + 边缘环带平滑折射(circleMap) +
+    // gradSdRoundedRect 梯度。关键：内部(-sd>=refractionHeight)不折射；配合 padding
+    // 机制，折射只作用于边缘环带且不把内容拉出玻璃 → 消除"缩小的块/硬边/错乱"。
+    private static final String LENS_SRC =
+            "uniform shader content;\n" +
+            "uniform vec2 size;\n" +
+            "uniform vec2 offset;\n" +
+            "uniform vec4 cornerRadii;\n" +
+            "uniform float refractionHeight;\n" +
+            "uniform float refractionAmount;\n" +
+            "uniform float depthEffect;\n" +
+            "float radiusAt(vec2 coord, vec4 radii) {\n" +
+            "  if (coord.x >= 0.0) {\n" +
+            "    if (coord.y <= 0.0) return radii.y;\n" +
+            "    else return radii.z;\n" +
+            "  } else {\n" +
+            "    if (coord.y <= 0.0) return radii.x;\n" +
+            "    else return radii.w;\n" +
+            "  }\n" +
+            "}\n" +
+            "float sdRoundedRect(vec2 coord, vec2 halfSize, float radius) {\n" +
+            "  vec2 cornerCoord = abs(coord) - (halfSize - vec2(radius));\n" +
+            "  float outside = length(max(cornerCoord, vec2(0.0))) - radius;\n" +
+            "  float inside = min(max(cornerCoord.x, cornerCoord.y), 0.0);\n" +
+            "  return outside + inside;\n" +
+            "}\n" +
+            "vec2 gradSdRoundedRect(vec2 coord, vec2 halfSize, float radius) {\n" +
+            "  vec2 cornerCoord = abs(coord) - (halfSize - vec2(radius));\n" +
+            "  if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {\n" +
+            "    return sign(coord) * normalize(max(cornerCoord, vec2(0.0)));\n" +
+            "  } else {\n" +
+            "    float gradX = step(cornerCoord.y, cornerCoord.x);\n" +
+            "    return sign(coord) * vec2(gradX, 1.0 - gradX);\n" +
+            "  }\n" +
+            "}\n" +
+            "float circleMap(float x) {\n" +
+            "  return 1.0 - sqrt(1.0 - x * x);\n" +
+            "}\n" +
+            "half4 main(vec2 coord) {\n" +
+            "  vec2 halfSize = size * 0.5;\n" +
+            "  vec2 centeredCoord = (coord + offset) - halfSize;\n" +
+            "  float radius = radiusAt(coord, cornerRadii);\n" +
+            "  float sd = sdRoundedRect(centeredCoord, halfSize, radius);\n" +
+            "  if (-sd >= refractionHeight) {\n" +
+            "    return content.eval(coord);\n" +
+            "  }\n" +
+            "  sd = min(sd, 0.0);\n" +
+            "  float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;\n" +
+            "  float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));\n" +
+            "  vec2 grad = normalize(gradSdRoundedRect(centeredCoord, halfSize, gradRadius) + depthEffect * normalize(centeredCoord));\n" +
+            "  vec2 refractedCoord = coord + d * grad;\n" +
+            "  return content.eval(refractedCoord);\n" +
+            "}\n";
+
+    /**
+     * 捕获 target 在 (left, top) - (left+w, top+h) 区域的内容并模糊。
+     *
+     * API 31+ 走 RenderEffect GPU 高斯模糊（平滑、质量高，iOS 级别磨砂）；
+     * 低版本回退到降采样 + 盒式模糊。
+     *
+     * @param target     被模糊的内容层（与面板在同一父容器内）
+     * @param left,top   面板在父容器里的坐标（= target 坐标系里的位置）
+     * @param w,h        面板尺寸
+     * @param downscale  降采样倍数（仅软件回退路径用）
+     * @return 模糊后的图；失败返回 null
+     */
+    /** 模糊半径（AndroidLiquidGlass 建议 2-8dp，取中等磨砂盖住背后文字）。 */
+    public static final float BLUR_RADIUS = 20f;
+
+    /** padding：容纳 blur 溢出 + lens 折射环带（AndroidLiquidGlass 机制，防边缘拉内容/硬边/错乱）。 */
+    public static int padFor(float radius, float refrHeight) {
+        return (int) Math.ceil(Math.max(radius, refrHeight));
+    }
+
+    /** 带折射的捕获：cornerPx=圆角，refrHeight=折射环带高，refrAmount=折射幅度(px，0=不折射)。
+     *  winLeft/winTop 为面板的**窗口坐标**（调用方须在置 INVISIBLE 之前取，保证布局位置正确），
+     *  capture 内换算成相对 target 的坐标（含所有中间层偏移 + 滚动补偿），
+     *  保证玻璃磨砂背景始终精确对齐面板背后的内容。 */
+    public static Bitmap capture(View target, int winLeft, int winTop, int w, int h, int downscale,
+                                 float cornerPx, float refrHeight, float refrAmount) {
+        return capture(target, winLeft, winTop, w, h, downscale, cornerPx, refrHeight, refrAmount,
+                target == null ? 0 : target.getScrollY());
+    }
+
+    /**
+     * 同上，但**滚动补偿单独给**。
+     *
+     * <p>[2026-10-07 用户实测「玻璃胶囊和背景对不上」的真因] 抓取源为了拿到环境背景
+     * 会上提到**应用根容器**（见 {@code FrostedPanelView.targetRoot()}），而根容器
+     * `getScrollY()` 恒为 0 —— 真正的滚动量在**滚动容器**（`scrollHost`）身上。
+     * 于是页面一滚动，玻璃里那段内容就整体偏了一个 scrollY，跟背后的真背景"对不上"。
+     * 所以补偿量必须由调用方按**真正会滚动的那一层**给。
+     */
+    public static Bitmap capture(View target, int winLeft, int winTop, int w, int h, int downscale,
+                                 float cornerPx, float refrHeight, float refrAmount, int scrollComp) {
+        if (target == null || w <= 0 || h <= 0) return null;
+        int[] tl = new int[2];
+        target.getLocationInWindow(tl);
+        int left = winLeft - tl[0];
+        // top：面板背后的那段内容在 target 里是"布局坐标 + 滚动量"（软件绘制不会自动补 scrollY）
+        // [规范 §二-35 定版] 滚动补偿：top = winTop - targetTop - target.getScrollY()
+        // ⚠️ 前几轮我把这里"修正"成了 `+scrollComp`，那正是"玻璃和背景对不上/反向滚动"的根源 —— 规范值就是**减**。
+        int top = winTop - tl[1] - scrollComp;
+        // 注：API 31+ 的 RenderNode GPU 捕获在 Bitmap 软 Canvas 上 drawRenderNode 必然抛
+        //   "Software rendering doesn't support drawRenderNode"，模拟器与多数设备都失败；
+        //   因此统一走「降采样 + 盒式模糊」的软件路径，保证真磨砂在所有环境一致生效。
+        return captureSoftware(target, left, top, w, h, downscale, cornerPx, refrHeight, refrAmount);
+    }
+
+    // ========================================================================
+    // [性能 · 关键] 整页共享抓取
+    //
+    // 起因（用户实测）：「自测页（3 个胶囊）流畅，换到真实设备页，滑动就开始不灵，
+    // 还要等好几秒才动」。gfxinfo 实测：设备页滚动 50th=20ms / 90th=25ms / 95th=27ms、
+    // legacy 掉帧 68%、10 次滑动只渲染 25 帧 —— UI 线程被"**每个玻璃件各抓一次整棵树**"
+    // 吃满。设备页有 7 个玻璃件，就是**一帧 7 次全树软件重绘**。
+    //
+    // 修法：同一帧内所有面板**复用同一张"整页降采样 + 模糊"底图**，各自只做
+    // "取自己那一块 + 折射"。整树重绘从 N 次降到 1 次，剩余成本是取块 + CPU lens
+    // （每块约一万像素，可忽略）。
+    // ========================================================================
+    /** 在册玻璃面板（{@link FrostedPanelView} 构造时注册）：整页共享抓取时统一临时隐藏。 */
+    private static final java.util.List<android.view.View> ALL_PANELS = new java.util.ArrayList<>();
+    public static void registerPanel(android.view.View p) {
+        synchronized (ALL_PANELS) {
+            if (!ALL_PANELS.contains(p)) ALL_PANELS.add(p);
+        }
+    }
+    public static final int SHARED_DS = 5;          // 与面板 downscale 一致（本项目统一 5）
+    private static final long SHARED_FRAME_MS = 32L;   // 玻璃底图 30fps 足够；每帧重抓会吃掉滚动帧
+    private static Bitmap sharedFull;
+    private static android.view.View sharedFullTarget;
+    private static long sharedFullAt;
+
+    /** 取"整页（抓取源整棵）"的降采样 + 模糊底图；同一帧内复用。 */
+    private static synchronized Bitmap fullFrame(android.view.View target) {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (sharedFull != null && !sharedFull.isRecycled() && sharedFullTarget == target
+                && now - sharedFullAt < SHARED_FRAME_MS) {
+            return sharedFull;
+        }
+        int W = target.getWidth(), H = target.getHeight();
+        if (W <= 0 || H <= 0) return null;
+        int bw = Math.max(1, W / SHARED_DS), bh = Math.max(1, H / SHARED_DS);
+        Bitmap b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(b);
+        int save = c.save();
+        c.scale(1f / SHARED_DS, 1f / SHARED_DS);
+        int[] tl = new int[2];
+        target.getLocationInWindow(tl);
+        c.translate(-tl[0], -tl[1]);
+        boolean oldCap = capturing;
+        capturing = true;   // 抓取期间停画外投影（同单面板抓取）
+        // [2026-10-07 实测修复 · 关键] 整页抓取必须把**所有在册玻璃面板**一起临时隐藏：
+        // 只隐藏"发起的那一块"的话，其它玻璃件还可见 → 会被抓进这张共享底图 →
+        // 每块玻璃从底图里取到的就是"它自己"（现象：卡片里看不到背景、直接一片毛玻璃）。
+        java.util.List<android.view.View> panels;
+        synchronized (ALL_PANELS) { panels = new java.util.ArrayList<>(ALL_PANELS); }
+        int[] vis = new int[panels.size()];
+        for (int i = 0; i < panels.size(); i++) {
+            vis[i] = panels.get(i).getVisibility();
+            panels.get(i).setVisibility(android.view.View.INVISIBLE);
+        }
+        try {
+            target.draw(c);
+        } catch (Throwable ignored) {
+        } finally {
+            for (int i = 0; i < panels.size(); i++) panels.get(i).setVisibility(vis[i]);
+            capturing = oldCap;
+        }
+        c.restoreToCount(save);
+        int[] px = new int[bw * bh];
+        b.getPixels(px, 0, bw, 0, 0, bw, bh);
+        // [2026-10-07 用户] 「越改越差，直接不是液态玻璃了」—— 我在这里**多加了一道 boxBlur**
+        // （BLUR_RADIUS=20dp ≈ 52px），比单面板抓取重得多 → 玻璃糊成一片奶白、没有质感。
+        // 恢复：与 `captureSoftware` **完全同一套模糊**（只跑一遍 5-tap 二项式）。
+        gaussianBlur(px, bw, bh);
+        b.setPixels(px, 0, bw, 0, 0, bw, bh);
+        Bitmap old = sharedFull;
+        sharedFull = b;
+        sharedFullTarget = target;
+        sharedFullAt = now;
+        if (old != null && old != b && !old.isRecycled()) old.recycle();
+        return b;
+    }
+
+    /**
+     * 从共享整页底图里取"本面板这一块（含 pad 溢出）+ 折射"。
+     * 超出整页范围（贴边面板）时返回 null，调用方回退到 {@link #capture}。
+     */
+    public static Bitmap captureShared(android.view.View target, int winLeft, int winTop,
+                                       int w, int h, float cornerPx, float refrHeight, float refrAmount) {
+        Bitmap full = fullFrame(target);
+        if (full == null) return null;
+        int[] tl = new int[2];
+        target.getLocationInWindow(tl);
+        int ds = SHARED_DS;
+        int pad = padFor(BLUR_RADIUS, refrHeight);
+        int bx = Math.round((winLeft - tl[0] - pad) / (float) ds);
+        int by = Math.round((winTop - tl[1] - pad) / (float) ds);
+        int bw = Math.max(4, Math.round((w + 2 * pad) / (float) ds));
+        int bh = Math.max(4, Math.round((h + 2 * pad) / (float) ds));
+        if (bx < 0 || by < 0 || bx + bw > full.getWidth() || by + bh > full.getHeight()) {
+            return null;   // 贴边：几何对不上，交给普通抓取
+        }
+        int[] px = new int[bw * bh];
+        full.getPixels(px, 0, bw, bx, by, bw, bh);
+        if (refrAmount > 0f && bw > 8 && bh > 8) {
+            applyLens(px, bw, bh, cornerPx / ds, refrHeight / ds, -refrAmount / ds,
+                    Math.max(1, pad / ds));
+        }
+        Bitmap out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+        out.setPixels(px, 0, bw, 0, 0, bw, bh);
+        return out;
+    }
+    /** GPU：先把"玻璃+padding 溢出区"的内容离屏渲染 + 高斯模糊，再用
+     *  AndroidLiquidGlass 精确 lens shader 做边缘环带折射。 */
+    private static Bitmap captureGpu(View target, int left, int top, int w, int h, float radius,
+                                     float cornerPx, float refrHeight, float refrAmount) {
+        // 捕获区域 = 玻璃 + 四周 padding（容纳 blur 溢出与折射环带，边缘内容真实、非 CLAMP 拉伸）
+        int pad = padFor(radius, refrHeight);
+        int W = w + pad * 2, H = h + pad * 2;
+        // 1) 内容层离屏渲染 + 高斯模糊（含 padding 溢出区域）
+        android.graphics.RenderNode node = new android.graphics.RenderNode("frost");
+        node.setPosition(0, 0, W, H);
+        node.setRenderEffect(android.graphics.RenderEffect.createBlurEffect(
+                radius, radius, android.graphics.Shader.TileMode.CLAMP));
+        Canvas rec = node.beginRecording(W, H);
+        rec.translate(-(left - pad), -(top - pad));
+        try {
+            target.draw(rec);
+        } catch (Throwable ignored) {
+        }
+        node.endRecording();
+        Bitmap blur = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+        new Canvas(blur).drawRenderNode(node);
+
+        // 2) lens 折射（API 33+ RuntimeShader，AndroidLiquidGlass 精确 shader）
+        if (refrAmount > 0f && android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                android.graphics.RuntimeShader lens = new android.graphics.RuntimeShader(LENS_SRC);
+                lens.setFloatUniform("size", W, H);
+                lens.setFloatUniform("offset", -pad, -pad);
+                // corner 钳制到半高内（胶囊 corner>半高会让 SDF 矩形半宽变负 → 折射错乱）
+                float rr = Math.max(1f, Math.min(cornerPx, Math.min(w, h) * 0.5f));
+                lens.setFloatUniform("cornerRadii", new float[]{rr, rr, rr, rr});
+                lens.setFloatUniform("refractionHeight", refrHeight);
+                lens.setFloatUniform("refractionAmount", -refrAmount);
+                lens.setFloatUniform("depthEffect", 0f);
+                lens.setInputShader("content", new android.graphics.BitmapShader(
+                        blur, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP));
+                android.graphics.Paint lp = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+                lp.setShader(lens);
+                Bitmap out = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+                new Canvas(out).drawRect(0, 0, W, H, lp);
+                blur.recycle();
+                return out;
+            } catch (Throwable t) {
+                // lens 编译/运行失败 → 回退纯模糊（保住磨砂，不崩）
+                return blur;
+            }
+        }
+        return blur;
+    }
+
+    /**
+     * [2026-10-07] 「此刻正在离屏抓取」的全局标记。
+     *
+     * <p>为什么需要它：抓取会把 target（整页/滚动层）软件重画一遍 —— 这一遍里**别的元素的
+     * 外投影也会被画进去**，糊完就变成玻璃卡里面一块块深色斑（用户原话「玻璃卡片后面怎么
+     * 还是有深色的阴影」）。所以抓取期间所有"外投影容器"都要停画（见
+     * {@code DeviceHubView.FrostShadowHolder}）。阴影只能画在形状之外、且不能进玻璃。
+     */
+    public static volatile boolean capturing;
+
+    /** 软件路径：含 padding 捕获 + 降采样 + 盒式模糊（所有环境统一走这里，保证真磨砂一致生效）。 */
+    private static Bitmap captureSoftware(View target, int left, int top, int w, int h, int downscale,
+                                          float cornerPx, float refrHeight, float refrAmount) {
+        if (downscale < 2) downscale = 2;
+        // 捕获区域 = 玻璃 + 四周 padding（容纳模糊溢出，边缘内容真实、非拉伸）
+        int pad = padFor(BLUR_RADIUS, refrHeight);
+        int W = w + pad * 2, H = h + pad * 2;
+        int bw = Math.max(1, W / downscale);
+        int bh = Math.max(1, H / downscale);
+        Bitmap small;
+        try {
+            small = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+        } catch (Throwable t) {
+            return null;
+        }
+        Canvas c = new Canvas(small);
+        int save = c.save();
+        c.scale(1f / downscale, 1f / downscale);
+        // 手动补上目标内容层的滚动偏移：target.draw() 不会自动应用 scrollY，
+        // 否则永远捕获 scrollY=0 的内容，玻璃就冻结/对不上滚动的界面。
+        c.translate(-(left - pad), -(top - pad));
+        boolean oldCap = capturing;
+        capturing = true;   // 抓取期间停画所有外投影，别把阴影烘进玻璃
+        try {
+            target.draw(c);
+        } catch (Throwable ignored) {
+        } finally {
+            capturing = oldCap;
+        }
+        c.restore();
+        // 近似高斯模糊：5-tap 二项式核（0.0625,0.25,0.375,0.25,0.0625）横+纵各两遍，
+        // 比盒式模糊更平滑均匀，接近 RenderEffect 高斯磨砂（无颗粒/无锯齿）。
+        int[] px = new int[bw * bh];
+        small.getPixels(px, 0, bw, 0, 0, bw, bh);
+        gaussianBlur(px, bw, bh);
+        if (downscale >= 6) gaussianBlur(px, bw, bh);
+        // 软件 lens 折射：AndroidLiquidGlass RoundedRectRefractionShader 的 CPU 版，
+        // 只对玻璃边缘环带做平滑折射（中心不折射），配合 padding 机制内容不外拉 → 体积感
+        if (refrAmount > 0f && bw > 8 && bh > 8) {
+            applyLens(px, bw, bh,
+                    cornerPx / downscale, refrHeight / downscale, -refrAmount / downscale,
+                    Math.max(1, pad / downscale));
+        }
+        small.setPixels(px, 0, bw, 0, 0, bw, bh);
+        return small;
+    }
+
+    /**
+     * 软件 lens 折射：复刻 AndroidLiquidGlass RoundedRectRefractionShader 的 CPU 版。
+     * 圆角矩形 SDF + 边缘环带平滑折射（circleMap），中心(-sd>=refractionHeight)不折射。
+     * 位图含 padding 溢出区，偏移采样始终落在位图内 → 内容不被拉出玻璃、无硬边错乱。
+     */
+    public static void applyLens(int[] in, int W, int H,
+                                 float corner, float refrH, float refrAmt, int pad) {
+        if (refrAmt == 0f || pad < 0) return;
+        int[] out = new int[W * H];
+        float cw = W - 2f * pad, ch = H - 2f * pad;
+        if (cw < 4f || ch < 4f) return;
+        float halfW = cw * 0.5f, halfH = ch * 0.5f;
+        float radius = Math.min(corner, Math.min(halfW, halfH));
+        for (int y = 0; y < H; y++) {
+            int row = y * W;
+            for (int x = 0; x < W; x++) {
+                float ccx = (x - pad) - halfW;
+                float ccy = (y - pad) - halfH;
+                // SDF 圆角矩形
+                float ax = Math.abs(ccx) - (halfW - radius);
+                float ay = Math.abs(ccy) - (halfH - radius);
+                float mx = Math.max(ax, 0f), my = Math.max(ay, 0f);
+                float outside = (float) Math.sqrt(mx * mx + my * my) - radius;
+                float inside = Math.min(Math.max(ax, ay), 0f);
+                float sd = outside + inside;
+                if (-sd >= refrH) { out[row + x] = in[row + x]; continue; }
+                sd = Math.min(sd, 0f);
+                float t = 1f - (-sd) / refrH;
+                // smoothstep 缓入缓出：两端导数=0，中间快 → 边缘形变过渡自然无生硬（原 1-sqrt(1-t²) 内部端导数无穷产生拉伸尖峰）
+                float d = (float) (t * t * (3f - 2f * t)) * refrAmt;
+                // 法线：SDF 梯度近似（指向玻璃外侧）
+                float nx, ny;
+                if (mx >= 0f || my >= 0f) {
+                    float len = (float) Math.sqrt(mx * mx + my * my);
+                    nx = len > 0 ? (ccx >= 0 ? 1 : -1) * mx / len : (ccx >= 0 ? 1 : -1);
+                    ny = len > 0 ? (ccy >= 0 ? 1 : -1) * my / len : (ccy >= 0 ? 1 : -1);
+                } else {
+                    nx = ccy >= ccx ? 0 : 1;
+                    ny = ccy >= ccx ? 1 : 0;
+                }
+                // 折射：法线推挤 + 切向弧线弯曲（圆柱玻璃体积感，花纹沿玻璃边缘呈弧形扭曲）
+                float tx = -ny, ty = nx;   // 切向（法线逆时针90°）
+                float bx = ccx / (halfW + 1e-4f);   // -1..1 对角位置
+                float by = ccy / (halfH + 1e-4f);
+                float arc = d * 0.28f * (bx + by) * 0.5f;   // 边缘/角落弯曲明显、中心平
+                // 双线性插值采样：浮点偏移 + 4像素加权 → 边缘挤压过渡细腻无颗粒感
+                float fx = x + nx * d + tx * arc;
+                float fy = y + ny * d + ty * arc;
+                // [2026-10-07 按规范回退] 我曾在这里加过"采样夹在面板矩形内"——**规范里没有这条**，
+                // 而且它把边缘折射掐死了（规范 §一 要求"边缘背景**花纹跟着弯**"、§二-50 要求
+                // "不要关掉 lens，有边缘错乱要用浮点偏移+双线性插值修，而不是限制它"）。
+                // 规范做法：不夹，靠上面已有的浮点偏移 + 双线性插值 + 位图自带 pad 溢出区保证边缘自然。
+                int x0 = (int) fx, y0 = (int) fy;
+                if (x0 < 0 || y0 < 0 || x0 >= W - 1 || y0 >= H - 1) { out[row + x] = in[row + x]; continue; }
+                float frx = fx - x0, fry = fy - y0;
+                int i00 = y0 * W + x0, i10 = i00 + 1, i01 = i00 + W, i11 = i01 + 1;
+                int p00 = in[i00], p10 = in[i10], p01 = in[i01], p11 = in[i11];
+                float w00 = (1 - frx) * (1 - fry), w10 = frx * (1 - fry), w01 = (1 - frx) * fry, w11 = frx * fry;
+                int a = (int) (((p00 >>> 24 & 255) * w00 + (p10 >>> 24 & 255) * w10 + (p01 >>> 24 & 255) * w01 + (p11 >>> 24 & 255) * w11));
+                int r = (int) (((p00 >>> 16 & 255) * w00 + (p10 >>> 16 & 255) * w10 + (p01 >>> 16 & 255) * w01 + (p11 >>> 16 & 255) * w11));
+                int g = (int) (((p00 >>> 8 & 255) * w00 + (p10 >>> 8 & 255) * w10 + (p01 >>> 8 & 255) * w01 + (p11 >>> 8 & 255) * w11));
+                int b = (int) (((p00 & 255) * w00 + (p10 & 255) * w10 + (p01 & 255) * w01 + (p11 & 255) * w11));
+                out[row + x] = ((a & 255) << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
+            }
+        }
+        System.arraycopy(out, 0, in, 0, W * H);
+    }
+
+    /** 5-tap 二项式近高斯模糊（横+纵各一遍，可分），写回 in。 */
+    private static void gaussianBlur(int[] in, int w, int h) {        if (w < 3 || h < 3) return;
+        int[] tmp = new int[w * h];
+        // 横向
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int i = y * w + x;
+                int p0 = in[i - (x > 0 ? 1 : 0)];
+                int p1 = in[i];
+                int p2 = in[i + (x < w - 1 ? 1 : 0)];
+                // 二项式 5-tap 近似：用相邻两项合成 [1,4,6,4,1]/16
+                int a0 = 0, r0 = 0, g0 = 0, b0 = 0;
+                int c0 = x > 1 ? in[i - 2] : p0, c4 = x < w - 2 ? in[i + 2] : p2;
+                a0 = ((p0 >>> 24) & 0xff) * 4 + ((p1 >>> 24) & 0xff) * 6 + ((p2 >>> 24) & 0xff) * 4 + ((c0 >>> 24) & 0xff) + ((c4 >>> 24) & 0xff);
+                r0 = ((p0 >>> 16) & 0xff) * 4 + ((p1 >>> 16) & 0xff) * 6 + ((p2 >>> 16) & 0xff) * 4 + ((c0 >>> 16) & 0xff) + ((c4 >>> 16) & 0xff);
+                g0 = ((p0 >>> 8) & 0xff) * 4 + ((p1 >>> 8) & 0xff) * 6 + ((p2 >>> 8) & 0xff) * 4 + ((c0 >>> 8) & 0xff) + ((c4 >>> 8) & 0xff);
+                b0 = (p0 & 0xff) * 4 + (p1 & 0xff) * 6 + (p2 & 0xff) * 4 + (c0 & 0xff) + (c4 & 0xff);
+                tmp[i] = (clamp255(a0 / 16) << 24) | (clamp255(r0 / 16) << 16)
+                        | (clamp255(g0 / 16) << 8) | clamp255(b0 / 16);
+            }
+        }
+        // 纵向
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int i = y * w + x;
+                int p0 = tmp[i - (y > 0 ? w : 0)];
+                int p1 = tmp[i];
+                int p2 = tmp[i + (y < h - 1 ? w : 0)];
+                int c0 = y > 1 ? tmp[i - 2 * w] : p0, c4 = y < h - 2 ? tmp[i + 2 * w] : p2;
+                int a0 = ((p0 >>> 24) & 0xff) * 4 + ((p1 >>> 24) & 0xff) * 6 + ((p2 >>> 24) & 0xff) * 4 + ((c0 >>> 24) & 0xff) + ((c4 >>> 24) & 0xff);
+                int r0 = ((p0 >>> 16) & 0xff) * 4 + ((p1 >>> 16) & 0xff) * 6 + ((p2 >>> 16) & 0xff) * 4 + ((c0 >>> 16) & 0xff) + ((c4 >>> 16) & 0xff);
+                int g0 = ((p0 >>> 8) & 0xff) * 4 + ((p1 >>> 8) & 0xff) * 6 + ((p2 >>> 8) & 0xff) * 4 + ((c0 >>> 8) & 0xff) + ((c4 >>> 8) & 0xff);
+                int b0 = (p0 & 0xff) * 4 + (p1 & 0xff) * 6 + (p2 & 0xff) * 4 + (c0 & 0xff) + (c4 & 0xff);
+                in[i] = (clamp255(a0 / 16) << 24) | (clamp255(r0 / 16) << 16)
+                        | (clamp255(g0 / 16) << 8) | clamp255(b0 / 16);
+            }
+        }
+    }
+
+    private static int clamp255(int v) {
+        return v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+
+    /** 可分离盒式模糊（横向 + 纵向各扫一遍），结果写回 in。 */
+    public static void boxBlur(int[] in, int w, int h, int r) {
+        int[] out = new int[w * h];
+        // 横向
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int aa = 0, ar = 0, ag = 0, ab = 0, cn = 0;
+                for (int k = -r; k <= r; k++) {
+                    int xx = x + k;
+                    if (xx < 0 || xx >= w) continue;
+                    int v = in[y * w + xx];
+                    aa += (v >>> 24) & 0xff;
+                    ar += (v >>> 16) & 0xff;
+                    ag += (v >>> 8) & 0xff;
+                    ab += v & 0xff;
+                    cn++;
+                }
+                int idx = y * w + x;
+                out[idx] = (clamp255(aa / cn) << 24) | (clamp255(ar / cn) << 16)
+                         | (clamp255(ag / cn) << 8) | clamp255(ab / cn);
+            }
+        }
+        // 纵向
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int aa = 0, ar = 0, ag = 0, ab = 0, cn = 0;
+                for (int k = -r; k <= r; k++) {
+                    int yy = y + k;
+                    if (yy < 0 || yy >= h) continue;
+                    int v = out[yy * w + x];
+                    aa += (v >>> 24) & 0xff;
+                    ar += (v >>> 16) & 0xff;
+                    ag += (v >>> 8) & 0xff;
+                    ab += v & 0xff;
+                    cn++;
+                }
+                int idx = y * w + x;
+                in[idx] = (clamp255(aa / cn) << 24) | (clamp255(ar / cn) << 16)
+                        | (clamp255(ag / cn) << 8) | clamp255(ab / cn);
+            }
+        }
+    }
+
+    private Frost() {
+    }
+}

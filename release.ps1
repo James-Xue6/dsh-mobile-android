@@ -118,9 +118,57 @@ Write-Host "  OK AndroidManifest 已更新"
 
 $buildArgs = @()
 if ($AllowLocalKey) { $buildArgs += '-AllowLocalKey' }
-& (Join-Path $PSScriptRoot 'build.ps1') @buildArgs
+# [V3.109 · 发布前修复] ⚠️ `build.ps1` **已失效**：它只走 `javac`、**不编译 Kotlin 源**，
+#   对本工程（Java + Kotlin/Compose 混合）实测 **200 个错误**（`GlassSheetOption`、`kotlin.*` 找不到）。
+#   ⇒ 构建改走 **Gradle 9.6**（与 `AGENTS.md` / 日常开发同一条路），再把产物复制成 `dist\dsh-mobile.apk`。
+#   `@buildArgs` 里的旧开关在 Gradle 路上没有对应物：本仓库**官方密钥在位**，正常发版不需要它们；
+#   确需本机密钥时，请在 `keystore.local.ps1` 里把变量配好（下面会 dot-source 它）。
+$ksLocal = Join-Path $PSScriptRoot 'keystore.local.ps1'
+if (Test-Path $ksLocal) {
+  . $ksLocal
+  if ($KsPass) { $env:DSH_KS_PASS = $KsPass }
+}
+if (-not $env:JAVA_HOME) { $env:JAVA_HOME = 'D:\AndroidStudio\jbr' }
+if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = 'F:\AI\程序开发\android-sdk' }
+$gradleBat = 'F:\AI\程序开发\.tools\gradle-9.6.0\bin\gradle.bat'
+if (-not (Test-Path $gradleBat)) { throw "找不到 Gradle：$gradleBat" }
+Push-Location $PSScriptRoot
+try {
+  & $gradleBat ':app:assembleRelease' '--console=plain'
+  if ($LASTEXITCODE -ne 0) { throw "Gradle 构建失败 (exit $LASTEXITCODE)" }
+} finally {
+  Pop-Location
+}
+$gradleApk = Join-Path $PSScriptRoot 'app\build\outputs\apk\release\app-release.apk'
+if (-not (Test-Path $gradleApk)) { throw "Gradle 没有产出 app-release.apk：$gradleApk" }
+Copy-Item $gradleApk (Join-Path $PSScriptRoot 'dist\dsh-mobile.apk') -Force
 $apk = Join-Path $PSScriptRoot 'dist\dsh-mobile.apk'
 if (-not (Test-Path $apk)) { throw '构建没有产出 dist\dsh-mobile.apk' }
+
+# [V3.133 · 验收 K1 的永久护栏] 硬断言：**APK 里真实的 versionCode 必须等于刚写进清单的**
+#   为什么必须有：历史上 `app/build.gradle.kts` 里硬编码了版本号 ⇒ `release.ps1` 改清单也**改不动 APK**
+#   ⇒ 用户被反复提示更新、装完版本不变 = **永久更新循环** ✗（AGP 日志会显示 `packageRelease UP-TO-DATE`）。
+#   这条断言一旦不成立就**当场中止发版**，绝不允许把这种包推出去。
+$aapt2 = Join-Path $env:ANDROID_HOME 'build-tools\35.0.0\aapt2.exe'
+if (-not (Test-Path $aapt2)) {
+    $cand = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Filter aapt2.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+    if ($cand) { $aapt2 = $cand.FullName }
+}
+if (Test-Path $aapt2) {
+    $badging = & $aapt2 dump badging $apk 2>$null | Select-String -Pattern '^package:' | Select-Object -First 1
+    if ($badging -and ($badging.Line -match "versionCode='(\d+)'")) {
+        $apkCode = [int]$Matches[1]
+        if ($apkCode -ne $newCode) {
+            throw "版本号不一致：APK 实际 versionCode=$apkCode，而清单/version.json 写的是 $newCode（会导致永久更新循环）"
+        }
+        Write-Host "  OK 版本号一致：versionCode=$apkCode（APK 实测）" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠️ 没能从 APK 读出 versionCode（跳过断言）" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ⚠️ 找不到 aapt2（跳过版本号断言）" -ForegroundColor Yellow
+}
 
 # ---------------------------------------------------------------- 更新清单
 $slug = 'James-Xue6/dsh-mobile-android'

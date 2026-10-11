@@ -1,11 +1,11 @@
 {
-  "versionCode": 26,
-  "versionName": "0.86.9",
-  "notes": "四项优化：①底部新增「生成物」窗口（列本会话产出文件，点一下下载到手机）②输入框加号改为弹「文件/相册/拍照」，选中后先暂存在输入框上方，与文字或语音一起发送③修「消息文本点一次不能立即选择范围」（现在单击即选中并弹出复制工具条）④模型那一排新增「权限」（对齐电脑端：只读/工作区可写/完全访问）。新增：可发送任意文件（PDF/Office/压缩包）。另修一个会让消息发不出去的问题（时区字段被网关拒绝）。",
-  "url": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.86.9/dist/dsh-mobile.apk",
-  "mirror": "https://github.com/James-Xue6/dsh-mobile-android/raw/v0.86.9/dist/dsh-mobile.apk",
-  "sha256": "34ae328060f396a84bc5ef96b81fb9975681bde8529cf7dbd16c3e00c9800a1b",
-  "size": 1083595,
+  "versionCode": 27,
+  "versionName": "0.87.0",
+  "notes": "0.87.0：① 弹窗全面玻璃化并归位到各自界面（模型/权限/生成物/任务/更新链路/配对/重命名/输入框菜单）② 修复更新链路版本号不前进导致的永久更新循环 ③ 修复返回键关不掉弹窗、抽屉弹窗层级、待发送菜单与表单叠在一起 ④ 输入框改为平台控件（长按可用系统粘贴/全选）⑤ 移除临时诊断埋点",
+  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.0/dist/dsh-mobile.apk",
+  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.0/dist/dsh-mobile.apk",
+  "sha256": "46ba8215c77f7f543fb93e04a984c7641de1dcdd30a2d5e8be2d906018e4b45d",
+  "size": 9628786,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

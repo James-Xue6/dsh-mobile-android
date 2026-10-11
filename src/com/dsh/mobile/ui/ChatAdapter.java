@@ -31,6 +31,8 @@ public final class ChatAdapter extends BaseAdapter {
 
         /** 点交付物行：下载到手机（由宿主实现）。 */
         void onDownloadFile(ChatItem item, String path);
+        /** [V3.76] 点交付物行：**先打开预览**（用户「不要点击下载，先以打开为主」）。 */
+        void onPreviewFile(ChatItem item, String path);
         /** 长按交付物行：复制路径。 */
         void onCopyPath(String path);
     }
@@ -157,6 +159,11 @@ public final class ChatAdapter extends BaseAdapter {
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
         ChatItem it = items.get(position);
+        return withTimeHeader(position, it, buildRow(it));
+    }
+
+    /** 按 kind 分发造行（原 getView 的 switch，抽出来给时间分隔条包一层）。 */
+    private View buildRow(ChatItem it) {
         switch (it.kind) {
             case ChatItem.USER:      return userBubble(it);
             case ChatItem.ASSISTANT: return assistantBubble(it);
@@ -168,6 +175,49 @@ public final class ChatAdapter extends BaseAdapter {
             case ChatItem.STEP:      return stepRow(it);
             default:                 return systemRow(it);
         }
+    }
+
+    /**
+     * 时间分隔条（[2026-10-07 整合] 取自朋友 fork 的 ChatAdapter.withTimeHeader）。
+     *
+     * <p>与上一条间隔超过 5 分钟才插一行居中的时间；每条都挂时间太啰嗦，
+     * 而翻回去看历史时又需要一眼分清"这是哪天的"。这是朋友那套视觉里
+     * 我们唯一缺的**纯视觉**件，加法式合并，不动任何既有渲染逻辑。
+     */
+    private View withTimeHeader(int position, ChatItem it, View row) {
+        if (position <= 0 || it == null || it.time <= 0L) return row;
+        ChatItem prev = items.get(position - 1);
+        if (prev == null || prev.time <= 0L) return row;
+        if (it.time - prev.time < 5L * 60L * 1000L) return row;
+
+        LinearLayout box = Ui.col(ctx);
+        TextView t = Ui.text(ctx, timeLabel(it.time), Ui.S_CAP2, Ui.INK_FAINT, false);
+        t.setGravity(Gravity.CENTER);
+        t.setLayoutParams(Ui.fill());
+        t.setPadding(0, Ui.dp(ctx, 10), 0, Ui.dp(ctx, 2));
+        box.addView(t);
+        box.addView(row, Ui.fill());
+        return box;
+    }
+
+    /** 今天只显示 HH:mm；昨天 / 更早带日期。 */
+    private static String timeLabel(long ms) {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        String hm = String.format("%02d:%02d",
+                c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
+        if (sameDay(c, now)) return hm;
+        java.util.Calendar y = java.util.Calendar.getInstance();
+        y.add(java.util.Calendar.DAY_OF_YEAR, -1);
+        if (sameDay(c, y)) return "昨天 " + hm;
+        return (c.get(java.util.Calendar.MONTH) + 1) + "月"
+                + c.get(java.util.Calendar.DAY_OF_MONTH) + "日 " + hm;
+    }
+
+    private static boolean sameDay(java.util.Calendar a, java.util.Calendar b) {
+        return a.get(java.util.Calendar.YEAR) == b.get(java.util.Calendar.YEAR)
+                && a.get(java.util.Calendar.DAY_OF_YEAR) == b.get(java.util.Calendar.DAY_OF_YEAR);
     }
 
     // ------------------------------------------------------------ 用户
@@ -184,10 +234,13 @@ public final class ChatAdapter extends BaseAdapter {
         bubble.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 14), Ui.dp(ctx, 10));
         bubble.setMaxWidth(maxBubble);
         // 用户气泡：细腻的蓝色渐变（上 #0A84FF → 下 #0071E3）+ 18dp 圆角。
-        // 纯色实心块在深色/浅色下都是一块"死色"，一段极窄渐变就把它变成了有光感的实体。
-        // 注意这里**不能**用 brandPill()：999 的圆角会被夹到 min(宽,高)/2，
-        // 多行气泡会变成两头圆的"体育场形"。
-        bubble.setBackground(Ui.brandGradient(Ui.dp(ctx, 18)));
+        // [液态玻璃 2026-10-07] 用户要求「内部对话区的胶囊卡片换成真的液态玻璃」：
+        // 蓝色渐变体降到 88% 不透明（白字仍过对比），底下垫一层**真·背景模糊**，
+        // 于是气泡边缘会折射出背后的彩色环境背景 —— 而不是一块死色实心块。
+        android.graphics.drawable.GradientDrawable userBg = Ui.brandGradient(Ui.dp(ctx, 18));
+        userBg.setAlpha(224);
+        bubble.setBackground(userBg);
+        Ui.ambientBacked(bubble, Ui.dp(ctx, 18));
         makeSelectable(bubble);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -237,9 +290,12 @@ public final class ChatAdapter extends BaseAdapter {
         // 助手气泡：[毛玻璃 v3] 改回**玻璃泡**（demo `.glass-bub`）—— 半透明体 + 135° 斜射高光
         // + 内发光 + 白棱发丝线。为什么这次能透：页面底已经从均匀灰紫换成**彩色环境背景**，
         // 半透明终于"有东西可透"；旧注释里"透出纯色底=敷衍"的前提已经不成立。
-        bubble.setBackground(new Ui.CardBg(Ui.dp(ctx, 18), Ui.SURFACE_G1,
+        bubble.setBackground(new Ui.CardBg(Ui.dp(ctx, 18), Ui.GLASS_CARD,
                 Ui.dp(ctx, 1f), Ui.LINE, 0x00000000, 0f));
-        bubble.setElevation(Ui.dp(ctx, 2f));
+        // [液态玻璃 2026-10-07] 助手气泡 = 真·液态玻璃（背景模糊 + 边缘折射 + 原玻璃层）
+        Ui.ambientBacked(bubble, Ui.dp(ctx, 18));
+        // [液态玻璃 2026-10-07] 同上：半透明气泡不挂框架 elevation（阴影会透上来压灰 + 黑边）
+        bubble.setElevation(0f);
         makeSelectable(bubble);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -279,9 +335,15 @@ public final class ChatAdapter extends BaseAdapter {
         card.setPadding(Ui.dp(ctx, 13), Ui.dp(ctx, 9), Ui.dp(ctx, 13), Ui.dp(ctx, 10));
         // 左侧 3dp 主色强调条 + 奶白渐变体 + 发丝描边（旧版是整卡一圈淡蓝框 = "土"元素）
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
+                new int[] { Ui.GLASS_CARD, Ui.GLASS_CARD_2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.BRAND, Ui.dp(ctx, 3f)));
-        card.setElevation(Ui.dp(ctx, 2f));
+        // [液态玻璃 2026-10-07] 子智能体回传卡 = 真·液态玻璃
+        Ui.ambientBacked(card, Ui.dp(ctx, Ui.R_CARD));
+        // [液态玻璃 2026-10-07 · 修「卡片内部发灰 + 边缘一圈黑边」]
+        // 半透明玻璃卡**绝不能挂框架 elevation**：框架阴影画在 View 底下，会从半透明卡面
+        // 透上来把整片卡面压灰（实测卡内 #979FD7 vs 同位置背景 #BCCCEF，暗 ~35 级），
+        // 并且沿卡缘形成一圈更黑的"黑边"。阴影只能画在形状**之外**（见 Ui.shadowed）。
+        card.setElevation(0f);
 
         TextView head = Ui.text(ctx, agentLabel(it), Ui.S_FOOT, Ui.BRAND, true);
         Ui.setLeadingIcon(head, com.dsh.mobile.R.drawable.ic_people, Ui.BRAND, 14f, 6f);
@@ -361,8 +423,10 @@ public final class ChatAdapter extends BaseAdapter {
         // 旧版是淡蓝底 —— 一屏能有十几条工具行，每条都染蓝就是"到处都是彩色"，
         // 状态色（绿/橙/红圆点）反而被底色淹掉了。
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, 14),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
+                new int[] { Ui.GLASS_CARD, Ui.GLASS_CARD_2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, 0x00000000, 0f));
+        // [液态玻璃 2026-10-07] 工具行卡 = 真·液态玻璃（一屏十几条，同源同路径）
+        Ui.ambientBacked(card, Ui.dp(ctx, 14));
         card.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -511,8 +575,15 @@ public final class ChatAdapter extends BaseAdapter {
         // [灰框修复] 用框架版渐变卡底，不用自绘 CardBg：真机实测（荣耀 PGT-AN10）自绘
         // Path 的渐变卡体在超高卡片上会把整片卡体渲染成灰色（设计色 #FBFAFE 只在最外侧
         // 露 ~8px，内部整片 ≈(185,183,193)）。同一位置换成 cardGrad 后实测 (251,250,254) ✓。
-        card.setBackground(Ui.cardGrad(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
-        card.setElevation(Ui.dp(ctx, 2f));
+        card.setBackground(Ui.cardGradThin(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
+        // [液态玻璃 2026-10-07] 审批 / 提问卡 = 真·液态玻璃（玻璃层仍是 cardGrad，
+        // 不动它就是为了不把"超高卡片整片压灰"那个真机 bug 放回来）
+        Ui.ambientBacked(card, Ui.dp(ctx, Ui.R_CARD));
+        // [液态玻璃 2026-10-07 · 修「卡片内部发灰 + 边缘一圈黑边」]
+        // 半透明玻璃卡**绝不能挂框架 elevation**：框架阴影画在 View 底下，会从半透明卡面
+        // 透上来把整片卡面压灰（实测卡内 #979FD7 vs 同位置背景 #BCCCEF，暗 ~35 级），
+        // 并且沿卡缘形成一圈更黑的"黑边"。阴影只能画在形状**之外**（见 Ui.shadowed）。
+        card.setElevation(0f);
         card.setLayoutParams(Ui.fill());
         // [P0-1] body = 会滚动的内容区；底部按钮行不进这里（见方法尾部的 addScrollableBody）
         LinearLayout body = Ui.col(ctx);
@@ -597,8 +668,15 @@ public final class ChatAdapter extends BaseAdapter {
         // [灰框修复] 用框架版渐变卡底，不用自绘 CardBg：真机实测（荣耀 PGT-AN10）自绘
         // Path 的渐变卡体在超高卡片上会把整片卡体渲染成灰色（设计色 #FBFAFE 只在最外侧
         // 露 ~8px，内部整片 ≈(185,183,193)）。同一位置换成 cardGrad 后实测 (251,250,254) ✓。
-        card.setBackground(Ui.cardGrad(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
-        card.setElevation(Ui.dp(ctx, 2f));
+        card.setBackground(Ui.cardGradThin(Ui.dp(ctx, Ui.R_CARD), Ui.dp(ctx, 1f), Ui.LINE));
+        // [液态玻璃 2026-10-07] 审批 / 提问卡 = 真·液态玻璃（玻璃层仍是 cardGrad，
+        // 不动它就是为了不把"超高卡片整片压灰"那个真机 bug 放回来）
+        Ui.ambientBacked(card, Ui.dp(ctx, Ui.R_CARD));
+        // [液态玻璃 2026-10-07 · 修「卡片内部发灰 + 边缘一圈黑边」]
+        // 半透明玻璃卡**绝不能挂框架 elevation**：框架阴影画在 View 底下，会从半透明卡面
+        // 透上来把整片卡面压灰（实测卡内 #979FD7 vs 同位置背景 #BCCCEF，暗 ~35 级），
+        // 并且沿卡缘形成一圈更黑的"黑边"。阴影只能画在形状**之外**（见 Ui.shadowed）。
+        card.setElevation(0f);
         card.setLayoutParams(Ui.fill());
         // [P0-1] body = 会滚动的内容区（问题、选项、补充输入…）；底部按钮行不进这里
         LinearLayout body = Ui.col(ctx);
@@ -852,9 +930,15 @@ public final class ChatAdapter extends BaseAdapter {
         LinearLayout card = Ui.col(ctx);
         card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.M_CARD_PAD), Ui.dp(ctx, 12));
         card.setBackground(new Ui.CardBg(Ui.dp(ctx, Ui.R_CARD),
-                new int[] { Ui.SURFACE_G1, Ui.SURFACE_G2 }, Ui.dp(ctx, 1f),
+                new int[] { Ui.GLASS_CARD, Ui.GLASS_CARD_2 }, Ui.dp(ctx, 1f),
                 Ui.LINE, Ui.OK, Ui.dp(ctx, 3f)));
-        card.setElevation(Ui.dp(ctx, 2f));
+        // [液态玻璃 2026-10-07] 交付物卡 = 真·液态玻璃
+        Ui.ambientBacked(card, Ui.dp(ctx, Ui.R_CARD));
+        // [液态玻璃 2026-10-07 · 修「卡片内部发灰 + 边缘一圈黑边」]
+        // 半透明玻璃卡**绝不能挂框架 elevation**：框架阴影画在 View 底下，会从半透明卡面
+        // 透上来把整片卡面压灰（实测卡内 #979FD7 vs 同位置背景 #BCCCEF，暗 ~35 级），
+        // 并且沿卡缘形成一圈更黑的"黑边"。阴影只能画在形状**之外**（见 Ui.shadowed）。
+        card.setElevation(0f);
         card.setLayoutParams(Ui.fill());
         card.addView(Ui.text(ctx, "交付物", Ui.S_HEAD, Ui.INK, true));
 

@@ -22,7 +22,7 @@ param(
   [switch]$AllowLocalKey
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # PS5.1 下 'Stop' 会把 javac 的 stderr 提示(如 deprecated Note)当致命错误；真实失败仍由各步 $LASTEXITCODE 显式检查
 $root = $PSScriptRoot
 $env:JAVA_HOME = $Jdk
 
@@ -175,7 +175,7 @@ $d8Jar = Join-Path $bt 'lib\d8.jar'
 if (-not (Test-Path $d8Jar)) { $d8Jar = Join-Path $bt 'd8.jar' }
 if (-not (Test-Path $d8Jar)) { throw "缺少 d8.jar（找过 $bt\lib 与 $bt）" }
 $javaExe = Join-Path $Jdk 'bin\java.exe'
-Invoke-Tool $javaExe (@('-Xmx1024M', '-Xss1m', '-cp', $d8Jar, 'com.android.tools.r8.D8') + $d8Args) 'd8' | Out-Null
+Invoke-Tool $javaExe (@('-Xmx768M', '-Xss1m', '-cp', $d8Jar, 'com.android.tools.r8.D8') + $d8Args) 'd8' | Out-Null
 # 临时 jar 用完即删：不留在暂存目录、不进产物（评审要求）
 Remove-Item $tmpJar -Force -ErrorAction SilentlyContinue
 

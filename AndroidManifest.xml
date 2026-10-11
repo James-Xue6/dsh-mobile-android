@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.dsh.mobile"
-    android:versionCode="26"
-    android:versionName="0.86.9">
+    android:versionCode="27"
+    android:versionName="0.87.0">
 
-    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <!-- 【AGP 9 新规】uses-sdk 标签不再允许控制 SDK 版本（AGP 9 起的 manifest 合并会直接报错）。
+         版本改由构建侧提供：Gradle 走 app/build.gradle.kts，免 Gradle 管线走 build.ps1 的
+         aapt2 min-sdk-version / target-sdk-version 参数（两处均已显式传入，故删除安全）。
+         注：XML 注释内不能出现连续两个减号，上一版就是因此把 manifest 写成语法错误。 -->
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -62,6 +65,98 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme" />
+
+        <!-- [另起原型] 真毛玻璃首页 demo（入口已回 MainActivity，此页保留可手动启动） -->
+        <activity
+            android:name="com.dsh.mobile.proto.GlassHomeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="玻璃Demo" />
+
+        <!-- [玻璃参数对比 · 非产品界面] 花哨彩色底图 + 8 个不同参数版本玻璃，定位最终质感 -->
+        <activity
+            android:name="com.dsh.mobile.proto.GlassCompareActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="玻璃对比" />
+
+        <!-- [手动调参 · 非产品界面] 9 个液态玻璃参数全部暴露成滑条，模拟器上手动调定位最终质感 -->
+        <activity
+            android:name="com.dsh.mobile.proto.GlassTunerActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="玻璃调参" />
+
+        <!-- [对齐自测 · 非产品界面] 多色分段背景 + 三档滚动补偿并排：
+             一次性判定 Frost.capture 的滚动补偿该取 0 / +s / -s（见该类注释） -->
+        <activity
+            android:name="com.dsh.mobile.proto.GlassAlignActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="玻璃对齐自测" />
+        <!-- [路线 A 取证页] 折射观察窗：Compose + 官方 backdrop（io.github.kyant0），
+             用于按《GlassUI_SPEC_折射观察窗.md》§5 自检清单逐条核对。 -->
+        <activity
+            android:name="com.dsh.mobile.glass.GlassEvidenceActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="折射观察窗取证" />
+        <!-- [路线 A 逐页替换 · 切片1] 设备页 Compose 骨架：背景进 layerBackdrop + 设备卡/添加设备用 RefractionWindow
+             [V2.2 · 用户报「我打开的界面和你的截图不一样」] 原因：**新页面根本不在桌面图标里**
+             （manifest 里只有 MainActivity 是 LAUNCHER 入口），用户点图标进的还是正式版旧页（Frost 引擎）。
+             这里给新界面加一个**独立 launcher 入口**（标签区分开），让用户能一键打开新 UI 试玩；
+             正式版的 MainActivity 入口不动，全部既有链路（网关/通知/保活）照旧。 -->
+        <!-- [V3.106 · 发布前检查 B1] 桌面图标只能有一个：原来这里给原型页加了**独立 launcher 入口**，
+             发布会变成**两个桌面图标**（`aapt2 dump badging` 实测 2 条 launchable-activity）✗。
+             ⇒ 去掉 launcher intent-filter，只保留 `exported="true"`（adb / 自动化仍可 `am start -n` 直接拉起，
+             开发与验收不受影响 ✓）。 -->
+        <activity
+            android:name="com.dsh.mobile.glass.GlassDevicePageActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="掌上通·新界面">
+        </activity>
+        <!-- [路线 A 逐页替换 · 切片2] 对话页 Compose 骨架：顶栏 + 输入胶囊用 RefractionWindow -->
+        <activity
+            android:name="com.dsh.mobile.glass.GlassChatPageActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="对话页(Compose)" />
+
+        <!-- [V3.77 · 用户「插入图片和拍照最好增加一个选择图片裁剪的界面」→ 方案 A（自由裁剪）]
+             自绘裁剪页：原图 + 可拖框体/拉四角，确认后按框裁剪（保持原分辨率）并回到"暂存待发"。 -->
+        <activity
+            android:name="com.dsh.mobile.glass.CropActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="裁剪图片" />
+
+        <!-- [路线 A 逐页替换 · 切片3] 设置页 Compose 切片：深色模式 / 配色（真实写库）+ 指向正式版的入口。
+             用户报「点齿轮进入了不对的首页」→ 设备页齿轮改指本页，不再跳正式版首页。 -->
+        <activity
+            android:name="com.dsh.mobile.glass.GlassSettingsActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="设置(Compose)" />
+
+        <!-- [路线 A 逐页替换 · 切片4] 抽屉/会话列表 Compose 切片（**纯 Activity + GlassComposeHostOwner**，
+             与 MainActivity 同构 ⇒ 谁再往抽屉里用 Compose Dialog 会在这里当场崩）。
+             用途：抽屉在模拟器上没数据（需网关），本页用真对象拼演示数据，好验两处 ⋯ 的树内浮层菜单。 -->
+        <activity
+            android:name="com.dsh.mobile.glass.GlassSessionPageActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme"
+            android:label="抽屉(Compose)" />
 
         <!-- 应用内更新：把下载好的 APK 以 content:// 交给系统安装器（Android 7+ 禁止 file://）。
              自写极简 provider（本项目不依赖 androidx，见 net/ApkFileProvider.java）：

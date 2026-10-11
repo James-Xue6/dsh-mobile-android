@@ -485,6 +485,20 @@ public final class Store {
     }
 
     /**
+     * [V3.81 · 用户「设置里增加**字体大小**（大/中/小），目前这个是标准档」]
+     *
+     * <p>存**比例**（不是档位名），这样以后加档不用改读取端：小 `0.9` / 中 `1.0`（默认）/ 大 `1.12`。
+     */
+    public float fontScale() {
+        float v = sp.getFloat("font_scale", 1f);
+        return (v < 0.7f || v > 1.4f) ? 1f : v;   // 存坏了退回标准档，不把界面搞崩
+    }
+
+    public void setFontScale(float scale) {
+        sp.edit().putFloat("font_scale", Math.max(0.7f, Math.min(1.4f, scale))).apply();
+    }
+
+    /**
      * 主题模式：{@code system}（跟随系统，默认） / {@code light}（浅色） / {@code dark}（深色）。
      * 只负责存取；「这一刻该用哪套色」由 {@code com.dsh.mobile.ui.Theme.resolveDark} 算。
      */
@@ -510,6 +524,59 @@ public final class Store {
 
     public void setThemeMode(String mode) {
         sp.edit().putString(K_THEME_MODE, com.dsh.mobile.ui.Theme.normalize(mode)).apply();
+    }
+
+    /**
+     * 环境背景配色档（毛玻璃 v3，见 {@code Ui.PALETTES}）：
+     * 0 极光（默认） / 1 深海 / 2 暮色 / 3 森林 / 4 紫罗兰 / 5 素雅。
+     *
+     * <p>只存一个下标：具体色值全在 {@code Ui.PALETTES} 一处，换配色不需要迁移旧数据
+     * （越界一律回落 0，与 themeMode 的 normalize 同一个思路）。
+     */
+    public int ambientPalette() {
+        return Math.max(0, Math.min(5, sp.getInt("ambient_palette", 0)));
+    }
+
+    /**
+     * [2026-10-07 用户定版] **玻璃磨砂度 4 档**（0..3 → Ui.GLASS_DS {4,5,6,8}）。
+     *
+     * <p>用户实测"新装的都很差，只改变了磨砂度"，给了 4 档横比后**选第 4 档（ds=8）**，
+     * 并要求"这四个都不错，留着弄成 4 档" → 默认第 4 档。
+     */
+    public int glassLevel() {
+        return Math.max(0, Math.min(3, sp.getInt("glass_level", 1)));
+    }
+
+    public void setGlassLevel(int level) {
+        sp.edit().putInt("glass_level", Math.max(0, Math.min(3, level))).apply();
+    }
+
+    /**
+     * [V3.27 · 用户定版] **玻璃模式二选一**：`liquid`（液态，带折射）/ `frost`（磨砂，无折射、省资源）。
+     *
+     * <p>[V3.52 · 用户「**设置里默认为液态玻璃**」] 默认从 `frost` 改成 **`liquid`**（跟着需求走）。
+     */
+    public String glassMode() {
+        return "liquid".equals(sp.getString("glass_mode", "liquid")) ? "liquid" : "frost";
+    }
+
+    public void setGlassMode(String mode) {
+        sp.edit().putString("glass_mode", "liquid".equals(mode) ? "liquid" : "frost").apply();
+    }
+    public void setAmbientPalette(int index) {
+        sp.edit().putInt("ambient_palette", Math.max(0, Math.min(5, index))).apply();
+    }
+
+    /**
+     * [V3.52 · 用户「配色增加一个选项：自己上传图片当底配色」]
+     * 自定义环境底图（用户选的图片 **URI 字符串**；空串 = 用内置 6 套配色）。
+     */
+    public String ambientImage() {
+        return sp.getString("ambient_image", "");
+    }
+
+    public void setAmbientImage(String uri) {
+        sp.edit().putString("ambient_image", uri == null ? "" : uri).apply();
     }
 
     /**

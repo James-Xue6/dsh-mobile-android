@@ -30,6 +30,20 @@ public final class SettingsView extends LinearLayout {
         void onToggleAllowScreenshot(boolean on);
         /** 主题三选一：system（跟随系统，默认） / light（浅色） / dark（深色）。 */
         void onSetThemeMode(String mode);
+        /**
+         * [V3.81 · 用户「设置里面再增加一个**字体大小**，弄个**大 / 中 / 小**三个档就行，
+         * 目前这个是标准档」] 用户点了字号分段 ⇒ 宿主落库 + 全局应用（{@code Ui.applyFontScale}）。
+         */
+        void onSetFontScale(float scale);
+        /** 环境背景配色档（毛玻璃 v3）：0 极光 … 5 素雅。 */
+        void onSetPalette(int index);
+
+        /** [2026-10-07 用户定版] 玻璃磨砂度 4 档（0..3 → ds {4,5,6,8}）。 */
+        void onSetGlassLevel(int level);
+        /** [V3.27] 玻璃模式二选一：liquid（液态，带折射）/ frost（磨砂，无折射、省资源）。 */
+        void onSetGlassMode(String mode);
+        /** [V3.52] 自定义"配色底图"：拉起系统图片选择器，选中后当环境底。 */
+        void onPickAmbientImage();
     }
 
     private final Context ctx;
@@ -61,6 +75,12 @@ public final class SettingsView extends LinearLayout {
     private TextView themeLight;
     private TextView themeDark;
     private String themeMode = Theme.MODE_SYSTEM;
+    /** 环境背景配色档（毛玻璃 v3）：0 极光 … 5 素雅。 */
+    private int palette = 0;
+    private View[] palSwatches;
+    private TextView paletteLabel;
+    /** [2026-10-07 用户定版] 磨砂度 4 档的四个胶囊。 */
+    private final TextView[] glassPills = new TextView[4];
     /**
      * 分区的展开状态。主题切换会整棵树重建（配色是创建时烘进去的），
      * 重建时靠这张表把用户已经展开/收起的区块原样还原，不至于"一切主题全折叠"。
@@ -275,6 +295,72 @@ public final class SettingsView extends LinearLayout {
         themeSec.addView(themeSeg);
         paintTheme();
 
+        // ---- 环境背景配色（毛玻璃 v3）：demo 底部控制条那一行「配色」，6 套色板
+        // 为什么放这里：玻璃面板要透出"有颜色的下层"才成立（demo 原话「没有下层内容，
+        // 玻璃只是白板」），而哪套配色好看是主观的 —— 给用户自己挑，默认极光。
+        LinearLayout paletteRow = Ui.row(ctx);
+        LinearLayout.LayoutParams palLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        palLp.topMargin = Ui.dp(ctx, 14);
+        paletteRow.setLayoutParams(palLp);
+        paletteRow.addView(Ui.text(ctx, "配色", Ui.S_FOOT, Ui.INK_SUB, false));
+        palSwatches = new View[Ui.PALETTES.length];
+        for (int i = 0; i < Ui.PALETTES.length; i++) {
+            final int idx = i;
+            View sw = new View(ctx);
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Ui.dp(ctx, 40), Ui.dp(ctx, 28));
+            slp.leftMargin = Ui.dp(ctx, 8);
+            sw.setLayoutParams(slp);
+            sw.setClickable(true);
+            sw.setContentDescription("配色 · " + Ui.PALETTES[i].name);
+            sw.setOnClickListener(v -> {
+                Ui.haptic(v);
+                host.onSetPalette(idx);
+                setPalette(idx);
+            });
+            paletteRow.addView(sw);
+            palSwatches[i] = sw;
+        }
+        paletteLabel = Ui.text(ctx, "", Ui.S_FOOT, Ui.INK_SUB, false);
+        LinearLayout.LayoutParams plLabelLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        plLabelLp.leftMargin = Ui.dp(ctx, 10);
+        paletteLabel.setLayoutParams(plLabelLp);
+        paletteRow.addView(paletteLabel);
+        themeSec.addView(paletteRow);
+        paintPalette();
+
+        // ---- [2026-10-07 用户定版] 玻璃磨砂度 4 档：用户拿 4 档横比后选第 4 档，
+        // 并明确"这四个都不错，你留着弄成 4 档" → 直接做成可选项（默认第 4 档 = ds 8）。
+        LinearLayout blurRow = Ui.row(ctx);
+        LinearLayout.LayoutParams blurLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        blurLp.topMargin = Ui.dp(ctx, 14);
+        blurRow.setLayoutParams(blurLp);
+        blurRow.addView(Ui.text(ctx, "磨砂", Ui.S_FOOT, Ui.INK_SUB, false));
+        final String[] blurNames = { "轻", "标准", "重", "最重" };
+        for (int i = 0; i < blurNames.length; i++) {
+            final int idx = i;
+            android.widget.TextView pill = Ui.text(ctx, blurNames[i], Ui.S_FOOT,
+                    Ui.INK, false);
+            pill.setGravity(android.view.Gravity.CENTER);
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                    Ui.dp(ctx, 56), Ui.dp(ctx, 30));
+            plp.leftMargin = Ui.dp(ctx, 8);
+            pill.setLayoutParams(plp);
+            pill.setClickable(true);
+            pill.setContentDescription("磨砂度 · " + blurNames[i]);
+            pill.setOnClickListener(v -> {
+                Ui.haptic(v);
+                host.onSetGlassLevel(idx);
+                setGlassLevel(idx);
+            });
+            blurRow.addView(pill);
+            glassPills[i] = pill;
+        }
+        themeSec.addView(blurRow);
+        setGlassLevel(Ui.glassLevel());
+
 
         // ---- 隐私（高级项，默认折叠；与「允许自签名证书」同一套开关样式）
         LinearLayout privacy = section(body, "隐私", false);
@@ -380,6 +466,12 @@ public final class SettingsView extends LinearLayout {
 
     public void setDisplayMode(String mode) { paintModes(mode); }
 
+    /**
+     * [V3.83] 字号档位回显 —— **旧设置页没有字号分段**（只有 Compose 设置页有），这里留空实现，
+     * 让宿主可以统一写法 `settingsView.setFontScale(...)`（实际回显在 {@code GlassSettingsView}）。
+     */
+    public void setFontScale(float scale) { }
+
     // ------------------------------------------------------------ 主题
 
     private void paintTheme() {
@@ -392,6 +484,42 @@ public final class SettingsView extends LinearLayout {
     public void setThemeMode(String mode) {
         themeMode = Theme.normalize(mode);
         paintTheme();
+    }
+
+    // ------------------------------------------------------------ 环境背景配色
+
+    /** 外部（宿主）同步当前配色档。 */
+    public void setPalette(int index) {
+        palette = Math.max(0, Math.min(Ui.PALETTES.length - 1, index));
+        paintPalette();
+    }
+
+    /** 色块 = 该配色的三段底色渐变；选中的那一枚套一圈正文色描边（其余只留白棱）。 */
+    /** [2026-10-07 用户定版] 磨砂度选中态：选中的那一档高亮。 */
+    void setGlassLevel(int level) {
+        level = Math.max(0, Math.min(3, level));
+        for (int i = 0; i < glassPills.length; i++) {
+            android.widget.TextView p = glassPills[i];
+            if (p == null) continue;
+            boolean on = i == level;
+            p.setTextColor(on ? 0xFFFFFFFF : Ui.INK);
+            p.setBackground(on ? Ui.pill(0xFF7A4DFF) : Ui.round(0, 0x33000000));
+            p.setTypeface(on ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
+        }
+    }
+    private void paintPalette() {
+        if (palSwatches == null) return;
+        for (int i = 0; i < palSwatches.length; i++) {
+            android.graphics.drawable.GradientDrawable g =
+                    new android.graphics.drawable.GradientDrawable(
+                            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                            Ui.PALETTES[i].bg);
+            g.setCornerRadius(Ui.dp(ctx, 9));
+            boolean on = i == palette;
+            g.setStroke(Ui.dp(ctx, on ? 2f : 1f), on ? Ui.INK : Ui.GLASS_HAIRLINE);
+            palSwatches[i].setBackground(g);
+        }
+        if (paletteLabel != null) paletteLabel.setText(Ui.PALETTES[palette].name);
     }
 
     /**

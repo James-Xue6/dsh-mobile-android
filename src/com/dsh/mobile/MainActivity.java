@@ -89,6 +89,10 @@ public final class MainActivity extends Activity implements
      * 只主动问一次，被拒之后不再骚扰 —— 改由设置页「通知」分组给出「去系统设置开启」的引导。
      */
     private static final int REQ_NOTIF = 1010;
+    /** [V3.52] 「配色 → 上传图片当底」的系统图片选择器。 */
+    private static final int REQ_AMBIENT_IMG = 1011;
+    /** [V3.77 · 用户选了方案 A（自由裁剪）] 选图/拍照之后先过一遍裁剪页。 */
+    private static final int REQ_CROP = 1012;
 
     /**
      * 是否允许用外部 Intent 的 pairing extra 直接触发配对（自动化测试/脚本联调用）：
@@ -185,13 +189,28 @@ public final class MainActivity extends Activity implements
     private GatewayClient gw;
 
     private FrameLayout root;
+    /** [V3.103 · 方案 A] 抽屉里那个「独立全屏弹窗宿主」是否已挂上（只挂一次）。 */
+    private boolean drawerSheetHostAdded = false;
+    /**
+     * [V3.114 · 用户「对话侧抽屉三个点的弹窗**改别的地方了**」（我 V3.113 带坏的）]
+     *
+     * 抽屉的弹窗必须有**自己的状态**：抽屉菜单走「抽屉宿主 + 抽屉取样层」，
+     * 应用弹窗（模型/权限/生成物/更新/配对…）走「聊天页宿主 + 聊天页取样层」。
+     * 之前两边共用聊天页那一个状态 ⇒ 我 V3.113 一加"聊天页能渲染就别接管"，
+     * 抽屉菜单就被赶回聊天层，落到抽屉**下面** ✗。
+     */
+    private final com.dsh.mobile.glass.GlassSheetState drawerSheetState =
+            new com.dsh.mobile.glass.GlassSheetState();
     /** 左侧任务抽屉宿主：内容层 + 遮罩 + 抽屉层（见 DrawerHost）。 */
     private DrawerHost drawerHost;
     /** 内容层：对话页 / 设置页在这里互切，不再整屏重挂 root。 */
     private FrameLayout contentHost;
     private SessionListView listScreen;
-    private ConversationView convo;
-    private SettingsView settingsView;
+    private com.dsh.mobile.glass.GlassChatView convo;
+    /** [V3.5] 当前内容是不是 Compose 屏：决定根容器要不要替它留系统栏内边距、系统栏要不要透明。 */
+    private boolean composeScreen = false;
+    private int lastInsetTop = 0, lastInsetBottom = 0;
+    private com.dsh.mobile.glass.GlassSettingsView settingsView;
     /** 「我的设备」启动页。 */
     private DeviceHubView deviceHub;
     /**
@@ -245,6 +264,25 @@ public final class MainActivity extends Activity implements
     private int historyFormatVersion = 4;
     private Long nextBeforeSeq = null;
     private boolean hasMore = false;
+    /**
+     * [V3.58 · 用户「**很多历史记录没给加载出来**…应该严格按照轮数对应，你现在打开的应该是 23 轮左右，
+     * 但是现在只加载出来 8 条」]
+     *
+     * <p>根因：会话打开时网关只给**当前窗口**（尾部若干条）的快照，更早的历史**只有用户上滑**才会拉
+     * ⇒ 打开会话只看得到最近几条，右侧刻度条也只能按"已加载的那几条"算轮数。
+     *
+     * <p>处置：快照落地后**自动把更早的分页拉全**（每页间隔 200ms、最多 [AUTO_PAGE_MAX] 页、
+     * 切会话/没有更多即停）—— 与"上滑加载更早"走的是**同一个** `onLoadMore()`，所有既有守卫都保留。
+     */
+    private boolean autoPaging = false;
+    private int autoPageCount = 0;
+    /** [V3.64] 自动翻页"属于哪个会话"——只有会话号变了才重置计数与启动，避免被后续快照反复重启（无限加载）。 */
+    private String autoPageSession = "";
+    /** [V3.64] 上一次已应用的快照指纹（会话号+cursor+条数+末条seq）——"同内容快照去重"，避免整列反复重建。 */
+    private String lastSnapshotFp = "";
+    private static final int AUTO_PAGE_MAX = 0;   // [V3.64] 先**关掉自动翻页**（A/B 定因）：只做上滑按需加载
+    /** [V3.61 诊断 · 验完即删] 快照计数（滚动记录用）。 */
+    private int debugSnapSeq = 0;
     /**
      * 「加载更早历史」是否还在途。**在途时必须忽略新的上滑触发**，否则一次上滑会连发
      * 好几个 history 请求；响应到达 / 失败 / 超时三者任一，都要复位它。
@@ -636,6 +674,30 @@ public final class MainActivity extends Activity implements
         //   ② **时机在 store / Notifier 之后**：store 已初始化，Notifier 渠道已建好，
         //      钩子第一次被调用不会再 NPE 静默丢提醒。
         final android.content.Context appCtx = getApplicationContext();
+        // [V3.1 调试钩子] `am start … --ez glass_force_press true` 强制玻璃件画成"按下"态，
+        // 用于在 input 注入不可靠的 ROM 上验证按压反馈（华为/荣耀 adb input 驱动不了 Compose 按下态）。
+        // 默认 false，不影响任何正常逻辑。
+        com.dsh.mobile.glass.GlassDebug.forcePressed = getIntent() != null
+                && getIntent().getBooleanExtra("glass_force_press", false);
+        // [V3.58 调试钩子] `am start … --ez glass_force_plan true` 强制**展开目标卡的任务列表**
+        // （平时要点一下卡片；真机不接受注入点击 ⇒ 有了它才能在真机截到"点开后的胶囊界面"）。
+        com.dsh.mobile.glass.GlassDebug.forcePlanExpanded = getIntent() != null
+                && getIntent().getBooleanExtra("glass_force_plan", false);
+        // [V3.3 调试钩子] `am start … --ez glass_force_chat true` 直接落到对话屏 ——
+        // 没有配对的网关会话时也能验收"托管后的对话页"（正式流程里只有连上电脑才会有会话）。
+        if (getIntent() != null && getIntent().getBooleanExtra("glass_force_device", false)) {
+            uiHandler.postDelayed(this::showDevices, 400L);
+            uiHandler.postDelayed(this::showDevices, 2500L);
+        }
+        if (getIntent() != null && getIntent().getBooleanExtra("glass_force_chat", false)) {
+            // 复张两次：启动逻辑（无配对设备→落设备页）可能在首次之后才跑完，会把它顶掉
+            uiHandler.postDelayed(this::showChat, 400L);
+            uiHandler.postDelayed(this::showChat, 2500L);
+        }
+        // [调试钩子] `--ez glass_force_drawer true` 启动就拉开左侧抽屉（真机上看抽屉那条边）
+        if (getIntent() != null && getIntent().getBooleanExtra("glass_force_drawer", false)) {
+            uiHandler.postDelayed(() -> { if (drawerHost != null) drawerHost.openDrawer(true); }, 1200L);
+        }
         final Store hookStore = new Store(appCtx);
         GatewayClient.setAppContext(appCtx);
         GatewayClient.bgInteractionHook = frame -> {
@@ -650,6 +712,12 @@ public final class MainActivity extends Activity implements
         };
 
         root = new FrameLayout(this);
+        // [2026-10-08 V1.9 · 背景回归正式版] 这里原来注入一张 aurora_bg 位图当"环境底图"
+        // （10-07 的临时物，与隔离 Demo 同图）。它会顶替 Ui.AmbientDrawable 的彩色配色底，
+        // 于是设置页「配色」6 档在本页失去反应，整页永远是一张星空照片；而正式版
+        // （dist/archive 里 10-06 那版 APK，31 个条目）里**根本没有这张图**。
+        // 按用户「背景换回正式版 app 背景」的要求删除注入，恢复由 Ui.AmbientDrawable + 配色档
+        // 驱动的那套炫彩底。图仍留在 res/drawable-nodpi 供 proto 演示页使用，可随时一行恢复。
         // [毛玻璃 v3] 根容器铺**环境背景**（彩色渐变 + 四枚光斑），而不是纯色 Ui.BG：
         // 各屏容器一律透明，玻璃面板才有"可透的下层"。见 Ui.AmbientDrawable。
         root.setBackground(new com.dsh.mobile.ui.Ui.AmbientDrawable());
@@ -664,22 +732,28 @@ public final class MainActivity extends Activity implements
                 // 底部留白取 max(导航栏, 键盘)：键盘弹起时跟着上移，收起时退回导航栏高度。
                 android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
                 android.graphics.Insets ime = insets.getInsets(android.view.WindowInsets.Type.ime());
-                top = bars.top;
+                top = Math.max(bars.top,
+                        insets.getInsets(android.view.WindowInsets.Type.displayCutout()).top);
                 bottom = Math.max(bars.bottom, ime.bottom);
             } else {
                 // API < 30：ADJUST_RESIZE 会真的缩窗口，这里拿到的 bottom 已经是键盘高度
                 top = insets.getSystemWindowInsetTop();
                 bottom = insets.getSystemWindowInsetBottom();
             }
-            if (v.getPaddingTop() != top || v.getPaddingBottom() != bottom) {
-                v.setPadding(0, top, 0, bottom);
-                // 可视区变矮（键盘弹起）时，原本贴底的会话要重新贴底，
-                // 否则最后几条消息会被顶出可视区，看起来像"内容被键盘盖住了"。
-                if (screen == Screen.CHAT && convo != null) convo.onWindowInsetsChanged();
-            }
+            lastInsetTop = top;
+            lastInsetBottom = bottom;
+            applyRootInsets();
+            // 可视区变矮（键盘弹起）时，原本贴底的会话要重新贴底，
+            // 否则最后几条消息会被顶出可视区，看起来像"内容被键盘盖住了"。
+            if (screen == Screen.CHAT && convo != null) convo.onWindowInsetsChanged();
             return insets;
         });
         setContentView(root);
+        // [V3.0/V3.3] 本类是纯 android.app.Activity：把 Compose 需要的三件套 Owner 挂到**根容器**上。
+        // 必须挂祖先（root）—— Compose 是"从父节点向上找" owner，只挂 ComposeView 自己找不到
+        // （2026-10-08 真机 dropbox 实证）。挂 root 后设备页 / 对话页两个 ComposeView 都被覆盖。
+        glassComposeOwner = new com.dsh.mobile.glass.GlassComposeHostOwner();
+        glassComposeOwner.install(root);
         root.requestApplyInsets();
 
         // 仅当 ALLOW_TEST_PAIRING_INTENT 打开时才接受外部 Intent 里的配对串（默认关闭，见常量注释）
@@ -695,14 +769,17 @@ public final class MainActivity extends Activity implements
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         contentHost = drawerHost.content();
         listScreen = new SessionListView(this, this);
-        drawerHost.drawer().addView(listScreen, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (USE_GLASS_DRAWER) glassSessionView();   // 先建 Compose 版，下面的 setX 才能镜像过去
+        drawerHost.drawer().addView(
+                USE_GLASS_DRAWER && sessionView != null ? sessionView : listScreen,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         // 左缘手势拉开抽屉时也要刷新会话行与顶栏状态（原来只有 openDrawer() 那条路会刷，
         // 手势拉开看到的是空抽屉）。见 DrawerHost.setOnOpened。
         drawerHost.setOnOpened(() -> {
             if (listScreen != null) {
-                listScreen.setCurrentSession(currentSessionId);
-                listScreen.setRows(buildRows());
+                setSessionCurrent(currentSessionId);
+                setSessionRows(buildRows());
             }
             refreshListStatus();
         });
@@ -1119,6 +1196,8 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onDestroy() {
+        // [V3.0] Compose 宿主一起销毁，避免 composition 悬挂
+        if (glassComposeOwner != null) { glassComposeOwner.destroy(); glassComposeOwner = null; }
         // [M2] 界面没了：让 KeepAliveService 知道"现在轮到它兜底"（进程被回收后重建时，
         // 服务会在没有界面的情况下把连接重新建起来）。
         if (LIVE == this) LIVE = null;
@@ -1153,6 +1232,9 @@ public final class MainActivity extends Activity implements
     @Override
     protected void onStop() {
         super.onStop();
+        // [V3.0] 把 Compose 宿主一起压到 CREATED：本类是纯 Activity，没有自带生命周期，
+        // 不驱动的话 Compose 会一直在后台重组（本进程还挂着前台保活服务，容易被平台盯上）。
+        if (glassComposeOwner != null) glassComposeOwner.pause();
         // 标题重试扫描是 1s 一次的循环定时器，后台没人看结果，先撤掉。
         // 必须把 titleSweep 置回 null：不然回前台时 armTitleSweep() 会被
         // "titleSweep != null 就 return" 的防重入判断挡住，标题重试再也起不来。
@@ -1227,6 +1309,8 @@ public final class MainActivity extends Activity implements
         // [在线态自检 · 2026-10-05] 前台期间每 5s 重算一次「在线」判据：半开链路下不让界面
         // 继续显示"已连接"（详见 armOnlineWatch 的注释）。onStop 里撤掉。
         armOnlineWatch();
+        // [V3.0] Compose 宿主回前台（与 onStop 里的 pause 配对）
+        if (glassComposeOwner != null) glassComposeOwner.resume();
     }
 
     /**
@@ -1280,19 +1364,46 @@ public final class MainActivity extends Activity implements
     private void applyThemeEverywhere() {
         boolean dark = com.dsh.mobile.ui.Theme.resolveDark(this, themeMode);
         com.dsh.mobile.ui.Ui.applyTheme(dark);
+        // [V3.81 · 用户「设置里增加**字体大小**（大/中/小），目前这个是标准档」]
+        //   字号也必须在**建视图之前**定下来：`Ui.S_*` 是所有文字尺寸的来源（全局统一比例）。
+        com.dsh.mobile.ui.Ui.applyFontScale(store == null ? 1f : store.fontScale());
+        // [V3.86 · 用户「字体调整后设置里面选择区域**还是显示在中（标准）**那个选项没变」]
+        //   把库里的字号**推给设置页的 Compose 状态**。放在这里（而不是某个页面的构建处），
+        //   是因为这个方法每次改主题/字号都会走一遍 ⇒ 回显一定跟着更新。
+        if (settingsView != null) {
+            settingsView.setFontScale(store == null ? 1f : store.fontScale());
+        }
+        // [毛玻璃 v3] 环境背景配色档也要在**建视图之前**定下来（与主题同一个道理）
+        com.dsh.mobile.ui.Ui.setAmbientPalette(store == null ? 0 : store.ambientPalette());
+        // [2026-10-07 用户定版] 磨砂度 4 档也要在**建任何玻璃件之前**定下来（downscale 是创建时烘进去的）
+        com.dsh.mobile.ui.Ui.setGlassLevel(store == null ? 3 : store.glassLevel());
+        // [V3.27] 玻璃模式（液态/磨砂）也必须在**建任何玻璃件之前**定下来：折射幅度是创建时烘进去的
+        // [V3.52] 默认改成**液态**（用户要求）
+        com.dsh.mobile.ui.Ui.setGlassMode(store == null ? com.dsh.mobile.ui.Ui.GLASS_MODE_LIQUID : store.glassMode());
+        // [V3.52 · 用户「配色增加一个选项：自己上传图片当底配色」] 存过的自定义底图也要在建视图前喂给 Compose
+        com.dsh.mobile.glass.GlassAmbientImage.INSTANCE.setUri(store == null ? "" : store.ambientImage());
         themedDark = dark;
         applySystemBars();
         if (root != null) root.setBackground(new com.dsh.mobile.ui.Ui.AmbientDrawable());
         if (drawerHost != null) drawerHost.applyTheme();
-        if (listScreen != null) listScreen.applyTheme();
+        if (listScreen != null) {
+            listScreen.applyTheme();
+            if (sessionState != null) sessionState.bumpTheme();
+        }
         if (convo != null) convo.applyTheme();
         if (settingsView != null) {
             settingsView.applyTheme();                                  // 整树重建
             settingsView.setDisplayMode(store.displayMode());
+            // [V3.83] 字号档位回显（用户报"选了小、进设置还显示中"）
+            settingsView.setFontScale(store.fontScale());
             settingsView.setThemeMode(themeMode);
+            settingsView.setPalette(com.dsh.mobile.ui.Ui.ambientPalette());   // [毛玻璃 v3]
+            settingsView.setGlassMode(com.dsh.mobile.ui.Ui.glassMode());      // [V3.27] 玻璃模式
         }
         if (deviceHub != null) {
             deviceHub.applyTheme();
+            // [V3.0] Compose 设备页靠这个版本号重组（主题色是 Ui 的静态字段，不订阅就刷不动）
+            if (glassDeviceState != null) glassDeviceState.bumpTheme();
             refreshDevices();                                           // 卡片内容按新色板重填
         }
         if (convo != null && screen == Screen.CHAT) paintBanner();       // 横幅按当前语义重画
@@ -1306,23 +1417,54 @@ public final class MainActivity extends Activity implements
     private void applySystemBars() {
         android.view.Window w = getWindow();
         if (w == null) return;
-        // [毛玻璃 v3] 系统栏不能再刷成纯色 Ui.BG：那会在彩色环境背景上下各留一条
-        // 对不上的实色带。改成取**环境背景顶端色**的近似值（Ui.ambientBarColor）。
-        int bg = com.dsh.mobile.ui.Ui.ambientBarColor();
-        w.setStatusBarColor(bg);
-        w.setNavigationBarColor(bg);
-        w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bg));
+        // [V3.5 app-wide 全面屏] 系统栏**一律透明**：环境背景（root 上的 AmbientDrawable）画在 View 的
+        // 完整 bounds 上、不受 padding 影响，而 targetSdk 35+ 强制 edge-to-edge ⇒ 透明之后背景会一直
+        // 通到屏幕最顶端与最下端（状态栏 / 手势条区域），不再有两条"对不上"的实色带。
+        // 旧屏（抽屉/列表/设置…）的内容仍然由根容器 padding 让开系统栏，只是**背景**不再被盖住。
+        int barRef = com.dsh.mobile.ui.Ui.ambientBarColor();
+        w.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        w.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(barRef));
         android.view.View dv = w.getDecorView();
         int flags = dv.getSystemUiVisibility();
-        boolean dark = com.dsh.mobile.ui.Ui.isDark();
-        if (dark) flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        else flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        // [2026-10-07] 图标明暗按**底色亮度**定，不再只看深浅主题：
+        // 极光档换成真图后，浅色主题下底色也是深蓝星空 —— 再用深色图标就压没了。
+        // [V3.5] 系统栏自己已透明，这里用**环境背景顶端色**当参照。
+        double lum = (0.299 * android.graphics.Color.red(barRef)
+                + 0.587 * android.graphics.Color.green(barRef)
+                + 0.114 * android.graphics.Color.blue(barRef)) / 255.0;
+        boolean lightBar = lum > 0.60;     // 底色偏亮 → 用深色图标
+        if (lightBar) flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        else flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         if (android.os.Build.VERSION.SDK_INT >= 27) {
             // LIGHT_NAVIGATION_BAR 是 API 27 才有的常量
-            if (dark) flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-            else flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            if (lightBar) flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            else flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         dv.setSystemUiVisibility(flags);
+    }
+
+    /**
+     * [V3.89 · 用户「生成的报告 `GlassUI_Report_V3.86.md` 在聊天对话里面**还是无法直接点击**」]
+     *
+     * 消息里的**文件链接/相对路径** ⇒ 直接走"打开预览"（复用相对路径那条下载入口，
+     * 也就是生成物面板一直在用的 `startDownload(relPath, name, sink, preview=true)`）。
+     */
+    @Override
+    public void onOpenPath(String path, String label) {
+        if (path == null || path.isEmpty()) return;
+        String p = path.trim();
+        // 去掉 markdown/工具里常见的包裹：`<...>`、引号、末尾标点
+        while (p.startsWith("<") || p.startsWith("\"") || p.startsWith("'")) p = p.substring(1);
+        while (p.endsWith(">") || p.endsWith("\"") || p.endsWith("'")
+                || p.endsWith(")") || p.endsWith("。") || p.endsWith(".") || p.endsWith(",")) {
+            p = p.substring(0, p.length() - 1);
+        }
+        if (p.isEmpty()) return;
+        String name = (label == null || label.trim().isEmpty())
+                ? p.substring(p.lastIndexOf('/') + 1) : label.trim();
+        startDownload(p, name, text -> runOnUiThread(() ->
+                Toast.makeText(this, text, Toast.LENGTH_SHORT).show()), true);
     }
 
     /** 设置页「主题」三项分段：立即生效（重绘所有已建界面，不重启 App）。 */
@@ -1332,6 +1474,90 @@ public final class MainActivity extends Activity implements
         store.setThemeMode(themeMode);
         // 先让设置页自己记住新档位，随后它会被整树重建，重建时才会画出正确的选中态
         if (settingsView != null) settingsView.setThemeMode(themeMode);
+        applyThemeEverywhere();
+    }
+
+    /**
+     * [V3.81 · 用户「设置里面再增加一个**字体大小**，弄个**大 / 中 / 小**三个档就行，
+     * 目前这个是标准档（中）」]
+     *
+     * <p>做法：落库 → `Ui.applyFontScale`（十个字号常量按比例缩放）→ **整树重建**。
+     * 为什么重建而不做局部的重组：字号是"所有页面的每一处文字"都读的静态常量，
+     * 重建是唯一能保证**一处不漏**的做法（与主题切换同款，见 {@link #onSetThemeMode}）。
+     */
+    @Override
+    public void onSetFontScale(float scale) {
+        store.setFontScale(scale);
+        com.dsh.mobile.ui.Ui.applyFontScale(store.fontScale());
+        recreate();
+    }
+
+    /**
+     * 设置页「配色」6 套（毛玻璃 v3）：只换环境背景那一层，界面树不动。
+     *
+     * <p>为什么不用整树重建：所有屏的容器都是**透明**的，环境背景只挂在根容器上
+     * （{@code root.setBackground(AmbientDrawable)}）+ 系统栏取色 —— 换配色 = 换这一层，
+     * 不涉及任何控件的配色（它们烘的是 Ui 色板，不是配色档）。
+     */
+    /**
+     * [2026-10-07 用户定版] 设置页「磨砂」4 档：玻璃的 downscale 是**创建时烘进 View 的**
+     * （{@code FrostedPanelView.downscale} 字段 + 每块面板各自的位图），所以换档必须**整树重建**
+     * —— 与「主题」同一套路，不能像「配色」那样只换背景层。
+     */
+    @Override
+    public void onSetGlassLevel(int level) {
+        store.setGlassLevel(level);
+        com.dsh.mobile.ui.Ui.setGlassLevel(level);
+        applyThemeEverywhere();
+    }
+
+    /**
+     * [V3.27 · 用户定版] 玻璃模式二选一：`liquid`（液态，带折射）/ `frost`（磨砂，无折射、省资源）。
+     *
+     * <p>折射幅度是**创建玻璃 drawable 时烘进去的** ⇒ 光改 Ui 静态值不够，必须
+     * `applyThemeEverywhere()` 把各屏玻璃件重建一遍才生效（与"磨砂度"同一套路）。
+     */
+    @Override
+    public void onSetGlassMode(String mode) {
+        store.setGlassMode(mode);
+        com.dsh.mobile.ui.Ui.setGlassMode(mode);
+        applyThemeEverywhere();
+        Toast.makeText(this,
+                com.dsh.mobile.ui.Ui.isLiquidGlass() ? "已切「液态玻璃」（带折射，更费）" : "已切「磨砂玻璃」（无折射，省资源）",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * [V3.52 · 用户「配色适当增加一个选项**自己上传图片**，然后可以采用自己上传的图片当底配色」]
+     *
+     * <p>拉起系统图片选择器（`ACTION_OPEN_DOCUMENT`）→ 选中后在 {@link #onActivityResult} 里：
+     * 取持久化读权限 + 落库 + 喂给 Compose 的 `GlassAmbientImage.uri` + `applyThemeEverywhere()`。
+     * 底图由 Compose 侧 `AmbientBackground` 解码铺满（浅色压一点点白、深色压一点点黑，保证前景可读）。
+     */
+    @Override
+    public void onPickAmbientImage() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("image/*");
+            startActivityForResult(i, REQ_AMBIENT_IMG);
+        } catch (Throwable t) {
+            Toast.makeText(this, "这台设备没有可用的图片选择器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public void onSetPalette(int index) {
+        store.setAmbientPalette(index);
+        // [V3.52] 选了内置配色 ⇒ 把"自定义底图"清掉（否则图片会一直压着新配色）
+        store.setAmbientImage("");
+        com.dsh.mobile.glass.GlassAmbientImage.INSTANCE.setUri("");
+        com.dsh.mobile.ui.Ui.setAmbientPalette(index);
+        // [V3.27 · 用户「设置里配色切换点击其他配色未立即切换」] ⚠️ **真根因在这**：
+        //   原来这里只换了根背景（root.setBackground）+ Ui 静态值，**没有把各屏刷一遍** ——
+        //   而各屏（含 Compose 侧）的主题色都是在组合/绘制时读 `Ui` 的**静态字段**，
+        //   只有 `applyTheme()/bumpTheme()` 才会重读 ⇒ 换配色后要等重进页面才生效。
+        //   `applyThemeEverywhere()` 正是做这件事（它也会重设 palette/glassLevel 并逐屏 applyTheme）。
         applyThemeEverywhere();
     }
 
@@ -1408,6 +1634,15 @@ public final class MainActivity extends Activity implements
         if (now - lastBackAt < 400L) return;
         lastBackAt = now;
 
+        // [V3.123 · 验收 K2] 返回键必须查**当前界面自己那一套**。原来只查 `convo`（对话页）⇒
+        //   设备页/设置页/抽屉里弹窗按返回**无效**（验收实测：设备页弹窗没关、App 还退到了后台 ✗），
+        //   而且这里**又用了"视图存在当玻璃门"**的错判据 ✗（同 V3.122 的教训）⇒ 改用现成路由。
+        com.dsh.mobile.glass.GlassSheetState shNow = currentSheetState();
+        if (shNow != null && shNow.getVisible()) {
+            shNow.hide();
+            return;
+        }
+
         if (drawerHost != null && drawerHost.isOpen()) {
             // ①：抽屉开着，返回 = 关抽屉
             boolean wasParent = drawerAsParent;
@@ -1453,8 +1688,8 @@ public final class MainActivity extends Activity implements
         gateForced = false;
         if (drawerHost == null) return;
         if (listScreen != null) {
-            listScreen.setCurrentSession(currentSessionId);
-            listScreen.setRows(buildRows());
+            setSessionCurrent(currentSessionId);
+            setSessionRows(buildRows());
         }
         refreshListStatus();
         drawerHost.openDrawer(true);
@@ -1641,14 +1876,37 @@ public final class MainActivity extends Activity implements
     // ============================================================ 屏幕路由
 
     /** 内容层只挂当前这一屏；抽屉（会话列表）常驻 root，不参与这里的切换。 */
+    /** 结束发版前的临时诊断（V3.121～V3.131 用过，已全部移除）。 */
     private void setContent(View v) {
         contentHost.removeAllViews();
         contentHost.addView(v, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // [V3.5 用户要求「对话滑动一直穿到底、不要小白条」] **Compose 屏自己处理系统栏内边距**：
+        // 根容器不再替它留白（否则消息/背景到不了屏幕最下沿），系统栏也置透明让同材质透上来；
+        // 旧的 View 屏（抽屉/会话列表/设置…）保持原来的"根容器统一留白 + 系统栏实色"。
+        boolean was = composeScreen;
+        composeScreen = (v instanceof androidx.compose.ui.platform.ComposeView);
+        if (composeScreen != was) {
+            applyRootInsets();
+            applySystemBars();
+        }
         // 页面切换淡入（220ms，落在规范的 200~250ms 区间）：纯 ViewPropertyAnimator，
         // 无依赖、无自定义动画资源。淡入的是**整页**，所以不会出现"半页旧半页新"。
         v.setAlpha(0f);
         v.animate().alpha(1f).setDuration(220L).start();
+    }
+
+    /**
+     * 根容器内边距：Compose 屏 → 全 0（它自己按内容/玻璃件分别留安全区，背景与消息能铺满全屏）；
+     * 旧 View 屏 → 沿用系统栏实测值（原行为）。
+     */
+    private void applyRootInsets() {
+        if (root == null) return;
+        int top = composeScreen ? 0 : lastInsetTop;
+        int bottom = composeScreen ? 0 : lastInsetBottom;
+        if (root.getPaddingTop() != top || root.getPaddingBottom() != bottom) {
+            root.setPadding(0, top, 0, bottom);
+        }
     }
 
     private void closeDrawer() {
@@ -1658,8 +1916,8 @@ public final class MainActivity extends Activity implements
     private void showChat() {
         screen = Screen.CHAT;
         deviceOverChat = false;   // 已经回到对话页，"设备页盖在对话上"这一层就没了
-        if (convo == null) convo = new ConversationView(this, this);
-        setContent(convo);
+        if (convo == null) convo = new com.dsh.mobile.glass.GlassChatView(this, this, USE_GLASS_CHAT);
+        setContent(convo.view());
         convo.setCompact("compact".equals(store.displayMode()));
         convo.setItems(items);
         convo.setTitleText(titleForDisplay());
@@ -1674,7 +1932,7 @@ public final class MainActivity extends Activity implements
         // 没有待滚动目标时这里照旧贴底，不会把用户的列表位置弄乱。
         if (!pendingScrollKey.isEmpty()) schedulePendingScroll();
         else convo.scrollToBottom();
-        if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
+        if (listScreen != null) setSessionCurrent(currentSessionId);
         // 通知这边：人在对话页 = 正在看这条会话（"正在看就不打扰"的判断依据）
         Notifier.setViewedSession(this, currentSessionId);
         // 顺手把这条会话的模型名刷到底部 chip 上（小请求；失败静默）
@@ -1701,14 +1959,15 @@ public final class MainActivity extends Activity implements
         gateForced = false;
         // 在设置页 = 没在看任何会话：这条会话的提醒照样该响
         Notifier.setViewedSession(this, "");
-        if (settingsView == null) settingsView = new SettingsView(this, this);
-        setContent(settingsView);
+        if (settingsView == null) settingsView = new com.dsh.mobile.glass.GlassSettingsView(this, this, USE_GLASS_SETTINGS);
+        setContent(settingsView.view());
         settingsView.setFields(store.lanUrl(), store.wanUrl(), store.token(),
                 store.deviceName(), store.netMode());
         settingsView.setDisplayMode(store.displayMode());
         // 主题档位可能与内存里那份不同（例如从别处改了 Store），以 Store 为准并同步回来
         themeMode = store.themeMode();
         settingsView.setThemeMode(themeMode);
+        settingsView.setPalette(com.dsh.mobile.ui.Ui.ambientPalette());   // [毛玻璃 v3] 配色档
         settingsView.setInsecureTls(store.insecureTls());
         settingsView.setAllowScreenshot(store.allowScreenshot());
         refreshAbout();
@@ -1720,13 +1979,258 @@ public final class MainActivity extends Activity implements
 
     // ============================================================ 我的设备（启动页）
 
+    // ============================================================ [V3.0] Compose 设备页宿主
+
+    /**
+     * 一行回退开关：false = 回到自研 `DeviceHubView`（旧的 Frost 玻璃那套）。
+     *
+     * <p>为什么新旧**同时**驱动：`deviceHub` 照样创建、照样被 `refreshDevices()` 更新 —— 这样
+     * `deviceHub.setStatus/setDevices/setGate` 那些调用点一行都不用改；出问题把这里改 false
+     * 就完全回到旧行为（**旧代码一行没删**）。
+     */
+    private static final boolean USE_GLASS_DEVICE = true;
+    /**
+     * 一行回退开关（对话页）：false = 回到自研 `ConversationView`。
+     *
+     * <p>对话页的接法与设备页不同：`ConversationView` 是 **final 类**、且 `MainActivity` 对它有一整套
+     * 36 个方法调用，所以走的是 [com.dsh.mobile.glass.GlassChatView] **同名双写**（旧视图照样被完整喂着，
+     * 它继续当"简洁模式过滤引擎"与回退落点），`MainActivity` 的调用点一行未改。
+     */
+    private static final boolean USE_GLASS_CHAT = true;
+
+    // ============================================================ [V3.7] Compose 抽屉/会话列表宿主
+    /**
+     * 一行回退开关：false = 回到自研 `SessionListView`（旧代码一行没删）。
+     *
+     * <p>抽屉**外壳**（遮罩/面板/滑入滑出/宽度/安全区）仍是 `DrawerHost` —— 那层本来就是真玻璃 + 动画，
+     * 工作正常；本轮只把**面板里的内容**换成 Compose 版会话列表。
+     */
+    private static final boolean USE_GLASS_DRAWER = true;
+
+    /**
+     * 一行回退开关（设置页）：false = 回到自研 `SettingsView`。
+     *
+     * <p>`SettingsView` 是 **final 类**（不能继承）⇒ 走 [com.dsh.mobile.glass.GlassSettingsView] **同名双写**
+     * （旧视图照样被完整喂着，作为回退落点），`MainActivity` 里那些 `settingsView.setXxx(...)`
+     * 调用点**一行不用改**（只换了字段类型与挂载点）。
+     */
+    private static final boolean USE_GLASS_SETTINGS = true;
+    /**
+     * 一行回退开关（统一弹窗骨架）：false = 回到系统 AlertDialog。
+     *
+     * <p>[V3.10] 弹窗必须画在**各自屏的同一棵 Compose 树**里（取样层之外）才糊得到背后的页面；
+     * 于是每屏的状态里带一个 [com.dsh.mobile.glass.GlassSheetState]，屏内渲染 [com.dsh.mobile.glass.GlassSheetOverlay]。
+     */
+    private static final boolean USE_GLASS_SHEET = true;
+    private com.dsh.mobile.glass.GlassSessionState sessionState;
+    private android.view.View sessionView;
+
+    /** 懒建 Compose 会话列表；动作全部回调本类**已有的** `SessionListView.Host` 实现。 */
+    private android.view.View glassSessionView() {
+        if (sessionView == null) {
+            if (sessionState == null) {
+                sessionState = new com.dsh.mobile.glass.GlassSessionState();
+                sessionState.setTitle("对话");
+            }
+            com.dsh.mobile.glass.GlassSessionHost host = new com.dsh.mobile.glass.GlassSessionHost() {
+                @Override public void openSession(SessionInfo s) { MainActivity.this.onOpenSession(s); }
+                @Override public void newChat() { MainActivity.this.onNewChat(); }
+                @Override public void settings() { MainActivity.this.onSettings(); }
+                @Override public void devices() { MainActivity.this.onDevices(); }
+                @Override public void refresh() { MainActivity.this.onRefresh(); }
+                @Override public void rename(SessionInfo s) { MainActivity.this.onRename(s); }
+                @Override public void archive(SessionInfo s) { MainActivity.this.onArchive(s); }
+                @Override public void toggleChildren(SessionInfo s) { MainActivity.this.onToggleChildren(s); }
+                @Override public void workspaceMenu(WorkspaceGroup g) { MainActivity.this.onWorkspaceMenu(g); }
+                // [V3.31 · 真机闪退根因修复] 会话卡 ⋯ 菜单：**不要**用 Compose `Dialog`
+                //   （MainActivity 是纯 Activity，Dialog 新窗口里的 ComposeView 拿不到
+                //   ViewTreeLifecycleOwner ⇒ 真机 dropbox 10 次闪退）。
+                // [V3.97 · 用户「三个点那个弹窗**按咱们所有弹窗一个标准改就行**」]
+                //   ⇒ 按 `GlassUI_SPEC_DIALOG.md`：走**玻璃弹窗**，并且必须挂 **Activity 级全屏宿主**
+                //   （聊天页的 `GlassChatView`）——不再被关进抽屉面板（既居不了屏、又会被压变形），
+                //   也顺手干掉了那个"灰框"系统弹窗。宿主不可用时回退老弹窗。
+                @Override public void sessionMenu(final SessionInfo s) {
+                    if (s == null) return;
+                    if (showGlassMenu("sessionmenu", s.display(), "选择要做的操作",
+                            new String[] { "重命名", "归档" },
+                            new String[] { "", "归档后不再出现在列表里（电脑端可恢复）" },
+                            which -> {
+                                if (which == 0) MainActivity.this.onRename(s);
+                                else MainActivity.this.onArchive(s);
+                            })) {
+                        return;
+                    }
+                    com.dsh.mobile.ui.Ui.dialog(MainActivity.this)
+                            .setTitle(s.display())
+                            .setItems(new String[] { "重命名", "归档" }, (dd, which) -> {
+                                if (which == 0) MainActivity.this.onRename(s);
+                                else MainActivity.this.onArchive(s);
+                            }).show();
+                }
+                // [V3.27] 「在此工作区新建任务」：抽屉里的玻璃观感浮层直接调这里（原来由 ui/WorkspaceSheet 调）
+                @Override public void newTaskHere(WorkspaceGroup g) { MainActivity.this.onNewTaskHere(g); }
+            };
+            sessionView = com.dsh.mobile.glass.GlassAmbientKt
+                    .createGlassSessionView(this, sessionState, host);
+            if (glassComposeOwner != null) glassComposeOwner.install(sessionView);
+        }
+        return sessionView;
+    }
+
+    /** 三个镜像入口：旧 `SessionListView` 照旧被完整喂着（回退落点），同时推进 Compose 状态。 */
+    private void setSessionRows(List<Object> rows) {
+        if (listScreen != null) listScreen.setRows(rows);
+        if (sessionState != null) sessionState.setRows(new java.util.ArrayList<>(rows));
+    }
+
+    private void setSessionStatus(String s) {
+        if (listScreen != null) listScreen.setStatus(s);   // 注意：这里调的是旧视图，别再被批量替换成自己
+        if (sessionState != null) sessionState.setStatus(s == null ? "" : s);
+    }
+
+    private void setSessionCurrent(String id) {
+        if (listScreen != null) listScreen.setCurrentSession(id);   // 同上
+        if (sessionState != null) sessionState.setCurrentId(id == null ? "" : id);
+    }
+    private com.dsh.mobile.glass.GlassDeviceState glassDeviceState;
+    private android.view.View glassDeviceView;
+    private com.dsh.mobile.glass.GlassComposeHostOwner glassComposeOwner;
+
+    /** 懒建 Compose 设备页；动作全部回调到本类**已有的真实流程**（连接门/扫码/手动/改名/删除/设置）。 */
+    private android.view.View glassDeviceView() {
+        if (glassDeviceView == null) {
+            if (glassDeviceState == null) glassDeviceState = new com.dsh.mobile.glass.GlassDeviceState();
+            com.dsh.mobile.glass.GlassDeviceHost host = new com.dsh.mobile.glass.GlassDeviceHost() {
+                @Override public RoutePolicy.Pick routeOf(Store.Device d) { return MainActivity.this.routeOf(d); }
+                @Override public void open(Store.Device d) { MainActivity.this.onOpenDevice(d); }
+                @Override public void addDevice() { MainActivity.this.glassAddChooser(); }
+                @Override public void sheetPick(int index) {
+                    // [V3.10] 统一弹窗骨架：0=扫码添加，1=手动添加
+                    String tag = glassDeviceState == null ? "" : glassDeviceState.getSheet().getTag();
+                    // 【必须】动作一触发就收掉 sheet：否则弹窗盖在页面上，用户以为"点了没反应"
+                    // （2026-10-09 实测：删除其实成功了，但弹窗没关，看起来像失败）
+                    if (glassDeviceState != null) glassDeviceState.getSheet().hide();
+                    if (tag.startsWith("delete:")) {
+                        String did = tag.substring("delete:".length());
+                        for (Store.Device dd : store.devices()) {
+                            if (dd.id.equals(did)) { MainActivity.this.doDeleteDevice(dd); break; }
+                        }
+                        return;
+                    }
+                    // [V3.21 · 交接 §6 第 1 条后半] 「手动添加」改走**玻璃表单形态**（原来弹的是旧 Java
+                    // 不透明白底对话框 showManualAddDialog()，与本页玻璃语言不符）。
+                    // 旧实现保留：USE_GLASS_SHEET=false 或状态缺失时 glassManualAddForm() 会回退到它。
+                    if (index == 0) MainActivity.this.onScanAdd();
+                    else MainActivity.this.glassManualAddForm();
+                }
+                @Override public void rename(Store.Device d) { MainActivity.this.onRenameDevice(d); }
+                @Override public void delete(Store.Device d) { MainActivity.this.onDeleteDevice(d); }
+                @Override public void openSettings() { MainActivity.this.onOpenSettings(); }
+                @Override public void retryConnect() { MainActivity.this.onRetryConnect(); }
+                @Override public void rescanPair() { MainActivity.this.onRescanPair(); }
+                @Override public void switchRoute() { MainActivity.this.onSwitchRoute(); }
+            };
+            glassDeviceView = com.dsh.mobile.glass.GlassAmbientKt
+                    .createGlassDeviceView(this, glassDeviceState, host);
+            // 【必须】本类是纯 android.app.Activity，视图树上没有 Compose 需要的三件套 Owner：
+            // 不补这一步，ComposeView 一 attach 就抛 ViewTreeLifecycleOwner not found（真机 dropbox 实证）。
+            // ⚠️ 必须挂在**祖先节点**上：Compose 是「从父节点向上找」（栈里报的是 root 这个
+            // FrameLayout{0,0-0,0}），只挂 ComposeView 自己找不到 → 所以挂 root，View 上也补一份。
+            if (glassComposeOwner == null) glassComposeOwner = new com.dsh.mobile.glass.GlassComposeHostOwner();
+            if (root != null) glassComposeOwner.install(root);
+            glassComposeOwner.install(glassDeviceView);
+        }
+        return glassDeviceView;
+    }
+
+    /**
+     * 「＋ 添加设备」二选一：复用正式版**已有**的两个入口（扫码 / 手动），不再另写一套表单
+     * （配色/文案仍由旧弹窗负责，属"弹窗类界面尚未接管"，见交接总表待办）。
+     */
+    private void glassAddChooser() {
+        // [V3.10] 统一弹窗骨架：走本页玻璃 sheet（渲染在设备屏自己的 Compose 树里，才糊得到背后的页面）；
+        // 开关关掉时回退到原来的系统 AlertDialog（旧代码保留）。
+        if (USE_GLASS_SHEET && glassDeviceState != null) {
+            glassDeviceState.getSheet().showMenu("add", "添加设备", java.util.Arrays.asList(
+                    new com.dsh.mobile.glass.GlassSheetItem(
+                            com.dsh.mobile.R.drawable.ic_plus, "扫码添加",
+                            "电脑端 DSH 打开「移动设备」面板，扫码即可"),
+                    new com.dsh.mobile.glass.GlassSheetItem(
+                            com.dsh.mobile.R.drawable.ic_monitor, "手动添加",
+                            "手动填内网/公网地址与令牌")));
+            return;
+        }
+        new android.app.AlertDialog.Builder(this, com.dsh.mobile.R.style.DshDialog)
+                .setTitle("添加设备")
+                .setItems(new CharSequence[] { "扫码添加", "手动添加" }, (dlg, which) -> {
+                    if (which == 0) onScanAdd(); else onManualAdd();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /**
+     * [V3.21 · 交接 §6 第 1 条后半] 「手动添加设备」的**玻璃表单形态**。
+     *
+     * <p>为什么这么做：原来点「手动添加」弹的是 {@link #showManualAddDialog()}——**旧 Java 不透明白底窗口**
+     * （实测 411dp 屏上 387dp 宽 / 555dp 高、无模糊无折射无白棱），与本页的玻璃语言不是一套。
+     * 现在改用本页自己的 Compose 骨架 `GlassSheetState.showForm(...)`（同一套材质与尺寸系数），
+     * **写库 / 连接仍走原流程** {@link #addManualDevice}，校验文案沿用原来那三条。
+     *
+     * <p>回退：`USE_GLASS_SHEET=false` 或设备屏状态缺失时直接转 {@link #onManualAdd()}（旧弹窗）。
+     */
+    private void glassManualAddForm() {
+        if (!USE_GLASS_SHEET || glassDeviceState == null) {
+            onManualAdd();
+            return;
+        }
+        glassDeviceState.getSheet().showForm(
+                "manualAdd",
+                "手动添加设备",
+                "电脑端 DSH 打开「移动设备」面板，照着那边的信息填过来",
+                java.util.Arrays.asList(
+                        new com.dsh.mobile.glass.GlassSheetField(
+                                "内网地址", "", "ws://192.168.1.100:3091/ws/mobile", false),
+                        new com.dsh.mobile.glass.GlassSheetField(
+                                "公网地址（可留空）", "", "wss://你的域名/ws/mobile", false),
+                        new com.dsh.mobile.glass.GlassSheetField(
+                                "设备令牌", "", "电脑端配对后给出的那串", true),
+                        new com.dsh.mobile.glass.GlassSheetField(
+                                "设备名称（可留空）", "", "给这台电脑起个名字", false)),
+                "保存并连接",
+                values -> {
+                    String l = glassFormValue(values, 0);
+                    String w = glassFormValue(values, 1);
+                    String t = glassFormValue(values, 2);
+                    String alias = glassFormValue(values, 3);
+                    if (l.isEmpty() && w.isEmpty()) {
+                        return "请先填内网地址或公网地址——两个都空就连不上电脑。";
+                    }
+                    if (t.isEmpty()) {
+                        return "还差设备令牌：电脑端配对后会给出一串。";
+                    }
+                    String problem = GatewayClient.cleartextProblem(l.isEmpty() ? w : l);
+                    if (problem != null) {
+                        return problem;
+                    }
+                    addManualDevice(l, w, t, alias);
+                    return null;
+                });
+    }
+
+    /** 表单字段取值（越界/为 null 一律当空串，避免宿主回调里再判空）。 */
+    private static String glassFormValue(java.util.List<String> values, int i) {
+        if (values == null || i < 0 || i >= values.size()) return "";
+        String v = values.get(i);
+        return v == null ? "" : v.trim();
+    }
+
     /** 进「我的设备」页并重画卡片（在线状态以当前 WebSocket 实况为准）。 */
-    private void showDevices() {
-        screen = Screen.DEVICE;
+    private void showDevices() {        screen = Screen.DEVICE;
         // 设备页同样不算"正在看某条会话"（通知该响就响）
         Notifier.setViewedSession(this, "");
         if (deviceHub == null) deviceHub = new DeviceHubView(this, this);
-        setContent(deviceHub);
+        setContent(USE_GLASS_DEVICE ? glassDeviceView() : deviceHub);
         refreshDevices();
     }
 
@@ -1802,6 +2306,13 @@ public final class MainActivity extends Activity implements
         // 先落"是否在等重连"再重建卡片：卡片是整体重建的，按钮文案/置灰在重建时读这个标志
         deviceHub.setConnecting(waiting);
         deviceHub.setDevices(list, active == null ? "" : active.id, online);
+        if (glassDeviceState != null) {      // [V3.0] 同步给 Compose 设备页（旧的照样更新，互不影响）
+            glassDeviceState.setDevices(new java.util.ArrayList<>(list));
+            glassDeviceState.setActiveId(active == null ? "" : active.id);
+            glassDeviceState.setOnline(online);
+            glassDeviceState.setConnecting(waiting);
+            glassDeviceState.setRouteLabel(routeLabel());
+        }
 
         // ---- 连接门（用户要求 2026-10-05）：没连上就顶在设备页最上面，把话说明白 + 给三个入口。
         //
@@ -1824,27 +2335,47 @@ public final class MainActivity extends Activity implements
                 title = "还没连上电脑 · 点这里重试";
                 hint = "点下面「重新连接」再试一次。电脑上的 DSH 刚重启过的话，地址可能变了 —— 重新扫码最稳。";
             }
+            boolean gateBusy = !gateBusyText.isEmpty() || waiting;
             deviceHub.setGate(true, title, hint, routeLabel(), gateAddressText(),
-                    gateReasonText(), canSwitchRoute(), !gateBusyText.isEmpty() || waiting);
+                    gateReasonText(), canSwitchRoute(), gateBusy);
+            if (glassDeviceState != null) {
+                glassDeviceState.setGate(new com.dsh.mobile.glass.GateInfo(
+                        title, hint, routeLabel(), gateAddressText(), gateReasonText(),
+                        canSwitchRoute(), gateBusy));
+            }
         } else {
             deviceHub.setGate(false, "", "", "", "", "", false, false);
+            if (glassDeviceState != null) glassDeviceState.setGate(null);
         }
 
         if (list.isEmpty()) {
             deviceHub.setStatus("还没有设备 · 点下面的「＋ 添加设备」", false);
+            if (glassDeviceState != null) {
+                glassDeviceState.setStatusText("还没有设备 · 点下面的「＋ 添加设备」");
+                glassDeviceState.setStatusWarn(false);
+            }
             return;
         }
         if (online) {
             // 只显示「走内网/走公网 + 依据哪条规则」，**不显示地址**（用户要求卡片便于截图分享）
-            deviceHub.setStatus("已连接 " + active.displayName() + " · " + routeLabel(), false);
+            String s = "已连接 " + active.displayName() + " · " + routeLabel();
+            deviceHub.setStatus(s, false);
+            if (glassDeviceState != null) { glassDeviceState.setStatusText(s); glassDeviceState.setStatusWarn(false); }
         } else if (gate) {
             // 连接门那块面板已经把「线路 / 地址 / 原因 / 下一步」说全了，状态行别再重复一遍
             deviceHub.setStatus("", false);
+            if (glassDeviceState != null) { glassDeviceState.setStatusText(""); glassDeviceState.setStatusWarn(false); }
         } else if (waiting) {
-            deviceHub.setStatus("正在重连 " + pendingEnterName() + "…", false);
+            String s = "正在重连 " + pendingEnterName() + "…";
+            deviceHub.setStatus(s, false);
+            if (glassDeviceState != null) { glassDeviceState.setStatusText(s); glassDeviceState.setStatusWarn(false); }
         } else {
             String detail = lastStateText.isEmpty() ? "还没连上" : lastStateText;
             deviceHub.setStatus("离线 · " + detail, true);
+            if (glassDeviceState != null) {
+                glassDeviceState.setStatusText("离线 · " + detail);
+                glassDeviceState.setStatusWarn(true);
+            }
         }
     }
 
@@ -2148,7 +2679,7 @@ public final class MainActivity extends Activity implements
             s.pending = kind;
             name = s.display();
         }
-        if (listScreen != null) listScreen.setRows(buildRows());
+        if (listScreen != null) setSessionRows(buildRows());
         Toast.makeText(this, "「" + name + "」" + label, Toast.LENGTH_LONG).show();
     }
 
@@ -2391,6 +2922,26 @@ public final class MainActivity extends Activity implements
             if (next == null) break;
             cur = next;
         }
+        // [V3.30 · 用户「目标还是没看到」的定论手段] 把**目标帧的原始键与长度**写进事件流
+        //   ⇒ 它会随 `[事件流]` 一起出现在「设置 → 日志页」里，现场打开就能看出
+        //   "网关到底发了什么"（是没发 objective、还是发了零宽/控制符、还是键名不同）。
+        //   ⚠️ 只记 **键名与长度**，不记正文（避免把会话内容写进诊断）。
+        {
+            StringBuilder kb = new StringBuilder();
+            java.util.Iterator<String> it = g.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                if (kb.length() > 0) kb.append(',');
+                kb.append(k);
+            }
+            String obj = cur.optString("objective", "");
+            StringBuilder cb = new StringBuilder();
+            for (int i = 0; i < Math.min(obj.length(), 24); i++) {
+                cb.append(String.format("%04X ", (int) obj.charAt(i)));
+            }
+            evtLogAdd("目标帧 keys=[" + kb + "] objective.len=" + obj.length()
+                    + " phase=" + cur.optString("phase", "") + " 头24码元=" + cb.toString().trim());
+        }
         String phase = cur.optString("phase", "");
         if ("complete".equals(phase) || "cleared".equals(phase)) {
             planGoal = "";
@@ -2416,7 +2967,7 @@ public final class MainActivity extends Activity implements
         } else {
             s = lastStateText.isEmpty() ? "连接中…" : lastStateText;
         }
-        listScreen.setStatus(s);
+        setSessionStatus(s);
     }
 
     private static String hostOf(String url) {
@@ -2689,7 +3240,7 @@ public final class MainActivity extends Activity implements
             archivedIds.clear();
             for (int i = 0; i < arch.length(); i++) archivedIds.add(arch.optString(i));
         }
-        if (listScreen != null) listScreen.setRows(buildRows());
+        if (listScreen != null) setSessionRows(buildRows());
         refreshListStatus();
         // 会话列表一变，子智能体数量与"父会话还在不在"都可能变：
         // 父会话被归档/删掉时，「人在子会话里」这一层就没有上一级可回了，就地退回顶层。
@@ -2762,7 +3313,7 @@ public final class MainActivity extends Activity implements
                 currentTitle = found;
                 if (convo != null) convo.setTitleText(titleForDisplay());
             }
-            if (listScreen != null) listScreen.setRows(buildRows());
+            if (listScreen != null) setSessionRows(buildRows());
         } else if (wasAwaiting) {
             // 探针回来了但没抽到标题：可能是标题事件还没生成（新会话），
             // 过一会儿再补一次；次数用完就等重连（resetTitleProbesForRetry）再来。
@@ -2830,6 +3381,28 @@ public final class MainActivity extends Activity implements
     @Override
     public void onSnapshot(String sessionId, JSONObject snap) {
         if (!sessionId.equals(currentSessionId)) return;
+        // [V3.64 · 用户「切换对话，还是**不停的加载对话内容，没法直接使用**」]
+        //   实测（网关诊断日志按 sid 统计最近 300 行）：开着 App 时**同一个会话的快照约 11 次/秒**
+        //   （281/300 都是当前会话），而本函数每次都 `items.clear()` 重建整列 ⇒ 界面一直在重建 = "不停加载"。
+        //   ⇒ 加"**同一份快照去重**"：会话号 + cursor + 事件条数 + 末条 seq 全都没变 ⇒ 直接忽略，不再重建。
+        //   （内容真变了（新事件/新 cursor）指纹必然变 ⇒ 正常重建，不会漏更新。）
+        {
+            JSONArray ev0 = snap.optJSONArray("events");
+            long cur = snap.has("cursor") ? snap.optLong("cursor", -2) : -2;
+            long lastSeq = -2;
+            if (ev0 != null && ev0.length() > 0) {
+                JSONObject le = ev0.optJSONObject(ev0.length() - 1);
+                if (le != null) {
+                    Object sq = le.opt("seq");
+                    if (sq != null) {
+                        try { lastSeq = Long.parseLong(String.valueOf(sq)); } catch (Throwable ignored) { }
+                    }
+                }
+            }
+            String fp = sessionId + "@" + cur + ":" + (ev0 == null ? -1 : ev0.length()) + ":" + lastSeq;
+            if (fp.equals(lastSnapshotFp) && !items.isEmpty()) return;
+            lastSnapshotFp = fp;
+        }
         clearStreamNotice();   // 快照到了 = 这个会话的流已经接上（快照 0 条事件时也走这里）
         cancelSendWatchdog();
         historyFormatVersion = snap.optInt("historyFormatVersion", historyFormatVersion);
@@ -2859,12 +3432,67 @@ public final class MainActivity extends Activity implements
         streamAttemptKey = null;
 
         JSONArray events = snap.optJSONArray("events");
+        if (convo != null) {
+            convo.state().setDebugErr("ev=" + (events == null ? -1 : events.length()));
+        }
         if (events != null) {
+            // [V3.61 诊断 · 验完即删] 收集本页事件的**类型清单**（只记类型、不记内容），
+            // 用于判断"是不是类型命名对不上导致一条都没映射出来"。
+            java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
+            for (int i = 0; i < events.length() && i < 400; i++) {
+                JSONObject e = events.optJSONObject(i);
+                if (e != null) types.add(e.optString("type", "?"));
+            }
+            if (convo != null) {
+                // [V3.61 诊断 · 验完即删] 再抓一条 user/message 的**真实结构**（截 420 字），
+                // 用于确认 App 读的字段在 v4 里到底叫什么。
+                String sample = "";
+                for (int i = 0; i < events.length(); i++) {
+                    JSONObject e = events.optJSONObject(i);
+                    if (e == null || !"user/message".equals(e.optString("type", ""))) continue;
+                    String s = e.toString();
+                    sample = " SAMPLE=" + (s.length() > 420 ? s.substring(0, 420) : s);
+                    break;
+                }
+                StringBuilder sb = new StringBuilder("ev=" + events.length() + " types=");
+                int n = 0;
+                for (String t : types) {
+                    if (n++ >= 12) { sb.append("…"); break; }
+                    sb.append(t).append(',');
+                }
+                convo.state().setDebugErr(sb.append(sample).toString());
+            }
             for (int i = 0; i < events.length(); i++) {
                 JSONObject e = events.optJSONObject(i);
                 if (e == null) continue;
-                applyEvent(e.optString("type", ""), e.optJSONObject("data"),
-                        e.opt("seq"), e.opt("time"), true);
+                // [V3.61 诊断 · 验完即删] 快照事件映射一旦抛异常，`items` 已被上面的 clear() 清空
+                // ⇒ 整屏永久空、且**不报任何错**（真机表现正是如此）。这里把"第几条/什么类型/异常"记下来。
+                try {
+                    applyEvent(e.optString("type", ""), e.optJSONObject("data"),
+                            e.opt("seq"), e.opt("time"), true);
+                } catch (Throwable t) {
+                    if (convo != null) {
+                        convo.state().setDebugErr("ev=" + events.length() + " 抛在#" + i
+                                + " type=" + e.optString("type", "") + " : " + t);
+                    }
+                    break;
+                }
+            }
+            // [V3.61 诊断 · 验完即删] 最近 3 次快照的滚动记录：
+            //   `snap#序号 ev=事件数 types=前3个 itemsN=循环结束后的条数`
+            //   ⇒ 一次截图就能看出"是哪一次快照把列表清空了"。
+            if (convo != null) {
+                debugSnapSeq++;
+                StringBuilder line = new StringBuilder();
+                line.append("snap#").append(debugSnapSeq).append(" ev=").append(events.length()).append(" itemsN=").append(items.size()).append(" [");
+                int k = 0;
+                for (String t : types) {
+                    if (k++ >= 3) { line.append("…"); break; }
+                    line.append(t).append(' ');
+                }
+                line.append("] | ");
+                String rolling = convo.state().getDebugErr();
+                convo.state().setDebugErr((rolling.length() > 400 ? rolling.substring(rolling.length() - 400) : rolling) + line);
             }
         }
         // 恢复进行中的临时输出
@@ -2909,6 +3537,29 @@ public final class MainActivity extends Activity implements
         if (keepPaging && items.isEmpty() && !currentSessionId.isEmpty() && gw != null) {
             gw.requestHistory(currentSessionId, null, historyFormatVersion);
         }
+        // [V3.58] 快照只给"当前窗口" ⇒ 这里自动往上翻页补齐更早的历史。
+        // [V3.64 · 用户「切换对话，还是**不停的加载**对话内容，没法直接使用」]
+        //   ⚠️ 根因：原来这里**每次快照都 `autoPageCount = 0`**，而"每一页历史回来又可能再触发一次快照"
+        //   ⇒ 计数被反复清零 ⇒ **永远拉不完**（每 200ms 一页，界面一直在变 ⇒ 没法用）。
+        //   修：**只有真正换会话（会话号变化）时才清零**，并且把自动翻页**封顶**（之后交给上滑按需加载）。
+        if (!currentSessionId.equals(autoPageSession)) {
+            autoPageSession = currentSessionId;
+            autoPageCount = 0;
+            autoPaging = true;      // 换会话 ⇒ 启动一次"补齐更早历史"（同一会话的快照不再重启它）
+        }
+        autoPageStep();
+    }
+
+    /**
+     * [V3.58] 自动分页拉全历史的"下一步"：条件不满足就停；每页之间留 200ms，
+     * 既让 `loadingMore` 复位，也避免把网关打爆。切会话（`hasMore=false`/会话号变化）会自动停。
+     */
+    private void autoPageStep() {
+        if (!autoPaging) return;
+        if (!hasMore || nextBeforeSeq == null || currentSessionId.isEmpty()) { autoPaging = false; return; }
+        if (autoPageCount++ >= AUTO_PAGE_MAX) { autoPaging = false; return; }
+        onLoadMore();
+        uiHandler.postDelayed(this::autoPageStep, 200L);
     }
 
     @Override
@@ -2995,7 +3646,7 @@ public final class MainActivity extends Activity implements
         applyEvent(event.optString("type", ""), event, seq, time, false);
         rebuildOrder();
         if (convo != null) { convo.setItems(items); convo.refresh(); }
-        if (listScreen != null) listScreen.setRows(buildRows());
+        if (listScreen != null) setSessionRows(buildRows());
     }
 
     // ---- 模型选择（PROTOCOL §8：models / select-model）
@@ -3043,11 +3694,192 @@ public final class MainActivity extends Activity implements
         pendingModelRequest = false;
         String sid = frame.optString("sessionId", "");
         if (!sid.isEmpty() && !currentSessionId.isEmpty() && !sid.equals(currentSessionId)) return;
+        // [V3.24 · 交接 §6 第 3/6 条] 玻璃对话页在场时，用**骨架的「列表」形态**渲染（与本 App 玻璃语言一致）；
+        // 搬不动（开关关掉 / 目录为空）才回退旧的 ModelSheet 白面板。
+        if (glassModelList(frame)) return;
         com.dsh.mobile.ui.ModelSheet.show(this, frame,
                 (provider, model, effort) -> {
                     if (currentSessionId == null || currentSessionId.isEmpty()) return;
                     gw.selectModel(currentSessionId, provider, model, effort);
                 });
+    }
+
+    /**
+     * [V3.24] 把网关的 `models` 目录搬进**玻璃骨架的列表形态**；成功返回 true。
+     *
+     * <p>数据映射与旧 `ui/ModelSheet.show(...)` **逐字段对齐**（分组标题 = provider 名；
+     * 副文案 = 「思考等级 Off / Low / High …」；当前项 = `model==current.model && provider==current.provider`），
+     * 选中后走同一件事：`gw.selectModel(sessionId, provider, model, "")`。
+     */
+    private boolean glassModelList(org.json.JSONObject frame) {
+        if (!(convo instanceof com.dsh.mobile.glass.GlassChatView)) return false;
+        com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+        org.json.JSONObject current = frame.optJSONObject("current");
+        String curProvider = current == null ? "" : current.optString("provider", "");
+        String curModel = current == null ? "" : current.optString("model", "");
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts = new java.util.ArrayList<>();
+        final java.util.List<String[]> meta = new java.util.ArrayList<>();   // {provider, modelId}
+        org.json.JSONArray groups = frame.optJSONArray("groups");
+        if (groups != null) {
+            for (int i = 0; i < groups.length(); i++) {
+                org.json.JSONObject g = groups.optJSONObject(i);
+                if (g == null) continue;
+                String gid = g.optString("id", "");
+                String gname = g.optString("name", gid);
+                org.json.JSONArray ms = g.optJSONArray("models");
+                if (ms == null || ms.length() == 0) continue;
+                for (int j = 0; j < ms.length(); j++) {
+                    org.json.JSONObject m = ms.optJSONObject(j);
+                    if (m == null) continue;
+                    String mid = m.optString("id", "");
+                    String mname = m.optString("name", mid);
+                    boolean isCur = mid.equals(curModel) && (curProvider.isEmpty() || gid.equals(curProvider));
+                    opts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                            mname, glassModelDetail(m), isCur, j == 0 ? gname : ""));
+                    meta.add(new String[] { gid, mid });
+                }
+            }
+        }
+        if (opts.isEmpty()) return false;
+        boolean routable = frame.optBoolean("routable", true);
+        return gv.showSheetList("models", "选择模型",
+                routable ? "切换只影响这条会话" : "当前不可路由（网关未就绪）",
+                opts, "关闭",
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < meta.size()
+                            && currentSessionId != null && !currentSessionId.isEmpty()) {
+                        String[] mm = meta.get(idx);
+                        gw.selectModel(currentSessionId, mm[0], mm[1], "");
+                    }
+                    return kotlin.Unit.INSTANCE;
+                });
+    }
+
+    /** 模型行的副文案：「思考等级 Off / Low / High …」（与旧 ModelSheet 同口径；无档位则空串）。 */
+    private static String glassModelDetail(org.json.JSONObject m) {
+        org.json.JSONObject r = m == null ? null : m.optJSONObject("reasoning");
+        org.json.JSONArray efforts = r == null ? null : r.optJSONArray("efforts");
+        if (efforts == null || efforts.length() == 0) return "";
+        StringBuilder sb = new StringBuilder("思考等级 ");
+        for (int k = 0; k < efforts.length(); k++) {
+            org.json.JSONObject e = efforts.optJSONObject(k);
+            if (e == null) continue;
+            if (sb.length() > "思考等级 ".length()) sb.append(" / ");
+            sb.append(e.optString("name", e.optString("id", "")));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * [V3.24 · 交接 §6 第 3/6 条] 把一组「单选列表」塞进**玻璃骨架的列表形态**。
+     *
+     * <p>不在玻璃对话页（开关关掉 / 视图缺失）时返回 **false**，调用方回退旧的 `ModelSheet` 面板。
+     * 选中态一律由骨架用半透明的 `Ui.SELECT_BG` 画（别用不透明色，会"变实"）。
+     */
+    /**
+     * [V3.110 · 用户「弹窗**一会是玻璃的，一会又变成半透明**」= 迁移到一半] 非玻璃弹窗统一迁移的两个 drop-in。
+     *
+     * <p>`glassConfirm` 对应 `Ui.dialog().setTitle().setPositiveButton().setNegativeButton()`；
+     * `glassItems` 对应 `Ui.dialog().setItems(new String[]{...})`（按**下标**回调）。
+     * 两者都是"玻璃宿主不可用时返回 false ⇒ 调用方继续走旧弹窗"，回退路径保留。
+     */
+    /**
+     * [V3.115 · 用户硬规则「**每个界面的玻璃弹窗都应该在对应界面的位置最上层**」]
+     *
+     * 取**当前界面自己那一套**弹窗状态；拿不到返回 null（调用方回退旧弹窗）。
+     * 优先级：抽屉开着 ⇒ 抽屉那套（渲染在抽屉面板之上）；设置页 ⇒ 设置页那套；
+     * 对话页 ⇒ 对话页那套；其余（首页/设备页）⇒ 设备页那套。
+     *
+     * <p>⚠️ 绝不把某个界面的弹窗写到**对话页**的状态上 —— 用户停在设备页/设置页时对话页根本没被组合，
+     * 写进去就是**没人渲染**（表现成"透明"或"跑到对话窗口"）✗。
+     */
+    private com.dsh.mobile.glass.GlassSheetState currentSheetState() {
+        // [V3.132 · 真机现象「待发送的修改**叠到弹窗一块了**」] ⚠️ 原来这里**第一条**是
+        //   `if (抽屉开着) return 抽屉态` ✗ ⇒ 抽屉开着时，从别处（如对话页待发送）发起的**后续表单**
+        //   也会写进**抽屉态** ⇒ 菜单和表单被**两处渲染器同时画** ⇒ 视觉上"叠在一起" ✗。
+        //   ⇒ 路由**按界面**说话：抽屉自己的菜单由 `showGlassMenu` **直接**写 `drawerSheetState`
+        //     （不需要路由 ✓），而 `glassIn*` 这些**跟随动作**一律走**当前界面**的宿主 ✓。
+        final boolean drawerOpen = drawerHost != null && drawerHost.isOpen();
+        final boolean settingsMounted = settingsView != null && settingsView.view() != null
+                && settingsView.view().getParent() != null;
+        final boolean chatMounted = convo instanceof com.dsh.mobile.glass.GlassChatView
+                && ((com.dsh.mobile.glass.GlassChatView) convo).view() != null
+                && ((com.dsh.mobile.glass.GlassChatView) convo).view().getParent() != null;
+        com.dsh.mobile.glass.GlassSheetState r = null;
+        String why;
+        if (screen == Screen.SETTINGS && settingsMounted) {
+            r = settingsView.state().getSheet(); why = "settings";
+        } else if (screen == Screen.CHAT && chatMounted) {
+            r = ((com.dsh.mobile.glass.GlassChatView) convo).sheetState(); why = "chat";
+        } else {
+            glassDeviceView();      // 幂等：确保懒建的设备页宿主存在
+            boolean devMounted = glassDeviceView != null && glassDeviceView.getParent() != null;
+            if (glassDeviceState != null && devMounted) { r = glassDeviceState.getSheet(); why = "device"; }
+            else { why = "FALLBACK(devState=" + (glassDeviceState != null) + ",devView="
+                    + (glassDeviceView != null) + ",devMounted=" + devMounted + ")"; }
+        }
+        return r;
+    }
+
+    /** 在**当前界面**弹玻璃列表（拿不到该界面的宿主 ⇒ false ⇒ 调用方回退旧弹窗）。 */
+    private boolean glassInScreenList(String tag, String title, String sub,
+                                      java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts,
+                                      String closeLabel,
+                                      kotlin.jvm.functions.Function1<Integer, kotlin.Unit> onPick) {
+        com.dsh.mobile.glass.GlassSheetState st = currentSheetState();
+        if (st == null || opts == null || opts.isEmpty()) return false;
+        st.showList(tag, title, sub == null ? "" : sub, opts,
+                closeLabel == null ? "关闭" : closeLabel, onPick, null);
+        return true;
+    }
+
+    /** 在**当前界面**弹玻璃表单。`onSubmit` 返回 null/空串 = 成功收起；返回文案 = 内联报错并保持打开。 */
+    private boolean glassInScreenForm(String tag, String title, String message,
+                                      java.util.List<com.dsh.mobile.glass.GlassSheetField> fields,
+                                      String submitLabel,
+                                      kotlin.jvm.functions.Function1<java.util.List<String>, String> onSubmit) {
+        com.dsh.mobile.glass.GlassSheetState st = currentSheetState();
+        if (st == null) return false;
+        st.showForm(tag, title, message, fields, submitLabel, onSubmit);
+        return true;
+    }
+
+    /** 在**当前界面**弹玻璃确认框（危险动作用 `danger=true`）。 */
+    private boolean glassInScreenConfirm(String tag, String title, String message,
+                                         String confirmLabel, boolean danger, Runnable onConfirm) {
+        com.dsh.mobile.glass.GlassSheetState st = currentSheetState();
+        if (st == null) return false;
+        st.showConfirm(tag, title, message, confirmLabel, danger);
+        st.setOnListPick(idx -> {
+            if (onConfirm != null) onConfirm.run();
+            return kotlin.Unit.INSTANCE;
+        });
+        return true;
+    }
+
+    private boolean glassConfirm(String tag, String title, String message,
+                                 String confirmLabel, boolean danger, Runnable onConfirm) {
+        // [V3.115] 不再固定走对话页宿主 ⇒ 按**当前界面**路由（对话页/设置页/设备页/抽屉各自那套）
+        return glassInScreenConfirm(tag, title, message, confirmLabel, danger, onConfirm);
+    }
+
+    private boolean glassItems(String tag, String title, String sub, String[] items,
+                               java.util.function.IntConsumer onPick) {
+        if (items == null || items.length == 0) return false;
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
+        for (String s : items) g.add(new com.dsh.mobile.glass.GlassSheetOption(s, "", false, ""));
+        return glassInScreenList(tag, title, sub, g, "关闭",
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < items.length) onPick.accept(idx);
+                    return kotlin.Unit.INSTANCE;
+                });
+    }
+
+    private boolean glassOptionList(String tag, String title, String sub,
+                                    java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts,
+                                    kotlin.jvm.functions.Function1<Integer, kotlin.Unit> onPick) {
+        // [V3.115] 按**当前界面**路由（原来固定写对话页状态 ⇒ 在设备页/设置页会没人渲染 ✗）
+        return glassInScreenList(tag, title, sub, opts, "关闭", onPick);
     }
 
     /** 网关确认模型已切换：刷 chip + 轻提示。 */
@@ -3157,6 +3989,32 @@ public final class MainActivity extends Activity implements
         if (opts.isEmpty()) return;
         org.json.JSONObject cur = lastModels.optJSONObject("current");
         String curModel = cur == null ? "" : cur.optString("model", "");
+        // [V3.24 · 交接 §6 第 3/6 条] 玻璃骨架优先：同一份候选直接渲染成玻璃列表面板；搬不动再回退旧面板
+        final java.util.List<String> gEffortIds = new ArrayList<>();
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> gEffortOpts = new ArrayList<>();
+        for (com.dsh.mobile.ui.ModelSheet.Opt o : opts) {
+            gEffortIds.add(o.id);
+            gEffortOpts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                    o.label, o.detail, lastEffort != null && lastEffort.equals(o.id), ""));
+        }
+        final org.json.JSONObject curG = lastModels.optJSONObject("current");
+        String curModelG = curG == null ? "" : curG.optString("model", "");
+        if (glassOptionList("effort", "思考等级", "当前模型：" + modelDisplayName(curModelG), gEffortOpts,
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < gEffortIds.size()) {
+                        String id = gEffortIds.get(idx);
+                        org.json.JSONObject c2 = lastModels == null ? null : lastModels.optJSONObject("current");
+                        if (c2 != null) {
+                            lastEffort = id;
+                            if (convo != null) convo.setEffortLabel(id);
+                            gw.selectModel(currentSessionId, c2.optString("provider", ""),
+                                    c2.optString("model", ""), id);
+                        }
+                    }
+                    return kotlin.Unit.INSTANCE;
+                })) {
+            return;
+        }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "思考等级",
                 "当前模型：" + modelDisplayName(curModel), opts, lastEffort,
                 id -> {
@@ -3192,6 +4050,11 @@ public final class MainActivity extends Activity implements
         lastUsage = frame;                  // 它比 context-usage 更全（多 sessionStats），直接顶掉
         updateUsageChip(frame);
         if (usageDlg != null) renderUsage(frame);
+        // [V3.24] 玻璃「用量」面板开着 ⇒ 新帧就地刷新（键值明细整套替换）
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+            if (gv.isSheetTagVisible("usage")) gv.setSheetOptions(usageGlassOptions(usagePairs(frame)));
+        }
     }
 
     /** 用一份用量帧刷「用量」chip 上的上下文占用百分比。 */
@@ -3247,9 +4110,39 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没连上电脑端，看不了用量", Toast.LENGTH_LONG).show();
             return;
         }
+        // [V3.24 · 交接 §6 第 3/6 条] 玻璃骨架优先；搬不动才走旧白面板
+        if (glassUsagePanel(lastUsage)) {
+            gw.requestSessionStats(currentSessionId);   // 先拿手上那份秒出，再拉最新的
+            return;
+        }
         showUsagePanel();
         renderUsage(lastUsage);                    // 手上那份先画出来（秒出，不空等）
         gw.requestSessionStats(currentSessionId);  // 再拉最新的
+    }
+
+    /**
+     * [V3.24] 把「用量」搬进玻璃骨架的列表形态（键值明细：左名称 + **右对齐数值**）。
+     *
+     * <p>数据推导**复用 {@link #usagePairs}**（与旧面板同一处，不会分叉）；
+     * 新帧到达时由 {@code onSessionStats} 调 {@code setSheetOptions} **就地刷新**。
+     */
+    private boolean glassUsagePanel(org.json.JSONObject frame) {
+        if (!(convo instanceof com.dsh.mobile.glass.GlassChatView)) return false;
+        com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+        List<String[]> pairs = usagePairs(frame);
+        String sub = pairs.isEmpty() ? usageEmptyHint(frame) : "本会话累计 · 与电脑端同一套算法";
+        return gv.showSheetList("usage", "用量", sub, usageGlassOptions(pairs), "关闭",
+                idx -> kotlin.Unit.INSTANCE);
+    }
+
+    /** 明细对 → 玻璃列表项（数值放右对齐的 trailing）。 */
+    private static java.util.List<com.dsh.mobile.glass.GlassSheetOption> usageGlassOptions(List<String[]> pairs) {
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> out = new ArrayList<>();
+        if (pairs == null) return out;
+        for (String[] p : pairs) {
+            out.add(new com.dsh.mobile.glass.GlassSheetOption(p[0], "", false, "", p[1]));
+        }
+        return out;
     }
 
     /** 建「用量」面板（配方与生成物面板一致：面板底 + 抓柄 + 遮罩，不挂窗口模糊）。 */
@@ -3297,59 +4190,76 @@ public final class MainActivity extends Activity implements
     private void renderUsage(org.json.JSONObject frame) {
         if (usageRows == null) return;
         usageRows.removeAllViews();
-        if (frame == null) {
-            usageRows.addView(usageHint("还没有用量（跑一轮对话后再看）"));
+        List<String[]> pairs = usagePairs(frame);
+        if (pairs.isEmpty()) {
+            usageRows.addView(usageHint(usageEmptyHint(frame)));
             return;
         }
+        for (String[] p : pairs) usageRows.addView(usageRow(p[0], p[1], "1".equals(p[2])));
+    }
+
+    /** 用量为空时的那句提示（旧面板与玻璃面板共用）。 */
+    private static String usageEmptyHint(org.json.JSONObject frame) {
+        if (frame == null) return "还没有用量（跑一轮对话后再看）";
+        return usageTotals(frame) == null ? "这条会话还没有 token 用量" : "还没有用量（跑一轮对话后再看）";
+    }
+
+    /**
+     * 用量的「标签 / 数值」明细 —— **唯一推导处**（旧面板 {@link #renderUsage} 与玻璃面板共用，
+     * 免得两边各写一套慢慢分叉）。
+     *
+     * @return 每项 {@code {label, value, strong}}（strong="1" 时旧面板用大字）；无数据时返回空表
+     */
+    private java.util.List<String[]> usagePairs(org.json.JSONObject frame) {
+        java.util.List<String[]> out = new ArrayList<>();
+        if (frame == null) return out;
         org.json.JSONObject t = usageTotals(frame);
-        if (t == null) {
-            usageRows.addView(usageHint("这条会话还没有 token 用量"));
-        } else {
-            long uncached = t.optLong("uncachedInputTokens", t.optLong("inputTokens", 0L));
-            long cacheRead = t.optLong("cacheReadTokens", 0L);
-            long cacheWrite = t.optLong("cacheWriteTokens", 0L);
-            long output = t.optLong("outputTokens", 0L);
-            long billed = uncached + cacheRead + cacheWrite;   // 与 PC 端 billedInputTokens 一致
-            long total = billed + output;
-            usageRows.addView(usageRow("合计", fmtTokens(total) + " tok", true));
-            usageRows.addView(usageRow("缓存命中",
-                    billed <= 0L ? "—" : Math.round(100.0 * cacheRead / billed) + "%", false));
-            usageRows.addView(usageRow("未缓存输入", fmtTokens(uncached) + " tok", false));
-            usageRows.addView(usageRow("缓存读取", fmtTokens(cacheRead) + " tok", false));
-            if (cacheWrite > 0L) usageRows.addView(usageRow("缓存写入", fmtTokens(cacheWrite) + " tok", false));
-            usageRows.addView(usageRow("输出", fmtTokens(output) + " tok", false));
-        }
+        if (t == null) return out;
+        long uncached = t.optLong("uncachedInputTokens", t.optLong("inputTokens", 0L));
+        long cacheRead = t.optLong("cacheReadTokens", 0L);
+        long cacheWrite = t.optLong("cacheWriteTokens", 0L);
+        long output = t.optLong("outputTokens", 0L);
+        long billed = uncached + cacheRead + cacheWrite;   // 与 PC 端 billedInputTokens 一致
+        long total = billed + output;
+        out.add(new String[] { "合计", fmtTokens(total) + " tok", "1" });
+        out.add(new String[] { "缓存命中",
+                billed <= 0L ? "—" : Math.round(100.0 * cacheRead / billed) + "%", "0" });
+        out.add(new String[] { "未缓存输入", fmtTokens(uncached) + " tok", "0" });
+        out.add(new String[] { "缓存读取", fmtTokens(cacheRead) + " tok", "0" });
+        if (cacheWrite > 0L) out.add(new String[] { "缓存写入", fmtTokens(cacheWrite) + " tok", "0" });
+        out.add(new String[] { "输出", fmtTokens(output) + " tok", "0" });
         org.json.JSONObject cp = frame.optJSONObject("contextPressure");
         if (cp != null) {
             long window = cp.optLong("contextWindow", 0L);
             long used = contextUsedTokens(cp);
             if (window > 0L) {
-                usageRows.addView(usageRow("上下文占用", fmtTokens(used) + " / " + fmtTokens(window)
-                        + "（" + Math.round(100.0 * used / window) + "%）", false));
+                out.add(new String[] { "上下文占用", fmtTokens(used) + " / " + fmtTokens(window)
+                        + "（" + Math.round(100.0 * used / window) + "%）", "0" });
             }
         }
         org.json.JSONObject st = frame.optJSONObject("sessionStats");
         if (st != null) {
-            usageRows.addView(usageRow("轮数 · 步数",
-                    st.optInt("turns", 0) + " 轮 · " + st.optInt("steps", 0) + " 步", false));
+            out.add(new String[] { "轮数 · 步数",
+                    st.optInt("turns", 0) + " 轮 · " + st.optInt("steps", 0) + " 步", "0" });
             long decodeMs = st.optLong("decodeMs", 0L);
             long decodeTokens = st.optLong("decodeTokens", 0L);
             if (decodeMs > 0L && decodeTokens > 0L) {
-                usageRows.addView(usageRow("解码速率",
-                        Math.round(decodeTokens * 1000.0 / decodeMs) + " tok/s", false));
+                out.add(new String[] { "解码速率",
+                        Math.round(decodeTokens * 1000.0 / decodeMs) + " tok/s", "0" });
             }
             long llmMs = st.optLong("llmMs", 0L);
             long toolMs = st.optLong("toolMs", 0L);
             if (llmMs > 0L || toolMs > 0L) {
-                usageRows.addView(usageRow("耗时",
-                        "模型 " + fmtDuration(llmMs) + " · 工具 " + fmtDuration(toolMs), false));
+                out.add(new String[] { "耗时",
+                        "模型 " + fmtDuration(llmMs) + " · 工具 " + fmtDuration(toolMs), "0" });
             }
             long ttftMs = st.optLong("ttftMs", 0L);
             int ttftSteps = st.optInt("ttftSteps", 0);
             if (ttftMs > 0L && ttftSteps > 0) {
-                usageRows.addView(usageRow("首 token 平均", fmtDuration(ttftMs / ttftSteps), false));
+                out.add(new String[] { "首 token 平均", fmtDuration(ttftMs / ttftSteps), "0" });
             }
         }
+        return out;
     }
 
     /** 用量面板的一行：左标签、右数值。 */
@@ -3411,6 +4321,24 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "还没有可用工作区（等会话列表刷新后再试)", Toast.LENGTH_SHORT).show();
             return;
         }
+        // [V3.24] 玻璃骨架优先；搬不动回退旧 ModelSheet 面板
+        final java.util.List<String> gProjKeys = new ArrayList<>();
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> gProjOpts = new ArrayList<>();
+        for (com.dsh.mobile.ui.ModelSheet.Opt o : opts) {
+            gProjKeys.add(o.id);
+            gProjOpts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                    o.label, o.detail, o.id.equals(curKey), ""));
+        }
+        if (glassOptionList("project", "切换项目", "选中即在那个工作区新建对话", gProjOpts,
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < gProjKeys.size()) {
+                        WorkspaceGroup g = byKey.get(gProjKeys.get(idx));
+                        if (g != null) onNewTaskHere(g);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                })) {
+            return;
+        }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "切换项目",
                 "选中即在那个工作区新建对话", opts, curKey, key -> {
                     WorkspaceGroup g = byKey.get(key);
@@ -3461,6 +4389,15 @@ public final class MainActivity extends Activity implements
             String mark = "completed".equals(status) ? "✓ 已完成"
                     : ("in_progress".equals(status) ? "● 进行中" : "○ 待办");
             opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("todo:" + i, t.optString("content", ""), mark));
+        }
+        // [V3.24] 玻璃骨架优先；任务列表**只读**（点一行只是收起，不触发任何动作）
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> gTaskOpts = new ArrayList<>();
+        for (com.dsh.mobile.ui.ModelSheet.Opt o : opts) {
+            gTaskOpts.add(new com.dsh.mobile.glass.GlassSheetOption(o.label, o.detail, false, ""));
+        }
+        if (glassOptionList("tasks", "任务列表", "由 Agent 的 todo_write 维护（App 只读）", gTaskOpts,
+                idx -> kotlin.Unit.INSTANCE)) {
+            return;
         }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "任务列表",
                 "由 Agent 的 todo_write 维护（App 只读）", opts, "", id -> { });
@@ -3540,6 +4477,10 @@ public final class MainActivity extends Activity implements
     /** 点顶部「目标 / 任务」卡片：用可滚动的对话框展示全文（卡片只显示截断版）。 */
     @Override
     public void onOpenPlan() {
+        // [V3.66 · 用户「点击目标那个胶囊，像设置里面的卡片一样，点一下放大再点下缩回来」]
+        //   玻璃对话页**自带**这条"就地放大的目标卡"（收起 = 长胶囊 / 点开 = 玻璃卡片、同一张卡长高）⇒
+        //   这个旧对话框在玻璃模式下**不再弹**：否则同一件事会被弹成两处（真机实测：上下各一张卡）。
+        if (USE_GLASS_CHAT) return;
         String full = convo == null ? "" : convo.planFullText();
         if (full == null || full.trim().isEmpty()) {
             Toast.makeText(this, "这条会话还没有目标 / 任务", Toast.LENGTH_SHORT).show();
@@ -3565,6 +4506,29 @@ public final class MainActivity extends Activity implements
         opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("steer", "立即插入当前回答", "打断当前回合，把这条插进去"));
         opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("edit", "修改这条内容", ""));
         opts.add(new com.dsh.mobile.ui.ModelSheet.Opt("remove", "删除这条", "从队列移除，不再发送"));
+        // [V3.95 · 用户「待发送的内容点击后弹窗是**老的、未优化成新的玻璃弹窗**」]
+        //   ⇒ 与「生成物」面板**同一口径**：走聊天页的**玻璃 sheet**（全屏、真玻璃、可点可关），
+        //     不再用旧的 `ModelSheet` 系统弹窗。非玻璃模式仍走老弹窗（回退落点）。
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            java.util.List<com.dsh.mobile.glass.GlassSheetOption> gopts = new java.util.ArrayList<>();
+            gopts.add(new com.dsh.mobile.glass.GlassSheetOption("立即插入当前回答",
+                    "打断当前回合，把这条插进去", false, ""));
+            gopts.add(new com.dsh.mobile.glass.GlassSheetOption("修改这条内容", "", false, ""));
+            gopts.add(new com.dsh.mobile.glass.GlassSheetOption("删除这条",
+                    "从队列移除，不再发送", true, ""));
+            ((com.dsh.mobile.glass.GlassChatView) convo).showSheetList("queue", "排队消息",
+                    (text == null || text.isEmpty()) ? "这条还没发出去" : text,
+                    gopts, "取消",
+                    idx -> {
+                        if (idx != null) {
+                            if (idx == 0) gw.queueUpdate(currentSessionId, itemId, null, "steer");
+                            else if (idx == 2) gw.queueUpdate(currentSessionId, itemId, null, "remove");
+                            else if (idx == 1) promptEditQueue(itemId, text);
+                        }
+                        return kotlin.Unit.INSTANCE;
+                    }, null);
+            return;
+        }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "排队消息", text, opts, "", id -> {
             if ("steer".equals(id)) gw.queueUpdate(currentSessionId, itemId, null, "steer");
             else if ("remove".equals(id)) gw.queueUpdate(currentSessionId, itemId, null, "remove");
@@ -3617,6 +4581,33 @@ public final class MainActivity extends Activity implements
 
     /** 「修改这条内容」：一个带输入框的对话框（回车即提交 queue-update 的 text）。 */
     private void promptEditQueue(final String itemId, String current) {
+        // [V3.96 · 用户「待发送 → 点中间的**修改**之后**还是普通弹窗**」]
+        //   玻璃模式下改走**玻璃表单**（本骨架早就有 `showForm`）；非玻璃模式保留老 AlertDialog 作回退。
+        // [V3.128 · 用户「待发送**还没修复**」] 统一走**路由**（与「更多→重命名」同一条路）：
+        //   原来直接调 `GlassChatView.showSheetForm` ✗ —— 那里面还有 V3.113 加的 `sheetBackdropReady()` 守卫，
+        //   而且**不按当前界面路由**，与旁边能用的那条路不是同一个机制 ⇒ 行为不一致。
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            java.util.List<com.dsh.mobile.glass.GlassSheetField> fields = new java.util.ArrayList<>();
+            fields.add(new com.dsh.mobile.glass.GlassSheetField("排队内容",
+                    current == null ? "" : current, "要发出去的内容", false));
+            // [V3.130 · 真机诊断：`tag=queue-edit` 写进去了但 `visible=false`] ⇒ 菜单 pick 里那次 `hide()`
+            //   仍会盖掉紧接着的 `showForm`（这条路的菜单不是我改的那两处 overlay ✗）。
+            //   ⇒ 把"打开表单"**推到下一帧**：等 hide 完全落地（状态已收敛）再写 visible=true，不再被覆盖 ✓
+            final java.util.List<com.dsh.mobile.glass.GlassSheetField> fieldsF = fields;
+            contentHost.post(() -> {
+                glassInScreenForm("queue-edit",
+                        "修改排队内容", "改完点确定，会替换队列里那一条", fieldsF, "确定", vals -> {
+                            String v = (vals == null || vals.isEmpty() || vals.get(0) == null)
+                                    ? "" : vals.get(0).trim();
+                            if (v.isEmpty()) return "内容不能为空";
+                            if (!gw.canSend()) { gw.retryNow(); return "连接不稳定，稍后重试"; }
+                            evtLogAdd("→ queue-update 改文本 item=" + itemId + " 「" + head(v) + "」");
+                            gw.queueUpdate(currentSessionId, itemId, v, null);
+                            return null;
+                        });
+            });
+            return;
+        }
         final android.widget.EditText e = com.dsh.mobile.ui.Ui.field(this, "排队内容");
         e.setText(current == null ? "" : current);
         e.setSelection(e.getText().length());
@@ -4016,6 +5007,26 @@ public final class MainActivity extends Activity implements
             }
             return;
         }
+        // [V3.25 用户报「这个弹窗总是弹」] 会话读取/持久化类失败**不该用 Toast 打扰用户**。
+        //   实测链条（logcat 原文）：宿主侧某些会话的 v2 日志 `cannot safely transform unclassified
+        //   message source` ⇒ 每次**后台刷会话列表**都会回一帧
+        //   `SESSION_QUERY_PERSISTENCE_FAILED`（英文 message）⇒ 兜底分支原样 Toast ⇒ 因为反复发生，
+        //   屏幕上"英文 Toast 一直弹"，甚至被 Android 的 toast 配额挡掉
+        //   （`above allowed toast quota ... blocked and discarded`）。而且失败的多是**别的会话**，
+        //   用户根本没在操作它。
+        //   处置与既有 `session/agent-busy` 一致：**当前会话**才给顶部内联横幅（带 code、会一直挂到恢复）；
+        //   **非当前会话**完全静默，只写 evtLog（诊断区查得到），绝不弹 Toast。
+        if ("SESSION_QUERY_PERSISTENCE_FAILED".equals(code)
+                || "session/query-failed".equals(code)
+                || "session/persistence-failed".equals(code)) {
+            if (sessionId == null || sessionId.isEmpty() || sessionId.equals(currentSessionId)) {
+                showStreamNotice(false,
+                        "这个会话暂时读不到内容（" + code + "），还在重试…",
+                        sessionId == null ? "" : sessionId);
+            }
+            evtLogAdd("会话读取失败 code=" + code + " sid=" + shortSid(sessionId));
+            return;
+        }
         // [2026-10-05 真机验收补] 这条发送被网关整条拒了 → 把刚清掉的附件**放回待发送**。
         // 依据：sendStagedAttachments 是"发完就清空附件条"，而成功与否是异步的；
         // 实测踩到 clientTimeZone 非法时每一条都被拒，用户只看到错误提示、附件已经没了。
@@ -4146,6 +5157,29 @@ public final class MainActivity extends Activity implements
         // secondaryButton / tapRow / iconBox —— 在 DeviceHubView:610-664 里就是**完全相同的组合**
         // （同样是"底部面板 + 抓柄 + 图标行 + 取消"），ModelSheet/SubagentSheet/WorkspaceSheet
         // 也在用同一批，因此它踩到的代码路径与既有面板同级，不是新面。
+        // [V3.25 · 交接 §6 第 3 条③] 玻璃骨架优先：同一份三项渲染成**玻璃菜单**
+        // （骨架的 onPick 会在回调后自动收起面板，与旧 AttachSheet "先收再开选择器" 一致）
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            java.util.List<com.dsh.mobile.glass.GlassSheetItem> attachItems = new ArrayList<>();
+            attachItems.add(new com.dsh.mobile.glass.GlassSheetItem(
+                    com.dsh.mobile.R.drawable.ic_folder, "文件", "文档、压缩包，任意格式"));
+            attachItems.add(new com.dsh.mobile.glass.GlassSheetItem(
+                    com.dsh.mobile.R.drawable.ic_image, "相册", "从相册里选图片"));
+            attachItems.add(new com.dsh.mobile.glass.GlassSheetItem(
+                    com.dsh.mobile.R.drawable.ic_camera, "拍照", "现在拍一张"));
+            if (((com.dsh.mobile.glass.GlassChatView) convo).showSheetMenu(
+                    "attach", "添加附件", attachItems,
+                    idx -> {
+                        if (idx != null) {
+                            if (idx == 0) pickFileForStaging();
+                            else if (idx == 1) pickImageForStaging();
+                            else if (idx == 2) takePhotoForStaging();
+                        }
+                        return kotlin.Unit.INSTANCE;
+                    })) {
+                return;
+            }
+        }
         com.dsh.mobile.ui.AttachSheet.show(this,
                 this::pickFileForStaging,
                 this::pickImageForStaging,
@@ -4231,6 +5265,22 @@ public final class MainActivity extends Activity implements
      *
      * @param kindHint 已知类型（相册/拍照 = image）；null = 按 MIME 判断
      */
+    /**
+     * [V3.77] 进裁剪页（方案 A：自由裁剪）。
+     *
+     * <p>任何异常都**退回原行为**（直接暂存原图）—— 裁剪只是增强，不该让"选图"整条流程挂掉。
+     */
+    private void startCrop(android.net.Uri src) {
+        if (src == null) return;
+        try {
+            android.content.Intent i = new android.content.Intent(this, com.dsh.mobile.glass.CropActivity.class);
+            i.putExtra(com.dsh.mobile.glass.CropActivity.EXTRA_SRC, src.toString());
+            startActivityForResult(i, REQ_CROP);
+        } catch (Throwable t) {
+            stageAttachment(src, PendingAttachment.KIND_IMAGE);
+        }
+    }
+
     private void stageAttachment(final android.net.Uri uri, final String kindHint) {
         if (uri == null) return;
         new Thread(() -> {
@@ -4480,8 +5530,190 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "先打开一条对话，再看它产出的文件", Toast.LENGTH_SHORT).show();
             return;
         }
+        // [V3.24 · 交接 §6 第 3/6 条] 玻璃骨架优先；搬不动才走旧的白面板
+        if (glassArtifacts()) return;
         showArtifactsPanel();
         renderArtifacts(collectProducedFiles());
+    }
+
+    /**
+     * [V3.24] 把「生成物」搬进玻璃骨架的列表形态。
+     *
+     * <p>**交互必须与旧面板一致**（否则等于砍功能）：
+     * <ul>
+     *   <li>点一下 = **应用内预览**（`startDownload(..., true)`），下载过程中把进度就写到那一行的副文案；</li>
+     *   <li>长按 = 旧的「这个生成物」二级弹窗（下载到手机 / 复制路径）；</li>
+     *   <li>交付物不在会话工作目录内 ⇒ 如实写"手机端看不了/下不了"，不要让用户点了没反应。</li>
+     * </ul>
+     */
+    private boolean glassArtifacts() {
+        if (!(convo instanceof com.dsh.mobile.glass.GlassChatView)) return false;
+        final com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+        // [V3.87 · 用户「比如你现在每次都生成的报告 GlassUI_Report_V3.86.md，**手机端完全看不到**」]
+        //   根因：`ChatItem.FILES` 只来自 `deliverables/presented`，而 Agent **写文件（write/edit）不触发它**
+        //   ⇒ 面板永远空。这里接上网关的 **`file-list`** 源（`requestFileList`，全工程此前没有调用点）：
+        //   它列的是**本会话工作目录**（相对 cwd 的路径 + modifiedAt）⇒ 按修改时间倒序，刚写出来的报告就在最前。
+        artifactsPanelWantedAt = System.currentTimeMillis();
+        if (!currentSessionId.isEmpty()) {
+            try { gw.requestFileList(currentSessionId, "", "artifacts-" + System.currentTimeMillis()); }
+            catch (Throwable ignored) { }
+        }
+        final List<ArtifactEntry> entries = collectProducedFiles();
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts = new java.util.ArrayList<>();
+        for (ArtifactEntry e : entries) {
+            opts.add(new com.dsh.mobile.glass.GlassSheetOption(e.name,
+                    e.description.isEmpty() ? "点一下在应用内看 · 长按可下载到手机" : e.description,
+                    false, ""));
+        }
+        // 空态也能用玻璃面板表达（message 就是旧面板那句）
+        String sub = opts.isEmpty() ? "本次对话还没有产出文件"
+                : "本次对话产出的文件 · 点一下选打开还是下载";
+        return gv.showSheetList("artifacts", "生成物", sub, opts, "关闭",
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < entries.size()) {
+                        final ArtifactEntry e = entries.get(idx);
+                        final int pos = idx;
+                        final String rel = relativize(sessionCwd(currentSessionId), e.path);
+                        // [V3.82 · 用户]「交付物聊天界面点击就是打开就行；**具体的到生成物里面，
+                        //   点击能选下载和打开就行**」⇒ 这里点一下先给三个选择。
+                        Ui.dialog(this).setTitle(e.name)
+                                .setItems(new String[] { "打开（应用内预览）", "下载到手机", "复制路径" },
+                                        (dlg, w) -> {
+                                            if (w == 0) {
+                                                if (rel == null) {
+                                                    gv.updateSheetOptionSub(pos, "在电脑上的 " + e.path
+                                                            + "（不在本会话工作目录内，手机端看不了）");
+                                                    return;
+                                                }
+                                                startDownload(rel, e.name,
+                                                        text -> runOnUiThread(
+                                                                () -> gv.updateSheetOptionSub(pos, text)), true);
+                                            } else if (w == 1) {
+                                                if (rel == null) {
+                                                    gv.updateSheetOptionSub(pos, "在电脑上的 " + e.path
+                                                            + "（不在本会话工作目录内，手机端下不了）");
+                                                    Toast.makeText(this, "不在本会话工作目录内，手机端下不了",
+                                                            Toast.LENGTH_LONG).show();
+                                                    return;
+                                                }
+                                                startDownload(rel, e.name,
+                                                        text -> runOnUiThread(
+                                                                () -> gv.updateSheetOptionSub(pos, text)));
+                                            } else {
+                                                onCopyPath(e.path);
+                                            }
+                                        }).show();
+                    }
+                    return kotlin.Unit.INSTANCE;
+                },
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < entries.size()) {
+                        final ArtifactEntry e = entries.get(idx);
+                        final int pos = idx;
+                        final String rel = relativize(sessionCwd(currentSessionId), e.path);
+                        Ui.dialog(this).setTitle("这个生成物")
+                                .setItems(new String[] { "下载到手机", "复制路径" }, (dlg, w) -> {
+                                    if (w == 0) {
+                                        if (rel == null) {
+                                            gv.updateSheetOptionSub(pos, "在电脑上的 " + e.path
+                                                    + "（不在本会话工作目录内，手机端下不了）");
+                                            Toast.makeText(this, "不在本会话工作目录内，手机端下不了",
+                                                    Toast.LENGTH_LONG).show();
+                                            return;
+                                        }
+                                        startDownload(rel, e.name,
+                                                text -> runOnUiThread(() -> gv.updateSheetOptionSub(pos, text)));
+                                    } else {
+                                        onCopyPath(e.path);
+                                    }
+                                }).show();
+                    }
+                    return kotlin.Unit.INSTANCE;
+                });
+    }
+
+    /**
+     * [V3.86 · 用户「**还是看不到生成物**」]
+     *
+     * 按会话累积"见过的交付物"。为什么必须累积：`deliverables/presented` 事件落成的
+     * {@link ChatItem#FILES} 项存活在**当前历史窗口**里，一旦滚出窗口（或换会话回来），
+     * 面板就空了 —— 而用户要的是"这次会话产出了什么"，那是**会话级**事实，不该随窗口消失。
+     *
+     * 上限 40 个会话，避免长期运行内存无界（超了就丢最早的那个）。
+     */
+    private final java.util.LinkedHashMap<String, java.util.LinkedHashMap<String, ArtifactEntry>>
+            sessionDeliverables = new java.util.LinkedHashMap<>();
+
+    /** 记一笔"这个会话见过这个交付物"（键用 {@link ArtifactEntry#key()}，天然按路径去重）。 */
+    private void rememberDeliverable(String sessionId, JSONArray files) {
+        if (files == null || files.length() == 0) return;
+        String sid = (sessionId == null || sessionId.isEmpty()) ? currentSessionId : sessionId;
+        if (sid == null || sid.isEmpty()) return;
+        java.util.LinkedHashMap<String, ArtifactEntry> box = sessionDeliverables.get(sid);
+        if (box == null) {
+            box = new java.util.LinkedHashMap<>();
+            sessionDeliverables.put(sid, box);
+            while (sessionDeliverables.size() > 40) {
+                java.util.Iterator<String> it = sessionDeliverables.keySet().iterator();
+                if (it.hasNext()) { it.next(); it.remove(); }
+            }
+        }
+        for (int i = 0; i < files.length(); i++) {
+            ArtifactEntry e = ArtifactEntry.fromPresented(files.optJSONObject(i));
+            if (e == null || e.path.isEmpty()) continue;
+            box.put(e.key(), e);
+        }
+    }
+
+    /**
+     * [V3.87 · 用户「比如你现在每次都生成的报告 GlassUI_Report_V3.86.md，**手机端完全看不到**」]
+     *
+     * 会话工作目录的文件（`file-list` 回帧）：按修改时间倒序、上限 40 条。
+     * 用途：Agent **write/edit 出来的文件不会触发 `deliverables/presented`**，
+     * 所以「生成物」面板必须另外接这条源，否则永远看不到刚写出来的报告。
+     */
+    private final java.util.LinkedHashMap<String, java.util.List<ArtifactEntry>> workspaceFiles =
+            new java.util.LinkedHashMap<>();
+    /** 面板刚被打开的时刻（file-list 是异步回来的：回来后若还在这个时间窗内就重画一遍）。 */
+    private long artifactsPanelWantedAt = 0L;
+
+    @Override
+    public void onFileList(org.json.JSONObject frame) {
+        if (frame == null) return;
+        String sid = frame.optString("sessionId", "");
+        if (sid.isEmpty()) sid = currentSessionId;
+        if (sid == null || sid.isEmpty()) return;
+        org.json.JSONArray arr = frame.optJSONArray("entries");
+        if (arr == null) return;
+        String cwd = sessionCwd(sid);
+        java.util.List<long[]> mods = new java.util.ArrayList<>();
+        java.util.List<ArtifactEntry> flat = new java.util.ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            org.json.JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            String rel = o.optString("path", "");
+            if (rel.isEmpty()) continue;
+            String name = o.optString("name", "");
+            if (name.isEmpty()) {
+                int p = Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\'));
+                name = p >= 0 ? rel.substring(p + 1) : rel;
+            }
+            String abs = cwd.isEmpty() ? rel : (cwd + "/" + rel);
+            flat.add(new ArtifactEntry(name, abs, "工作目录 · 最近改动"));
+            mods.add(new long[] { o.optLong("modifiedAt", 0L), flat.size() - 1 });
+        }
+        // 修改时间倒序 —— "我刚写出来的报告"排最前
+        mods.sort((a, b) -> Long.compare(b[0], a[0]));
+        java.util.List<ArtifactEntry> sorted = new java.util.ArrayList<>();
+        for (long[] pr : mods) {
+            if (sorted.size() >= 40) break;
+            sorted.add(flat.get((int) pr[1]));
+        }
+        workspaceFiles.put(sid, sorted);
+        // [V3.90 · 用户「生成物这个窗口**还是无法关闭**」]
+        //   ⚠️ 上一版在这里回调 `onArtifacts()` 去"重画"面板 —— 结果是**每次回帧都把面板重新打开**
+        //   （用户刚点关闭、回帧刚好到达 ⇒ 又弹回来，看着就是"关不掉"）。**这里绝不碰 UI**：
+        //   只更新数据；面板下次打开时自然就是最新的。数据预热见 `subscribe` 处。
     }
 
     /**
@@ -4492,6 +5724,9 @@ public final class MainActivity extends Activity implements
      */
     private List<ArtifactEntry> collectProducedFiles() {
         java.util.LinkedHashMap<String, ArtifactEntry> map = new java.util.LinkedHashMap<>();
+        // [V3.86] 先铺**会话级累积**（滚动窗口之外的历史交付物也不会丢），再用窗口内的覆盖最新说明
+        java.util.LinkedHashMap<String, ArtifactEntry> remembered = sessionDeliverables.get(currentSessionId);
+        if (remembered != null) map.putAll(remembered);
         for (ChatItem it : items) {
             if (it == null || it.files == null) continue;
             for (int i = 0; i < it.files.length(); i++) {
@@ -4499,6 +5734,13 @@ public final class MainActivity extends Activity implements
                 if (e == null || e.path.isEmpty()) continue;
                 map.remove(e.key());   // 去掉旧的，put 到末尾会让顺序乱；所以先删再按需重放
                 map.put(e.key(), e);
+            }
+        }
+        // [V3.87] 最后补上**工作目录里的文件**（`file-list` 源）⇒ Agent 写出来的报告也能看到
+        java.util.List<ArtifactEntry> ws = workspaceFiles.get(currentSessionId);
+        if (ws != null) {
+            for (ArtifactEntry e : ws) {
+                if (!map.containsKey(e.key())) map.put(e.key(), e);
             }
         }
         // LinkedHashMap 的"删了再放"会把该项挪到末尾；为了保持"首次出现"的顺序，这里按交付时间重排
@@ -4765,6 +6007,30 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "电脑端没有返回可选的权限", Toast.LENGTH_SHORT).show();
             return;
         }
+        // [V3.24] 玻璃骨架优先；搬不动回退旧 ModelSheet 面板
+        {
+            final java.util.List<String> gPermValues = new ArrayList<>();
+            java.util.List<com.dsh.mobile.glass.GlassSheetOption> gPermOpts = new ArrayList<>();
+            for (com.dsh.mobile.ui.ModelSheet.Opt o : opts) {
+                gPermValues.add(o.id);
+                gPermOpts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                        o.label, o.detail, cur.equals(o.id), ""));
+            }
+            if (glassOptionList("permission", "权限",
+                    "只影响这条对话；权限越大，Agent 能改的文件越多", gPermOpts,
+                    idx -> {
+                        if (idx != null && idx >= 0 && idx < gPermValues.size()) {
+                            if (!gw.canSend()) {
+                                Toast.makeText(this, "连接不稳定，权限没切过去；稍后重试", Toast.LENGTH_LONG).show();
+                            } else {
+                                gw.selectPermission(currentSessionId, gPermValues.get(idx));
+                            }
+                        }
+                        return kotlin.Unit.INSTANCE;
+                    })) {
+                return;
+            }
+        }
         com.dsh.mobile.ui.ModelSheet.showOptions(this, "权限",
                 "只影响这条对话；权限越大，Agent 能改的文件越多",
                 opts, cur, id -> {
@@ -4882,11 +6148,36 @@ public final class MainActivity extends Activity implements
     }
 
     private void startDownload(ChatItem item, String absPath) {
+        startDownload(item, absPath, false);
+    }
+
+    /**
+     * [V3.76 · 用户「交付物能不能**不是点击下载**？能不能**先以打开为主**，打开后增加一个**保存**的按钮，
+     * 愿意保存的就保存，不愿意就直接打开看」]
+     *
+     * <p>`previewInApp = true` ⇒ 下载完**落到 App 私有预览缓存**并**打开预览页**
+     * （`ArtifactActivity`，里面新增「保存到手机」按钮 ⇒ 想存再存）；
+     * `false` ⇒ 照旧存进手机「下载」目录。两条出口在 {@link #finishDownload} 里已经实现，这里只选路。
+     */
+    private void startDownload(ChatItem item, String absPath, boolean previewInApp) {
         if (!isOnline()) {   // 与"在线/离线"同一判据：半开链路下也不再谎报能下载
             Toast.makeText(this, "还没连上电脑端", Toast.LENGTH_SHORT).show();
             return;
         }
         String rel = relativize(sessionCwd(currentSessionId), absPath);
+        if (rel == null) {
+            // [V3.85 · 用户「对话框内的生成物，点击应该可以打开啊，现在怎么也打不开」]
+            //   根因：`deliverables/presented` 里的 `path` 按契约**本来就是相对会话工作目录的**
+            //   （见 `ArtifactEntry` 注释），对它再 `relativize()` 必然得到 null ⇒ 一直弹
+            //   "不在会话工作目录内"、永远打不开 ✗。这里补上没有工作目录/本来就是相对路径的分支：
+            //   形如 `dist/x.apk`、`docs/a.md` 这种直接用（与「生成物」面板同一条口径）。
+            String p = absPath == null ? "" : absPath.trim().replace('\\', '/');
+            while (p.startsWith("/")) p = p.substring(1);
+            if (!p.isEmpty() && !p.contains("..") && !p.contains(":")
+                    && !p.startsWith("file")) {
+                rel = p;
+            }
+        }
         if (rel == null) {
             Toast.makeText(this, "该文件不在这个会话的工作目录内，网关不允许下载",
                     Toast.LENGTH_LONG).show();
@@ -4897,14 +6188,21 @@ public final class MainActivity extends Activity implements
             d.requestId = "dl-" + System.currentTimeMillis();
             d.relPath = rel;
             d.itemKey = item.key;
+            d.preview = previewInApp;      // ← [V3.76] 决定"打开预览"还是"存进下载目录"
             d.temp = java.io.File.createTempFile("dl-", ".part", getCacheDir());
             d.md = java.security.MessageDigest.getInstance("SHA-256");
             dlByRequest.put(d.requestId, d);
-            setDownloadState(d, "请求中…");
+            setDownloadState(d, previewInApp ? "打开中…" : "请求中…");
             gw.fileDownloadOpen(currentSessionId, rel, d.requestId);
         } catch (Throwable t) {
             Toast.makeText(this, "开始下载失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** [V3.76] 交付物：**先打开预览**（用户明确"不要点击就下载"）。 */
+    @Override
+    public void onPreviewFile(ChatItem item, String path) {
+        startDownload(item, path, true);
     }
 
     /**
@@ -5313,14 +6611,14 @@ public final class MainActivity extends Activity implements
         if ("workspaces".equals(kind)) {
             // 工作区注册表到了：分组标题能显示工作区名，且「⋯」菜单可以带上 workspaceId
             applyWorkspaces(frame);
-            if (listScreen != null) listScreen.setRows(buildRows());
+            if (listScreen != null) setSessionRows(buildRows());
             return;
         }
         if ("session-archives".equals(kind)) {
             JSONArray arr = frame.optJSONArray("archivedSessionIds");
             archivedIds.clear();
             if (arr != null) for (int i = 0; i < arr.length(); i++) archivedIds.add(arr.optString(i));
-            if (listScreen != null) listScreen.setRows(buildRows());
+            if (listScreen != null) setSessionRows(buildRows());
         } else if ("session-title-changed".equals(kind)) {
             String sid = frame.optString("sessionId", "");
             String title = frame.optString("title", "");
@@ -5337,7 +6635,7 @@ public final class MainActivity extends Activity implements
                 currentTitle = title;
                 if (convo != null) convo.setTitleText(titleForDisplay());
             }
-            if (listScreen != null) listScreen.setRows(buildRows());
+            if (listScreen != null) setSessionRows(buildRows());
         }
     }
 
@@ -5348,7 +6646,16 @@ public final class MainActivity extends Activity implements
         // 「连接抖动，正在恢复…」的前提已经不成立，立刻撤掉内联提示。
         clearStreamNotice();
         long t = 0;
-        try { if (time != null) t = Long.parseLong(String.valueOf(time)) * 1000L; } catch (Throwable ignored) { }
+        try {
+            if (time != null) {
+                long v = Long.parseLong(String.valueOf(time));
+                // [V3.63 · 用户「现在聊天里面的时间怎么不太对」]
+                //   ⚠️ v4（DSH 0.2.0-rc.2）的事件 `time` **本来就是毫秒**（实测样本 `1791559826670`），
+                //   而这里原来**一律 ×1000** ⇒ 时间被放大成"未来几万年" ⇒ 时间分隔/卡片时间全乱。
+                //   ⇒ 按量级判定：< 1e11 当作**秒**（老的 v2/v3 形态），否则当作**毫秒**。
+                t = v < 100000000000L ? v * 1000L : v;
+            }
+        } catch (Throwable ignored) { }
         if (t <= 0) t = System.currentTimeMillis();
 
         Long seqNum = null;
@@ -5488,6 +6795,8 @@ public final class MainActivity extends Activity implements
                 if (payload == null) break;
                 JSONArray fs = payload.optJSONArray("files");
                 if (fs == null || fs.length() == 0) break;
+                // [V3.86] 会话级累积：滚出历史窗口后「生成物」面板仍然看得到（用户报"还是看不到生成物"）
+                rememberDeliverable(currentSessionId, fs);
                 String cid = payload.optString("callId", String.valueOf(t));
                 String key = "files:" + cid;
                 if (byKey.containsKey(key)) break;
@@ -6098,6 +7407,10 @@ public final class MainActivity extends Activity implements
         nextBeforeSeq = null;
         resetLoadMore();   // 换会话：在途分页作废，别让上一页的失败/在途状态残留到新会话
         planGoal = ""; planPhase = ""; planTodos = "";
+        // [V3.71 · 用户「**没有目录任务的项目不要显示这个胶囊条**」]
+        //   ⚠️ 上面只清了 Java 字段，**没有清 Compose 侧的状态** ⇒ 上一个会话的任务卡会**串到新会话**
+        //   （看起来就是"这个项目没有任务、却还挂着一条胶囊"）。这里把镜像一并清空。
+        if (convo != null) convo.setPlanRich("", new java.util.ArrayList<String[]>());
         // 重订阅是把列表清空、等回 snapshot 再重建（重建在 onSnapshot 里完成）。
         // 此刻 byKey 为空，migratePendingInteractions() 只做"保留待确认条目"这件事：
         // 卡片不会丢状态，等 snapshot 到达后再按 key 迁移到新对象（评审 P0-3）。
@@ -6105,6 +7418,10 @@ public final class MainActivity extends Activity implements
         gw.subscribe(currentSessionId);
         gw.requestTasks(currentSessionId);
         gw.requestGoal(currentSessionId);
+        // [V3.90] 顺手把「生成物」要用的**工作目录文件清单**预热一下（异步）⇒ 用户点开面板时数据已就绪，
+        //   因此**完全不需要**"回帧后重开面板"那种危险写法（见 `onFileList` 的注释）。
+        try { gw.requestFileList(currentSessionId, "", "artifacts-pre-" + System.currentTimeMillis()); }
+        catch (Throwable ignored) { }
         if (screen != Screen.CHAT) {
             showChat();
         } else if (convo != null) {
@@ -6137,7 +7454,7 @@ public final class MainActivity extends Activity implements
         // 只有父会话确实在列表里（且不是自己）才算「人在子会话里」，返回键才有确定的上一级
         currentParentId = (!p.isEmpty() && !p.equals(s.id) && findSession(p) != null) ? p : "";
         closeDrawer();          // 选中任务 -> 抽屉收起 -> 右侧对话扩大并进入该任务
-        if (listScreen != null) listScreen.setCurrentSession(currentSessionId);
+        if (listScreen != null) setSessionCurrent(currentSessionId);
         // 通知这边同步"人此刻在看哪条会话"：① 正在看这条 → 有审批/完成也不再打扰它；
         // ② 通知栏里这条会话的旧提醒已经没意义了，直接撤掉。
         Notifier.setViewedSession(this, currentSessionId);
@@ -6150,7 +7467,7 @@ public final class MainActivity extends Activity implements
     public void onToggleChildren(SessionInfo s) {
         if (s == null || s.id == null || s.id.isEmpty()) return;
         if (!expandedParents.remove(s.id)) expandedParents.add(s.id);
-        if (listScreen != null) listScreen.setRows(buildRows());
+        if (listScreen != null) setSessionRows(buildRows());
     }
 
     // ============================================================ 子智能体（子会话）导航
@@ -6247,7 +7564,7 @@ public final class MainActivity extends Activity implements
         resetLoadMore();   // 新建会话：分页状态归零
         setRunning(false);
         closeDrawer();          // 新建/派任务 -> 抽屉收起，进入空白对话
-        if (listScreen != null) listScreen.setCurrentSession("");
+        if (listScreen != null) setSessionCurrent("");
         showChat();
     }
 
@@ -6257,9 +7574,86 @@ public final class MainActivity extends Activity implements
      * 弹窗只做一件事（在此工作区新建任务），但**先让用户确认在操作哪个工作区**：
      * 标题就是工作区名、副标题是完整路径 —— 这正是改前缺失的那一环。
      */
+    /**
+     * [V3.97 · 用户「三个点那个弹窗**按咱们所有弹窗一个标准改就行**」]
+     *
+     * 按 `docs/GlassUI/GlassUI_SPEC_DIALOG.md`：抽屉里的会话 / 工作区菜单一律走**玻璃弹窗**，
+     * 并且必须挂 **Activity 级全屏宿主**（聊天页的 `GlassChatView`）——
+     * 否则会像以前那样被关进抽屉那块窄面板（既居不了屏、又会被压变形）。
+     *
+     * @return false = 玻璃宿主不可用，调用方走老弹窗（回退落点）
+     */
+    private boolean showGlassMenu(String tag, String title, String sub,
+                                  String[] labels, String[] subs,
+                                  java.util.function.IntConsumer onPick) {
+        if (!(convo instanceof com.dsh.mobile.glass.GlassChatView)) return false;
+        // [V3.101 · 用户「弹窗**不能调整到最上层吗**？点三个点→侧抽屉收回去→再弹窗，
+        //   **太多此一举了**；点错了还得重新开抽屉」]
+        //   ⚠️ V3.100 我用的是"先收起抽屉"—— 能压住层级，但把抽屉关了 ✗（用户否掉了）。
+        //   ⇒ 正解：**把弹窗所在的那层临时提到最上面**（`bringToFront`），抽屉**保持打开**在下面待命；
+        //     弹窗关掉时（`setSheetHideCallback`）再把抽屉那层放回去 ⇒ 回到"抽屉还开着"的状态 ✓。
+        //     这样：点 ⋯ ⇒ 弹窗直接在全屏最上层；点空白/关闭 ⇒ 抽屉还在，点错了可以立刻重选 ✓。
+        final com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+        // [V3.103 · 方案 A（用户认可）] 抽屉里的弹窗：不再"先收起抽屉"✗，也不再动聊天层✗，
+        //   而是给它一个**独立的全屏弹窗宿主**，作为 `DrawerHost` 的**最后一个子 View**
+        //   ⇒ 天然在抽屉面板之上、且是全屏 ⇒ 弹窗在**屏幕正中 + 抽屉之上**，抽屉**保持打开** ✓
+        //   （空闲时该宿主不画任何东西、也不拦触摸 —— `GlassSheetOverlay` 在不可见时直接 return）
+        if (drawerHost != null && !drawerSheetHostAdded) {
+            try {
+                // Kotlin 的 `() -> Int` 形参在 Java 侧是 Function0<Integer> —— 显式声明，别指望 lambda 推导
+                kotlin.jvm.functions.Function0<Integer> rev =
+                        () -> (sessionState == null ? 0 : sessionState.getThemeRev());
+                // ⚠️ 门面类要对：函数定义在 `GlassSessionList.kt` ⇒ Java 门面是 `GlassSessionListKt`
+                android.view.View sh = com.dsh.mobile.glass.GlassSessionListKt.createGlassSheetHost(
+                        this, drawerSheetState, rev);
+                drawerHost.addView(sh, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                // [V3.107 · 发布前检查 P1] 标志位必须**成功之后**才置：原来先置 true，
+                //   一旦创建抛异常就**永久不再尝试** ⇒ ⋯ 菜单静默失效 ✗。现在失败只记日志，
+                //   下次点 ⋯ 会重新尝试（并可回退到旧弹窗）。
+                drawerSheetHostAdded = true;
+                // [V3.106 · 发布前检查 B3] 弹窗显示期间：抽屉右侧那条不再抢事件（否则点遮罩会关掉抽屉）
+                //   关掉时回调把拦截恢复 —— 现在挂的是**抽屉自己那个状态**的回调（V3.114）。
+                drawerSheetState.setOnHide(() -> {
+                    drawerHost.setSheetOnTop(false);
+                    return kotlin.Unit.INSTANCE;
+                });
+            } catch (Throwable t) {
+                android.util.Log.w("DSH-GLASS", "抽屉弹窗宿主创建失败", t);
+            }
+        }
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts = new java.util.ArrayList<>();
+        for (int i = 0; i < labels.length; i++) {
+            String s = (subs != null && i < subs.length && subs[i] != null) ? subs[i] : "";
+            opts.add(new com.dsh.mobile.glass.GlassSheetOption(labels[i], s, false, ""));
+        }
+        // [V3.114] 走**抽屉自己那个状态**（由抽屉宿主 + 抽屉取样层渲染）⇒ 位置在抽屉之上、材质有效；
+        //   应用弹窗（模型/权限/生成物…）走聊天页状态，两边永不互相抢。
+        drawerHost.setSheetOnTop(true);
+        drawerSheetState.showList(tag, title, sub == null ? "" : sub, opts, "关闭",
+                idx -> {
+                    // [V3.132] 选中后**顺手收起抽屉**：后续动作多半要弹新面板（改名/归档确认…），
+                    //   而按新路由它渲染在**当前界面**那一层 ⇒ 抽屉不收会遮住它 ✓
+                    if (idx != null) {
+                        closeDrawer();
+                        onPick.accept(idx);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                }, null);
+        return true;
+    }
+
     @Override
     public void onWorkspaceMenu(WorkspaceGroup g) {
         if (g == null || !g.canCreateSession()) return;
+        // [V3.97] 同样按弹窗规范走玻璃弹窗；宿主不可用时回退旧 WorkspaceSheet（回退落点）
+        if (showGlassMenu("wsmenu", g.label == null ? "工作区" : g.label,
+                g.path == null ? "" : g.path,
+                new String[] { "在此工作区新建任务" },
+                new String[] { "开一条空白对话，第一条消息带着这个工作区发出" },
+                which -> { if (which == 0) onNewTaskHere(g); })) {
+            return;
+        }
         WorkspaceSheet.show(this, g, this);
     }
 
@@ -6342,8 +7736,85 @@ public final class MainActivity extends Activity implements
         Toast.makeText(this, "已刷新", Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * [V3.127 · 用户「输入框本身，长按调用本地的粘贴/选择那些一条按钮，**现在长按只有自动填充**」]
+     *
+     * 空草稿长按输入框 ⇒ 弹**我们自己的玻璃菜单**（粘贴 / 复制全部 / 清空）。
+     * 为什么自建而不是用系统那条：Compose 的 `BasicTextField` 在**空内容**下长按不会给出系统
+     * 「粘贴/全选」条（被系统自动填充/输入法接管了）✗；**有文字**时长按仍归系统选择（我们没拦）✓。
+     *
+     * <p>⚠️ 这里**不能加 `@Override`**：Kotlin 接口的默认方法在本工程编译配置下生成的是
+     * `GlassChatHost$DefaultImpls`（不是真正的 JVM default method），Java 侧加注解会报
+     * "方法不会覆盖或实现超类型的方法" ✗。**同名同参**的方法照样实现该接口方法 ✓。
+     */
+    public void draftLongPress() {
+        String clip = "";
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null
+                    && cm.getPrimaryClip().getItemCount() > 0) {
+                CharSequence cs = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+                clip = cs == null ? "" : cs.toString();
+            }
+        } catch (Throwable ignored) { }
+        final String clipFinal = clip;
+        final String draftNow = (convo instanceof com.dsh.mobile.glass.GlassChatView)
+                ? ((com.dsh.mobile.glass.GlassChatView) convo).draftText() : "";
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
+        String head = clipFinal.isEmpty() ? "（剪贴板为空）"
+                : ("「" + (clipFinal.length() > 18 ? clipFinal.substring(0, 18) + "…" : clipFinal) + "」");
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("粘贴", head, false, ""));
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("复制全部草稿",
+                draftNow.isEmpty() ? "（草稿为空）" : "", false, ""));
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("清空", "", false, ""));
+        glassInScreenList("inputmenu", "输入框", "空输入框长按 · 选一个操作", g, "取消", idx -> {
+            if (idx == null) return kotlin.Unit.INSTANCE;
+            if (idx == 0) {
+                if (!clipFinal.isEmpty()) applyDraft(draftNow + clipFinal);
+                else Toast.makeText(this, "剪贴板里没有内容", Toast.LENGTH_SHORT).show();
+            } else if (idx == 1) {
+                if (!draftNow.isEmpty()) {
+                    try {
+                        android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                                getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                        if (cm != null) cm.setPrimaryClip(
+                                android.content.ClipData.newPlainText("draft", draftNow));
+                        Toast.makeText(this, "已复制草稿", Toast.LENGTH_SHORT).show();
+                    } catch (Throwable ignored) { }
+                }
+            } else {
+                applyDraft("");
+            }
+            return kotlin.Unit.INSTANCE;
+        });
+    }
+
+    /** 写回输入框草稿（只有玻璃对话页有 Compose 草稿状态）。 */
+    private void applyDraft(String t) {
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            ((com.dsh.mobile.glass.GlassChatView) convo).setDraft(t == null ? "" : t);
+        }
+    }
+
     @Override
     public void onRename(SessionInfo s) {
+        // [V3.123 · 验收 K3] 这里原来还是**系统白底弹窗**（验收实测：抽屉 ⋯ →「重命名」= 纯白系统框 ✗，
+        //   与规范 §5 声称的"只剩意见反馈一处例外"不符）⇒ 与「修改名称」同款：走**当前界面**的玻璃表单，
+        //   校验失败在弹窗内**内联报错**（原来是 Toast + 直接 return）。
+        java.util.List<com.dsh.mobile.glass.GlassSheetField> fs = new java.util.ArrayList<>();
+        fs.add(new com.dsh.mobile.glass.GlassSheetField("名称", s.display(), "", false));
+        if (glassInScreenForm("renamesess", "重命名对话", "改的是这条会话的标题", fs, "保存", vals -> {
+            String t = (vals == null || vals.isEmpty() || vals.get(0) == null) ? "" : vals.get(0).trim();
+            if (t.isEmpty()) return "名称不能为空";
+            // 断网时 sendRaw 是静默失败的：先确认能发再发，别让用户以为改好了（评审 P1-12）
+            if (!gw.canSend()) return "还没连上电脑端，重命名没有发出去；连上后请重试";
+            gw.renameSession(s.id, t);
+            return null;
+        })) {
+            return;
+        }
+        // 旧实现保留为回退（当前界面确实没有玻璃宿主时才走到这里）
         // 用对话框自己的主题 Context 建输入框：用 Activity 建的话拿到的是 Light 主题的
         // 默认文字色，深色对话框里就成了深字压深底（看不见）。
         final EditText input = new EditText(Ui.dialogContext(this));
@@ -6378,7 +7849,7 @@ public final class MainActivity extends Activity implements
         }
         gw.archiveSession(s.id);
         archivedIds.add(s.id);
-        if (listScreen != null) listScreen.setRows(buildRows());
+        if (listScreen != null) setSessionRows(buildRows());
     }
 
     // ============================================================ ConversationView.Host
@@ -6426,7 +7897,74 @@ public final class MainActivity extends Activity implements
                 root.title = "主智能体";
             }
         }
-        SubagentSheet.show(this, root, childrenOf(rootId), currentSessionId, s -> onOpenSession(s));
+        final java.util.List<SessionInfo> kids = childrenOf(rootId);
+        // [V3.25 · 交接 §6 第 3 条③] 玻璃骨架优先；搬不动才走旧 SubagentSheet
+        if (glassSubagentList(root, kids)) return;
+        SubagentSheet.show(this, root, kids, currentSessionId, s -> onOpenSession(s));
+    }
+
+    /**
+     * [V3.25] 「子智能体」面板搬进玻璃骨架的**列表形态**。
+     *
+     * <p>行文案与旧 `ui/SubagentSheet.entry` **逐字段对齐**：标题 = `主智能体/子智能体 N · 标题`；
+     * 副文案 = 状态 · 相对时间 · 工作目录尾段 · 智能体预设；当前会话高亮打勾（旧面板也是这一套）。
+     * 点任意一项都走 `onOpenSession`（与抽屉里点会话卡是同一条路，不另造切换逻辑）。
+     */
+    private boolean glassSubagentList(SessionInfo root, java.util.List<SessionInfo> kids) {
+        if (!(convo instanceof com.dsh.mobile.glass.GlassChatView)) return false;
+        com.dsh.mobile.glass.GlassChatView gv = (com.dsh.mobile.glass.GlassChatView) convo;
+        final java.util.List<SessionInfo> targets = new ArrayList<>();
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts = new ArrayList<>();
+        if (root != null) {   // ① 主智能体永远第一行（可点回主）
+            targets.add(root);
+            opts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                    "主智能体 · " + subagentTitle(root),
+                    subagentMeta(root, root.running ? "● 运行中" : "○ 已完成"),
+                    root.id != null && root.id.equals(currentSessionId), ""));
+        }
+        int n = kids == null ? 0 : kids.size();
+        for (int i = 0; i < n; i++) {   // ② 子会话（已按更新时间倒序）
+            SessionInfo s = kids.get(i);
+            String status;
+            if (s.pending == 1) status = "❓ 待回答";
+            else if (s.pending == 2) status = "⚠ 待批准";
+            else if (s.running) status = "● 运行中";
+            else status = "○ 已完成";
+            targets.add(s);
+            opts.add(new com.dsh.mobile.glass.GlassSheetOption(
+                    "子智能体 " + (i + 1) + " · " + subagentTitle(s),
+                    subagentMeta(s, status),
+                    s.id != null && s.id.equals(currentSessionId), ""));
+        }
+        String sub = opts.isEmpty() ? "这条会话名下还没有子智能体"
+                : (n + " 个子会话 · 点一项切过去看它在做什么");
+        return gv.showSheetList("subagents", "子智能体", sub, opts, "关闭",
+                idx -> {
+                    if (idx != null && idx >= 0 && idx < targets.size()) onOpenSession(targets.get(idx));
+                    return kotlin.Unit.INSTANCE;
+                });
+    }
+
+    private static String subagentTitle(SessionInfo s) {
+        if (s == null || s.title == null || s.title.isEmpty()) return "未命名会话";
+        return s.title;
+    }
+
+    /** 子智能体行的副文案（与旧 SubagentSheet.entry 的 meta 同口径）。 */
+    private static String subagentMeta(SessionInfo s, String status) {
+        StringBuilder sb = new StringBuilder(status == null ? "" : status);
+        if (s.updatedAt > 0) {
+            String ago = Ui.ago(s.updatedAt);
+            if (!ago.isEmpty()) sb.append(" · ").append(ago);
+        }
+        String cwd = s.cwd == null ? "" : s.cwd.replace('\\', '/');
+        if (!cwd.isEmpty()) {
+            int i = cwd.lastIndexOf('/');
+            String tail = i >= 0 ? cwd.substring(i + 1) : cwd;
+            if (!tail.isEmpty()) sb.append(" · ").append(tail);
+        }
+        if (s.agentPreset != null && !s.agentPreset.isEmpty()) sb.append(" · ").append(s.agentPreset);
+        return sb.toString();
     }
 
     @Override
@@ -6544,7 +8082,10 @@ public final class MainActivity extends Activity implements
     private void refreshMoreStatus() {
         if (convo == null) return;
         if (loadingMore) {
-            convo.setMoreStatus("正在加载更早…", false);
+            // [V3.63 · 用户「能不能不影响拖动？**默默在上面加载**？」]
+            //   打开会话时的**自动翻页**（后台把历史拉全）不显示"正在加载更早…"——
+            //   它每页一闪会让人以为页面在抖；**手动的上滑加载**照旧显示（那是用户主动要的反馈）。
+            convo.setMoreStatus(autoPaging ? "" : "正在加载更早…", false);
         } else if (loadMoreFailed) {
             convo.setMoreStatus("加载更早失败，点这里重试", true);
         } else {
@@ -6631,17 +8172,32 @@ public final class MainActivity extends Activity implements
         final String[] opts = currentSessionId.isEmpty()
                 ? new String[] { "连接设置" }
                 : new String[] { "重命名", "停止当前回合", "连接设置" };
-        Ui.dialog(this).setItems(opts, (d, which) -> {
-            if ("重命名".equals(opts[which])) {
-                for (SessionInfo s : sessions) {
-                    if (s.id.equals(currentSessionId)) { onRename(s); return; }
-                }
-            } else if ("停止当前回合".equals(opts[which])) {
-                onStopTurn();
-            } else {
-                showSettings();
+        // [V3.25 · 交接 §6 第 6 条] 玻璃骨架优先：同一份三项渲染成**玻璃菜单**（原来走 Ui.dialog 白弹窗）
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            java.util.List<com.dsh.mobile.glass.GlassSheetItem> items = new ArrayList<>();
+            for (String o : opts) items.add(new com.dsh.mobile.glass.GlassSheetItem(0, o, ""));
+            if (((com.dsh.mobile.glass.GlassChatView) convo).showSheetMenu("menu", "更多", items,
+                    idx -> {
+                        if (idx != null && idx >= 0 && idx < opts.length) menuPick(opts[idx]);
+                        return kotlin.Unit.INSTANCE;
+                    })) {
+                return;
             }
-        }).show();
+        }
+        Ui.dialog(this).setItems(opts, (d, which) -> menuPick(opts[which])).show();
+    }
+
+    /** ⋯ 菜单三选一的动作（旧 `Ui.dialog` 分支原样搬出来，两条路共用一份）。 */
+    private void menuPick(String what) {
+        if ("重命名".equals(what)) {
+            for (SessionInfo s : sessions) {
+                if (s.id.equals(currentSessionId)) { onRename(s); return; }
+            }
+        } else if ("停止当前回合".equals(what)) {
+            onStopTurn();
+        } else {
+            showSettings();
+        }
     }
 
     @Override
@@ -6838,6 +8394,27 @@ public final class MainActivity extends Activity implements
     @Override
     public void onRenameDevice(final Store.Device d) {
         if (d == null) return;
+        // [V3.111 · 用户「一会玻璃、一会半透明 ⇒ 修改完再发」] 迁移：改走**玻璃表单**
+        //   （与「模型 / 权限 / 生成物」同一套弹窗；校验失败在弹窗内联报错，不再用 Toast）。
+        // [V3.122 · 铁证修正] ⚠️ 原来这里是 `if (convo != null) { ...玻璃... }` —— **大错** ✗：
+        //   设备页上 `convo`（聊天视图）还没被创建（它是懒建的）⇒ 整个玻璃尝试被跳过 ⇒ 直接落旧弹窗 ✗；
+        //   等用户"进对话再出来"把 `convo` 建出来，这里才走玻璃 ⇒ 就是用户看到的"进去再出来就好了" ✓。
+        //   路由（`currentSheetState()`）**根本不需要 `convo`** ⇒ 直接调，别再拿它当门。
+        java.util.List<com.dsh.mobile.glass.GlassSheetField> fs = new java.util.ArrayList<>();
+        fs.add(new com.dsh.mobile.glass.GlassSheetField("名称", d.displayName(),
+                "给这台电脑起个名字", false));
+        if (glassInScreenForm("renamedev",
+                "修改名称", "改的是本机这张卡片的名字，电脑端不受影响", fs, "保存", vals -> {
+                        String v = (vals == null || vals.isEmpty() || vals.get(0) == null)
+                                ? "" : vals.get(0).trim();
+                        if (v.isEmpty()) return "名称不能为空";
+                        store.renameDevice(d.id, v);
+                        refreshDevices();
+                        Toast.makeText(MainActivity.this, "已改名为「" + v + "」", Toast.LENGTH_SHORT).show();
+                        return null;
+                    })) {
+            return;
+        }
         final EditText input = new EditText(Ui.dialogContext(this));   // 同上：必须用对话框主题 Context
         input.setSingleLine(true);
         input.setText(d.displayName());
@@ -6863,8 +8440,31 @@ public final class MainActivity extends Activity implements
     }
 
     /** 「删除」= 清除这台设备的地址与令牌（电脑端不受影响，重新扫码即可再添加）。 */
+    /** [V3.10] 删除一台设备：统一玻璃弹窗与系统对话框两条路共用（与旧对话框里的代码同义）。 */
+    private void doDeleteDevice(final Store.Device d) {
+        if (d == null) return;
+        boolean wasActive = d.id.equals(store.activeDeviceId());
+        store.removeDevice(d.id);
+        if (wasActive) {
+            gw.disconnect();
+            Store.Device next = store.activeDevice();
+            if (next != null && next.pairedReady()) gatewayReconnect();
+        }
+        refreshDevices();
+        Toast.makeText(this, "已删除「" + d.displayName() + "」", Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     public void onDeleteDevice(final Store.Device d) {
+        if (d == null) return;
+        // [V3.10] 统一弹窗骨架：删除确认走本页玻璃 sheet（USE_GLASS_SHEET 关掉则回退系统对话框）
+        if (USE_GLASS_SHEET && glassDeviceState != null) {
+            glassDeviceState.getSheet().showConfirm("delete:" + d.id,
+                    "删除「" + d.displayName() + "」",
+                    "会清除这台设备在本机保存的地址与设备令牌。电脑端不受影响，之后重新扫码就能再添加。",
+                    "删除", true);
+            return;
+        }
         if (d == null) return;
         Ui.dialog(this)
                 .setTitle("删除「" + d.displayName() + "」")
@@ -7599,6 +9199,16 @@ public final class MainActivity extends Activity implements
         cb.setPadding(0, Ui.dp(this, 14), 0, 0);
         box.addView(cb);
 
+        // [V3.112 · 迁移] 「不校验证书」的知情同意 ⇒ **玻璃确认框**。
+        //   ⚠️ 原来带一个「我已知情」复选框：玻璃确认框没有复选框控件 ⇒ 把**知情同意写进主按钮文案**
+        //   （点它本身就是"已知情并同意"），语义与交互结果一致，且省掉一次"没勾选被拦"。
+        if (glassConfirm("riskack", "开启「不校验证书」",
+                "开启后不再校验电脑端证书，链路容易被中间人冒充。\n"
+                        + "仅在你确知网络环境可控时开启；公司/涉密网络请先确认合规。",
+                "我已知情，同意开启", true, () -> {
+                    store.setRiskAck(true);
+                    applyEndpoint(lan, wan, RoutePolicy.WAN);
+                })) return;
         final android.app.AlertDialog dlg = Ui.dialog(this)
                 .setView(box)
                 .setPositiveButton("我已知情，同意开启", null)
@@ -8487,6 +10097,35 @@ public final class MainActivity extends Activity implements
         // 用户对同一版本点过「以后再说」就不再自动弹（手动点仍会弹）
         if (!manual && name.equals(store.skipVersion())) return;
 
+        // [V3.112 · 迁移] 三选一 ⇒ **玻璃列表**（立即更新 / 复制链接 + 骨架自带"以后再说"收口）
+        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
+            java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
+            g.add(new com.dsh.mobile.glass.GlassSheetOption("立即更新",
+                    notes.isEmpty() ? "下载后覆盖安装即可，无需卸载" : notes, false, ""));
+            g.add(new com.dsh.mobile.glass.GlassSheetOption("复制链接",
+                    url.isEmpty() ? mirror : url, false, ""));
+            ((com.dsh.mobile.glass.GlassChatView) convo).showSheetList("updnew",
+                    "发现新版本 v" + name, "当前 v" + myVersionName(), g, "以后再说",
+                    idx -> {
+                        if (idx != null && idx == 0) {
+                            startInAppUpdate(name, url, mirror, sha256, size);
+                        } else if (idx != null && idx == 1) {
+                            String target = url.isEmpty() ? mirror : url;
+                            try {
+                                android.content.ClipboardManager cm =
+                                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                                if (cm != null) {
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("apk", target));
+                                }
+                                Toast.makeText(this, "下载链接已复制", Toast.LENGTH_SHORT).show();
+                            } catch (Throwable ignored) { }
+                        } else {
+                            store.setSkipVersion(name);
+                        }
+                        return kotlin.Unit.INSTANCE;
+                    }, null);
+            return;
+        }
         Ui.dialog(this)
                 .setTitle("发现新版本 v" + name)
                 .setMessage((notes.isEmpty() ? "有新版本可用。" : notes)
@@ -8542,6 +10181,8 @@ public final class MainActivity extends Activity implements
                 pendingUpdatePrompted = ver;
                 final java.io.File apk = f;
                 pairTraceAdd("更新：回前台自检发现已下载包 v" + ver + " → 提示安装（不再重复下载）");
+                // [V3.112 · 迁移] 更新链路统一玻璃确认框
+                if (glassConfirm("updready", "更新包已下载好", "v" + ver + " 的安装包已经在手机里了，不需要重新下载。", "立即安装", false, () -> installDownloadedApk(apk))) return;
                 Ui.dialog(this)
                         .setTitle("更新包已下载好")
                         .setMessage("v" + ver + " 的安装包已经在手机里了，不需要重新下载。\n"
@@ -8642,6 +10283,8 @@ public final class MainActivity extends Activity implements
                 }
                 if (got == null) {
                     dlg.dismiss();
+                    // [V3.112 · 迁移] 更新链路统一玻璃确认框
+                    if (glassConfirm("updfail", "下载失败", "没能下载更新包" + (e == null ? "" : ("（" + e + "）")) + "；可以稍后重试。", "重试", false, () -> startInAppUpdate(versionName, url, mirror, sha256, expectSize))) return;
                     new android.app.AlertDialog.Builder(this)
                             .setTitle("下载失败")
                             .setMessage("没能下载更新包" + (e == null ? "" : ("（" + e + "）"))
@@ -8741,6 +10384,8 @@ public final class MainActivity extends Activity implements
             } else {
                 //noinspection ResultOfMethodCallIgnored
                 apk.delete();
+                // [V3.112 · 迁移] 更新链路统一玻璃确认框
+                if (glassConfirm("updbad", "更新包校验失败", "下载到的安装包与官方校验值不一致，已丢弃。请稍后重试。", "重试", false, () -> startInAppUpdate(versionName, url, mirror, sha256, expectSize))) return;
                 new android.app.AlertDialog.Builder(this)
                         .setTitle("更新包校验失败")
                         .setMessage("下载到的安装包与官方校验值不一致，已丢弃。\n\n"
@@ -8755,6 +10400,8 @@ public final class MainActivity extends Activity implements
         }
         // 没有 sha256：按大小核对 + 明确告知，不静默安装
         boolean sizeOk = expectSize <= 0 || apk.length() == expectSize;
+        // [V3.112 · 迁移] 更新链路统一玻璃确认框
+        if (glassConfirm("updinstall", "安装更新 v" + versionName, "清单没给 sha256，只能按大小核对；确认要继续安装吗？", "继续安装", false, () -> installDownloadedApk(apk))) return;
         new android.app.AlertDialog.Builder(this)
                 .setTitle("安装更新 v" + versionName)
                 .setMessage("清单里没有提供 sha256 校验值，只能按大小核对"
@@ -8773,6 +10420,8 @@ public final class MainActivity extends Activity implements
     private void installDownloadedApk(final java.io.File apk) {
         try {
             if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                // [V3.112 · 迁移] 更新链路统一玻璃确认框
+                if (glassConfirm("updperm", "还差一步：允许安装应用", "系统要求先授权本应用「安装未知应用」，否则安装界面打不开。", "去设置", false, () -> { try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:" + getPackageName()))); } catch (Throwable t) { Toast.makeText(this, "打不开系统设置页", Toast.LENGTH_LONG).show(); } })) return;
                 Ui.dialog(this)
                         .setTitle("还差一步：允许安装应用")
                         .setMessage("系统要求先授权本应用「安装未知应用」，否则安装界面打不开。\n"
@@ -8952,6 +10601,22 @@ public final class MainActivity extends Activity implements
 
     /** 确认框：没有输入框 -> 不弹输入法 -> 「配对」按钮永远在键盘上方点得到。 */
     private void showPairConfirmDialog(final String text) {
+        // [V3.111 · 迁移] 原来是"配对 / 手动输入 / 取消"三按钮系统框 ⇒ 改成玻璃**列表**
+        //   （两项动作 + 骨架自带的"取消"收口），层级/材质与模型面板一致。
+        // [V3.122] 同「修改名称」：**不能**用 `convo != null` 当门（设置页/设备页上它可能还没建 ✗）。
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("配对",
+                "读到 " + text.length() + " 个字符", false, ""));
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("手动输入", "改成手输 / 粘贴", false, ""));
+        if (glassInScreenList("pairconfirm",
+                "用剪贴板里的配对串配对", PairingText.describe(text), g, "取消",
+                idx -> {
+                    if (idx != null && idx == 0) startPairing(text);
+                    else if (idx != null && idx == 1) showPairInputDialog("");
+                    return kotlin.Unit.INSTANCE;
+                })) {
+            return;
+        }
         final android.app.AlertDialog dlg = Ui.dialog(this)
                 .setTitle("用剪贴板里的配对串配对")
                 .setMessage("读到 " + text.length() + " 个字符的配对串。\n"
@@ -8980,6 +10645,22 @@ public final class MainActivity extends Activity implements
      * 另外「配对」的回调自己接管：解析失败时**不关对话框、不清输入**，把原因写在框里。
      */
     private void showPairInputDialog(String initial) {
+        // [V3.111 · 迁移] 玻璃**表单**：默认预填剪贴板里的配对串（原来那个「读剪贴板」按钮就不需要了），
+        //   解析失败由 `onSubmit` 返回文案 ⇒ **内联报错且保持打开**（比旧对话框的按钮接管更简单可靠）。
+        // [V3.122] 同上：不用 `convo != null` 当门。
+        String seed = (initial == null || initial.isEmpty()) ? clipboardPairingCandidate() : initial;
+        java.util.List<com.dsh.mobile.glass.GlassSheetField> fs = new java.util.ArrayList<>();
+        fs.add(new com.dsh.mobile.glass.GlassSheetField("配对串", seed == null ? "" : seed,
+                "粘贴电脑端生成的配对串（Base64URL）", false));
+        if (glassInScreenForm("pairinput",
+                "粘贴配对串", "配对串约 550 个字符，建议在电脑面板点「复制配对串」后回到这里",
+                fs, "配对", vals -> {
+                    String v = (vals == null || vals.isEmpty() || vals.get(0) == null)
+                            ? "" : vals.get(0);
+                    return startPairing(v);     // null = 成功收起；有文案 = 内联报错并保持打开
+                })) {
+            return;
+        }
         final android.widget.EditText input = new android.widget.EditText(Ui.dialogContext(this));
         input.setHint("粘贴电脑端生成的配对串（Base64URL）");
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
@@ -9074,10 +10755,27 @@ public final class MainActivity extends Activity implements
         if (request == REQ_QR && result == RESULT_FIRST_USER) {
             onPastePairing();
         }
+        // [V3.52 · 用户「配色增加一个选项：自己上传图片当底配色」] 底图：取持久化权限 + 落库 + 立刻全屏换底
+        if (request == REQ_AMBIENT_IMG) {
+            if (result == RESULT_OK && data != null && data.getData() != null) {
+                android.net.Uri u = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(
+                            u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Throwable ignored) { }
+                store.setAmbientImage(u.toString());
+                com.dsh.mobile.glass.GlassAmbientImage.INSTANCE.setUri(u.toString());
+                applyThemeEverywhere();
+                Toast.makeText(this, "已把这张图设为「配色底图」", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
         // [2026-10-05 用户要求②] 相册 / 文件 / 拍照选中的东西**只暂存、不发送**（契约 §3.3）：
         // 用户原话「添加进来之后不是立即发送，而是和输入的文字或语音内容一起发送」。
         if (request == REQ_IMAGE && result == RESULT_OK && data != null && data.getData() != null) {
-            stageAttachment(data.getData(), PendingAttachment.KIND_IMAGE);
+            // [V3.77 · 用户「插入图片和拍照最好**增加一个选择图片裁剪的界面**」→ 采用方案 A（自由裁剪）]
+            //   选完图先进裁剪页（拖框体 / 拉四角），确认后再走既有的"暂存、和文字一起发送"。
+            startCrop(data.getData());
         }
         if (request == REQ_FILE && result == RESULT_OK && data != null && data.getData() != null) {
             // 类型未知：按 MIME 判断图片还是文件（图片能发，非图片发送时会被明确拦下）
@@ -9085,7 +10783,7 @@ public final class MainActivity extends Activity implements
         }
         if (request == REQ_CAMERA) {
             if (result == RESULT_OK && pendingCaptureUri != null) {
-                stageAttachment(pendingCaptureUri, PendingAttachment.KIND_IMAGE);
+                startCrop(pendingCaptureUri);      // [V3.77] 拍完也先进裁剪页
             } else if (pendingCaptureUri != null) {
                 // 用户取消了拍照：把我们预建的空文件删掉，缓存目录里不留垃圾。
                 // 自研 provider 未必实现 delete（会抛 UnsupportedOperationException），静默兜住。
@@ -9093,6 +10791,16 @@ public final class MainActivity extends Activity implements
                 catch (Throwable ignored) { }
             }
             pendingCaptureUri = null;
+        }
+        // [V3.77] 裁剪页返回 ⇒ 暂存（与文字/语音一起发送）
+        if (request == REQ_CROP) {
+            android.net.Uri out = null;
+            if (result == RESULT_OK && data != null) {
+                String s = data.getStringExtra(com.dsh.mobile.glass.CropActivity.EXTRA_OUT);
+                if (s != null && !s.isEmpty()) out = android.net.Uri.parse(s);
+            }
+            if (out != null) stageAttachment(out, PendingAttachment.KIND_IMAGE);
+            else Toast.makeText(this, "已取消裁剪", Toast.LENGTH_SHORT).show();
         }
         if (request == REQ_VOICE && result == RESULT_OK && data != null && convo != null) {
             java.util.ArrayList<String> r =

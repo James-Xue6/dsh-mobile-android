@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -113,8 +114,13 @@ public final class Ui {
     public static int LINE_QUESTION  = 0xFFB9D9FF;
     public static int LINE_OK        = 0xFFB7E4C7;
     public static int LINE_SELECTED  = 0xFFB9D9FF;
-    public static int BADGE_OK_BG    = 0xFFE4F8E9;
+    public static int BADGE_OK_BG    = 0x3834C759;   // [毛玻璃 v3] demo `.badge`：绿 22% 淡底
     public static int BADGE_OFF_BG   = 0xFFE9E9EB;
+    /** [毛玻璃 v3] demo `.badge` 的字色：浅色 #0f7a35 / 深色 #6ff0a0（绿底上必须用深绿才够对比）。 */
+    public static int BADGE_OK_FG    = 0xFF0F7A35;
+    /** [毛玻璃 v3] demo `.badge.now`：品牌淡底 + 深字。 */
+    public static int BADGE_NOW_BG   = 0x245444C8;
+    public static int BADGE_NOW_FG   = 0xFF3A2FA8;
     public static int LINK_OK        = 0xFF34C759;
     public static int CODE_BG        = 0xFFF2F2F7;
     /** 扫码页固定深色（相机取景页，两个主题下都不该变白）。 */
@@ -139,26 +145,40 @@ public final class Ui {
     //
     // demo 的真模糊档是 .46（卡）/.60（抽屉）/.38（顶栏）/.42（输入胶囊）；但原生 Android
     // **没有 CSS backdrop-filter**：RenderEffect 只能糊 View 自身，applyWindowBlur 只对
-    // 独立窗口（Dialog）有效。所以面板一律走 **demo 自己给出的「仿玻璃」回退档**
-    // （存档 HTML `body[data-blur="off"]` 段：卡 .66 / 顶栏 .60 / 输入 .66 / 抽屉 .76），
-    // 再靠 demo 的另外三件（135° 斜射高光 / 内发光 / 双层投影）+ 彩色环境背景补质感。
+    // 独立窗口（Dialog）有效。所以面板一律走 demo 的**真模糊档**（不是仿玻璃档）——
+    // 借 demo 另外三件（135° 斜射高光 / 内发光 / 双层投影）+ 彩色环境背景补质感；
+    // 仿玻璃档在不能做真模糊的前提下只会让卡面变成奶白塑料，丢掉 demo 的"有颜色感的玻璃"。
+    //
+    // **像素级对照（2026-10-06 凌晨模拟器取证）**：原仿玻璃档卡面 RGB≈(247,247,255)，
+    // demo 同位 RGB≈(215,212,252)，差约 +32 偏白 —— 正好是 alpha 从 .46 升到 .66 多出的
+    // 20%×255≈51 单位。第一版收敛到 demo 真模糊档（见各 token 注释）。
     //
     // 这一版同时换掉了「页面底」：底色从纯色 Ui.BG 改为**彩色环境背景**
     // （AmbientDrawable，见下）—— 玻璃必须透出有颜色的下层才有意义，
     // 透一片均匀灰底 = 白板（demo 原话）。
-    public static int GLASS        = 0xA8FFFFFF;   // 卡片体（浅 66% 白 / 深 74% 紫黑）
-    public static int GLASS_SHEET  = 0xC2FFFFFF;   // 抽屉 / 弹窗体（76% / 82%）
-    public static int GLASS_BAR    = 0x99FFFFFF;   // 顶部栏（60% / 66%）
-    public static int GLASS_INPUT  = 0xADFFFFFF;   // 输入胶囊（68% / 76%：悬浮在列表上，宁可厚一档）
-    public static int GLASS_RIM    = 0xA6FFFFFF;   // 顶部棱光（浅色 65% 白 / 深色 22% 白）
-    public static int GLASS_LO     = 0x12000000;   // 底部暗棱（浅 7% 黑 / 深 5% 白）
+    public static int GLASS        = 0x2EFFFFFF;   // 卡片体（浅 18% 白 / 深 44% 紫黑）——原生无 blur，白多必发灰，降白让背景色透出
+    public static int GLASS_SHEET  = 0x47FFFFFF;   // 抽屉 / 弹窗体（28% / 62%）
+    public static int GLASS_BAR    = 0x26FFFFFF;   // 顶部栏（15% / 44%）
+    public static int GLASS_INPUT  = 0x7AFFFFFF;   // 输入胶囊（48% / 62%：比 demo .42 厚一档——
+                                                 //   原版 .42 太透导致消息重影，加深到 55%，
+                                                 //   配合渐隐末端 95% 兜底）
+    public static int GLASS_RIM    = 0xF2FFFFFF;   // 顶部棱光（浅色 95% 白 / 深色 40% 白）——提亮提体积感
+    public static int GLASS_LO     = 0x29000000;   // 底部暗棱（浅 16% 黑 / 深 14% 白）——"厚度感"来源
     /** 玻璃件的发丝描边：**白色**（demo `--hairline: rgba(255,255,255,.50)`），不是黑边。 */
     public static int GLASS_HAIRLINE = 0x80FFFFFF;
     /** 内发光：`inset 0 0 26px` 的淡白雾（demo `--inner-glow`），让玻璃"厚"起来。 */
-    public static int GLASS_INNER   = 0x1FFFFFFF;
-    /** 斜射高光（135°）三段：40% → 12% → 全透明（demo `--sheen`）。 */
-    public static int SHEEN_1       = 0x6BFFFFFF;
-    public static int SHEEN_2       = 0x1FFFFFFF;
+    public static int GLASS_INNER   = 0x14FFFFFF;
+    /** 磨砂噪点的浓度（demo `.grain` 用 `opacity .07` + `mix-blend-mode: overlay`）。 */
+    public static int GLASS_GRAIN   = 0x0AFFFFFF;
+    /**
+     * [毛玻璃 v3] 悬浮投影色（画在形状**之外**，见 {@link #shadowed}）。
+     * demo 是 `rgba(26,16,66,.22)` 远影 + `rgba(26,16,66,.12)` 近影；这里取中间偏重的一档，
+     * 因为用户明确要求"阴影加重点，现在看不到阴影"。
+     */
+    public static int GLASS_SHADOW  = 0x3D1A1042;
+    /** 斜射高光（135°）三段：30% → 7% → 全透明（demo `--sheen` 中心区几乎为 0）。 */
+    public static int SHEEN_1       = 0x4DFFFFFF;
+    public static int SHEEN_2       = 0x12FFFFFF;
     /** 抽屉遮罩：不要死黑，25~35% 才"柔和"。 */
     public static int SCRIM        = 0x2E000000;   // #000 18%（浅色默认；深色档在 applyTheme 里改 45%）
 
@@ -214,13 +234,125 @@ public final class Ui {
 
     public static int ambientPalette() { return ambientPalette; }
 
+    /**
+     * [2026-10-07 用户定版] **磨砂度 4 档**（= 玻璃降采样倍数 downscale）。
+     *
+     * <p>用户实测结论："新装的都很差，**只改变了磨砂度**"。给了 4 档让他横比，
+     * 他选 **④ ds=8**，并说"这四个都不错，你留着弄成 4 档" → 做成设置页可选项，默认第 4 档。
+     * <pre>
+     *   ① ds=4 最轻（背景细节最清楚）  ② ds=5 Demo/规范值
+     *   ③ ds=6 更糊                    ④ ds=8 最糊（默认）
+     * </pre>
+     * 注意：`captureSoftware` 里 `downscale>=6` 会多跑一遍模糊，所以 ③④ 明显更磨砂。
+     */
+    public static final int[] GLASS_DS = { 4, 5, 6, 8 };
+    private static int glassLevel = 1;   // [V0.7] 默认回 Demo 的 5（标准档）；四档仍可在设置里切
+
+    public static void setGlassLevel(int i) {
+        glassLevel = Math.max(0, Math.min(GLASS_DS.length - 1, i));
+        // 整页共享抓取的降采样必须与面板同档，否则"取块"比例不符（会错位/拉伸）
+        com.dsh.mobile.proto.Frost.SHARED_DS = GLASS_DS[glassLevel];
+    }
+
+    public static int glassLevel() { return glassLevel; }
+    public static int glassDownscale() { return GLASS_DS[glassLevel]; }
+
+    // ---------------------------------------------------------------- 玻璃模式（V3.27）
+    /** 液态玻璃：带折射（"液态"的主要线索），视觉最好、开销最大。 */
+    public static final String GLASS_MODE_LIQUID = "liquid";
+    /** 磨砂玻璃：**无折射**（只模糊 + 受光环），省硬件资源；[V3.27] 用户指定为**默认**。 */
+    public static final String GLASS_MODE_FROST = "frost";
+    private static String glassMode = GLASS_MODE_LIQUID;   // [V3.52] 默认改成液态（用户要求）
+
+    /**
+     * [V3.27 · 用户定版] 切换玻璃模式。
+     *
+     * <p>[V3.52 · 用户「**磨砂玻璃那个，把现在所有玻璃组件取消折射这些耗资源的，整体替换成
+     * 80% 白色的微透磨砂玻璃**」] 现在这一步**同时接管 Compose 那批玻璃件**：
+     * <ul>
+     *   <li>旧引擎（Java `BackdropBlurDrawable`）：折射幅度 `lensAmt` 液态 38 / 磨砂 0（原有行为不变）；</li>
+     *   <li>新玻璃件（Compose `RefractionWindow`）：把 [RefractionWindowTokens] 的 `frostMode` 置真 ⇒
+     *       **整个屏的所有玻璃件**都不再走 `lens`（逐像素位移采样，最耗资源那笔）、体色改成
+     *       **80% 白**（深色档 80% `#14121C`），只留模糊 + 受光环 —— 也就是用户说的"微透磨砂玻璃"。
+     *       （此前这一步**只管旧引擎**，Compose 那批纹丝不动 —— 用户反馈的正是这个。）
+     * </ul>
+     *
+     * <p>⚠️ 折射幅度是在**创建玻璃 drawable 时**烘进去的 ⇒ 切模式后要重绘各屏（宿主调 applyTheme）。
+     */
+    public static void setGlassMode(String mode) {
+        glassMode = GLASS_MODE_LIQUID.equals(mode) ? GLASS_MODE_LIQUID : GLASS_MODE_FROST;
+        BackdropBlurDrawable.LENS_AMT_PX = GLASS_MODE_LIQUID.equals(glassMode) ? 38f : 0f;
+        // [V3.52] 让 Compose 那批玻璃件真正跟着切（它是 snapshot state ⇒ 会就地重组）
+        com.dsh.mobile.glass.RefractionWindowTokens.INSTANCE.setFrostMode(GLASS_MODE_FROST.equals(glassMode));
+    }
+
+    public static String glassMode() { return glassMode; }
+    public static boolean isLiquidGlass() { return GLASS_MODE_LIQUID.equals(glassMode); }
+
     public static Palette palette() { return PALETTES[ambientPalette]; }
+
+    /**
+     * [2026-10-07] **极光档（0）的环境底图**：与隔离 Demo 同一张 `aurora_bg`。
+     *
+     * <p>为什么要它：玻璃的"质感"来自**背后有高频细节**可糊。纯渐变糊出来是一片平色 ——
+     * 用户拿隔离 Demo 对比后点名「那个玻璃质感就是对的，现在的比那个差」。Demo 好看是因为
+     * 背后是那张星空极光图（星点 / 山脊 / 水面全在糊出来的纹理里）。
+     * 其余 5 档仍是纯渐变配色（用户要"炫彩"，极光档直接上真图）。
+     */
+    private static android.graphics.Bitmap ambientImage;
+    public static void setAmbientImage(android.graphics.Bitmap b) { ambientImage = b; }
+    public static boolean hasAmbientImage() {
+        return ambientImage != null && !ambientImage.isRecycled();
+    }
+
+    /** 极光底图顶部平均色（系统栏用）；缓存一次。 */
+    private static int ambientImageBarColor = 0;
+
+    private static int sampleAmbientImageTop() {
+        if (ambientImageBarColor != 0) return ambientImageBarColor;
+        try {
+            android.graphics.Bitmap b = ambientImage;
+            int bw = b.getWidth(), bh = b.getHeight();
+            long r = 0, g = 0, bl = 0;
+            int n = 0;
+            int stepX = Math.max(1, bw / 12);
+            for (int y = 0; y < Math.min(40, bh); y += 4) {
+                for (int x = 0; x < bw; x += stepX) {
+                    int c = b.getPixel(x, y);
+                    r += (c >> 16) & 0xFF;
+                    g += (c >> 8) & 0xFF;
+                    bl += c & 0xFF;
+                    n++;
+                }
+            }
+            if (n == 0) return 0;
+            ambientImageBarColor = 0xFF000000 | ((int) (r / n) << 16)
+                    | ((int) (g / n) << 8) | (int) (bl / n);
+        } catch (Throwable t) {
+            return 0;
+        }
+        return ambientImageBarColor;
+    }
 
     /**
      * 状态栏 / 导航栏用的近似底色：渐变顶端与左上光斑按透明度混合的结果。
      * （系统栏在根容器 padding 之外，拿不到环境背景，只能给一个近似的纯色。）
      */
     public static int ambientBarColor() {
+        // [2026-10-07] 极光档换成真图后，系统栏不能再取"渐变顶端色"（那是纯渐变档的算法）：
+        // 直接采图片顶部的平均色，深浅档同口径压一下。
+        if (hasAmbientImage()) {
+            int c = sampleAmbientImageTop();
+            if (c != 0) {
+                if (dark) {
+                    float s = 0.42f;
+                    c = 0xFF000000 | (Math.round(android.graphics.Color.red(c) * s) << 16)
+                            | (Math.round(android.graphics.Color.green(c) * s) << 8)
+                            | Math.round(android.graphics.Color.blue(c) * s);
+                }
+                return c;
+            }
+        }
         Palette p = palette();
         int c = p.bg[0];
         float o = dark ? (p.mono ? 0.28f : p.oa) : p.oa;
@@ -273,6 +405,17 @@ public final class Ui {
     // QUOTE   ：审批卡/提问卡左上角那枚淡色大引号（#C9C4E8 / 深色一档暗紫）。
     public static int SURFACE_G1     = 0xFFFBFAFE;
     public static int SURFACE_G2     = 0xFFF2F0FA;
+    /**
+     * **列表内卡片**（消息气泡 / 工具行 / 交付物卡…）的玻璃层色：比 {@link #SURFACE_G1}
+     * 薄得多，让底下那层真模糊的**炫彩环境背景**透出来。
+     *
+     * <p>[2026-10-07 用户反馈「所有的卡片内部背景为什么是灰色的」] 原来卡片用的是
+     * {@code SURFACE_G1}(=GLASS 白 46%)：46% 白压在炫彩背景上会把颜色**洗掉**（实测卡内
+     * `#C8CFFF`，而同位置背景是 `#91ADFF`）—— 看着就是一片灰白。降到 25%/18% 后卡面
+     * 仍是清楚的玻璃（棱光 + 发丝线 + 真模糊都在），但颜色跟着背景走。
+     */
+    public static int GLASS_CARD     = 0x42FFFFFF;
+    public static int GLASS_CARD_2   = 0x4DFFFFFF;
     public static int SEG_DOCK_BG    = 0xFFDCD9E8;
     public static int SEG_DOCK_FG    = 0xFF5F5F66;
     public static int SEG_DOCK_ON    = 0xFFFFFFFF;
@@ -344,13 +487,13 @@ public final class Ui {
             WARN           = 0xFFFF9F0A;
             ON_BRAND       = 0xFFFFFFFF;
             ON_WARN        = 0xFFFFFFFF;
-            FIELD_BG       = 0xFF2A2835;
-            FIELD_ALT_BG   = 0xFF2A2835;
+            FIELD_BG       = 0x24FFFFFF;   // [毛玻璃 v3] 白 14%
+            FIELD_ALT_BG   = 0x24FFFFFF;
             CHIP_BG        = 0x1AFFFFFF;   // [毛玻璃 v3] 圆形按钮底：白 10%（demo 深色 `.icon-btn`）
             STOP_BG        = 0x26FFFFFF;
             PLAN_BG        = 0xFF1C1B22;
-            SEG_BG         = 0xFF2A2835;
-            SEG_THUMB      = 0xFF4A4680;
+            SEG_BG         = 0x1FFFFFFF;   // [毛玻璃 v3] 白 12%
+            SEG_THUMB      = 0x4A4680;
             SWITCH_OFF     = 0xFF39393D;
             SWITCH_ON      = 0xFF30D158;
             BANNER_WARN_BG = 0xFF3A2E12;
@@ -363,8 +506,11 @@ public final class Ui {
             LINE_QUESTION  = 0xFF2C4A6E;
             LINE_OK        = 0xFF2F5A44;
             LINE_SELECTED  = 0xFF3D4E85;
-            BADGE_OK_BG    = 0xFF16351F;
+            BADGE_OK_BG    = 0x3D34C759;   // [毛玻璃 v3] 深色 `.badge`：绿 24%
             BADGE_OFF_BG   = 0xFF2A2835;
+            BADGE_OK_FG    = 0xFF6FF0A0;   // 深色 `.badge` 字色
+            BADGE_NOW_BG   = 0x3D8B7DFF;   // 深色 `.badge.now`：品牌 24%
+            BADGE_NOW_FG   = 0xFFC3B8FF;
             LINK_OK        = 0xFF30D158;
             CODE_BG        = 0xFF2A2835;
             SCAN_BG        = 0xFF000000;
@@ -375,23 +521,26 @@ public final class Ui {
             BRAND_G1       = 0xFF9D6BFF;
             BRAND_G2       = 0xFF5C9DFF;
             // 毛玻璃 v3（深色）：demo 的仿玻璃回退档（见文件顶部注释），
-            // 白棱降到 22%（深色玻璃的棱光本来就更弱，demo `--rim: rgba(255,255,255,.22)`）。
-            GLASS          = 0xBD1E1C28;   // rgba(30,28,40,.74)
-            GLASS_SHEET    = 0xD11C1A24;   // rgba(28,26,36,.82)
-            GLASS_BAR      = 0xA8181620;   // rgba(24,22,32,.66)
-            GLASS_INPUT    = 0xC21E1C28;   // 76%（悬浮胶囊：宁可厚一档）
-            GLASS_RIM      = 0x38FFFFFF;   // 白 22%
-            GLASS_LO       = 0x0DFFFFFF;   // 白 5%（深色玻璃的下棱略亮，不是黑）
-            GLASS_HAIRLINE = 0x29FFFFFF;   // 白 16%
+            GLASS          = 0x7029273D;   // rgba(41,39,61,.44) 深色卡：44%
+            GLASS_SHEET    = 0x9E1E1C28;   // rgba(28,26,36,.62) 抽屉
+            GLASS_BAR      = 0x70181620;   // rgba(24,22,32,.44) 顶栏
+            GLASS_INPUT    = 0x9E1E1C28;   // 62% 深色输入胶囊（比浅色更厚：浅字压深底透出太显眼）
+            GLASS_RIM      = 0x66FFFFFF;   // 白 40%（[毛玻璃 v3] 高光提亮：30% 立体感出不来）
+            GLASS_LO       = 0x24FFFFFF;   // 白 14%（下沿暗棱：深色档用"略亮的白"当棱）
+            GLASS_HAIRLINE = 0x33FFFFFF;   // 白 20%（发丝线加强）
             GLASS_INNER    = 0x0FFFFFFF;   // 白 6%
-            SHEEN_1        = 0x29FFFFFF;   // 斜射高光 16%
-            SHEEN_2        = 0x0DFFFFFF;   // 5%
+            GLASS_GRAIN    = 0x0AFFFFFF;   // 磨砂噪点：白 4%（深底上噪点太强会显脏）
+            GLASS_SHADOW   = 0x66000000;   // 深色档：纯黑 40%（深底上紫影看不出来，用黑）
+            SHEEN_1        = 0x22FFFFFF;   // 斜射高光（深色更弱：33%）
+            SHEEN_2        = 0x08FFFFFF;   // 8%
             SCRIM          = 0x73000000;   // 深色遮罩 45%
             SELECT_BG      = 0x14FFFFFF;   // 深色选中胶囊：白 8%（纯黑底上要 14% 才浮得起来）
             SELECT_BG_HI   = 0x33FFFFFF;   // 深色强调一档：白 20%
             // 卡体同浅色档：半透明玻璃体（毛玻璃 v3），高光/内发光由 CardBg 叠。
             SURFACE_G1     = GLASS;
             SURFACE_G2     = GLASS;
+            GLASS_CARD     = 0x4D14121C;   // 深色：30% 深卡体（同样让背景透出来）
+            GLASS_CARD_2   = 0x3D14121C;   // 24%
             SEG_DOCK_BG    = 0xFF26242E;
             SEG_DOCK_FG    = 0xFF9A96AE;
             SEG_DOCK_ON    = 0xFFF2F1FA;
@@ -418,12 +567,12 @@ public final class Ui {
             WARN           = 0xFFFF9500;
             ON_BRAND       = 0xFFFFFFFF;
             ON_WARN        = 0xFFFFFFFF;
-            FIELD_BG       = 0xFFEDEBF5;
-            FIELD_ALT_BG   = 0xFFEDEBF5;
+            FIELD_BG       = 0x73FFFFFF;   // [毛玻璃 v3] 卡内嵌输入框：白 45% 玻璃（不再是实色块）
+            FIELD_ALT_BG   = 0x73FFFFFF;
             CHIP_BG        = 0x6BFFFFFF;   // [毛玻璃 v3] 圆形按钮底：白 42%（demo `.icon-btn`）
             STOP_BG        = 0x59FFFFFF;
             PLAN_BG        = 0xFFEDEBF5;
-            SEG_BG         = 0xFFDBD8E8;
+            SEG_BG         = 0x59FFFFFF;   // [毛玻璃 v3] 分段控件底槽：白 35% 玻璃
             SEG_THUMB      = 0xFFFFFFFF;
             SWITCH_OFF     = 0xFFD9D6E6;
             SWITCH_ON      = 0xFF34C759;
@@ -437,8 +586,11 @@ public final class Ui {
             LINE_QUESTION  = 0xFFB9D9FF;
             LINE_OK        = 0xFFB7E4C7;
             LINE_SELECTED  = 0xFFB9D9FF;
-            BADGE_OK_BG    = 0xFFE4F8E9;
+            BADGE_OK_BG    = 0x3834C759;   // [毛玻璃 v3] 浅色 `.badge`：绿 22%
             BADGE_OFF_BG   = 0xFFE9E9EB;
+            BADGE_OK_FG    = 0xFF0F7A35;
+            BADGE_NOW_BG   = 0x245444C8;
+            BADGE_NOW_FG   = 0xFF3A2FA8;
             LINK_OK        = 0xFF34C759;
             CODE_BG        = 0xFFE9E6F2;
             SCAN_BG        = 0xFF000000;
@@ -448,17 +600,25 @@ public final class Ui {
             SHADOW         = 0x14000000;   // 浅色卡片柔和阴影
             BRAND_G1       = 0xFF7C4DFF;
             BRAND_G2       = 0xFF448AFF;
-            // 毛玻璃 v3（浅色）：demo 的仿玻璃回退档 —— 卡片 66% 白、顶栏 60%、输入 68%、抽屉 76%。
-            GLASS          = 0xA8FFFFFF;   // 白 66%
-            GLASS_SHEET    = 0xC2FFFFFF;   // 白 76%
-            GLASS_BAR      = 0x99FFFFFF;   // 白 60%
-            GLASS_INPUT    = 0xADFFFFFF;   // 白 68%
-            GLASS_RIM      = 0xA6FFFFFF;   // 白 65%（顶部棱光）
-            GLASS_LO       = 0x12000000;   // 黑 7%（下棱微暗）
-            GLASS_HAIRLINE = 0x80FFFFFF;   // 白 50%（demo 的发丝线就是白的）
-            GLASS_INNER    = 0x1FFFFFFF;   // 白 12%
-            SHEEN_1        = 0x6BFFFFFF;   // 斜射高光 42%
-            SHEEN_2        = 0x1FFFFFFF;   // 12%
+            // 毛玻璃 v3（浅色）：直接对齐 **demo 的真模糊档**（不是仿玻璃档）。
+            //
+            // 为什么不能用「仿玻璃回退档」（.66/.76/.60/.72）：那一档是为"完全做不到模糊"准备的，
+            // 叠上去卡面实测 RGB≈(247,247,255) 是奶白塑料；demo 同位实测 (215,212,252) 是有颜色感的玻璃
+            // ——差了约 32 个色阶。**结论：不要自己发明中间值，直接抄 demo 的四个档位**
+            // （.46 / .60 / .38 / .42）——蒙层决定可读性，这是 BlurView 那篇文章反复强调的一点。
+            // 可读性由**真模糊 + 渐隐层末端 95%** 兜底（见 ConversationView），不靠加厚玻璃。
+            GLASS          = 0x75FFFFFF;   // 白 46%（卡体）= demo `--glass-card: .46`，逐值对齐
+            GLASS_SHEET    = 0x99FFFFFF;   // 白 60%（抽屉 / 弹窗）= demo `--glass-sheet: .60`
+            GLASS_BAR      = 0x61FFFFFF;   // 白 38%（顶栏 = demo `--glass-bar: .38`；这一档有真模糊兜底）
+            GLASS_INPUT    = 0x7AFFFFFF;   // 白 48%（输入胶囊：demo 是 .42，取 48% 兼顾可读性）
+            GLASS_RIM      = 0xF2FFFFFF;   // 白 95%（[毛玻璃 v3] 高光提亮：85% 仍偏弱）
+            GLASS_LO       = 0x29000000;   // 黑 16%（下沿暗棱 —— 上亮下暗才有厚度）
+            GLASS_HAIRLINE = 0x99FFFFFF;   // 白 60%（第二篇：1px 亮色边框是高级玻璃感的关键）
+            GLASS_INNER    = 0x14FFFFFF;   // 白 8%（内发光：三圈合计 0.69，不要把白刷到卡心）
+            GLASS_GRAIN    = 0x0AFFFFFF;   // 磨砂噪点：白 4%
+            GLASS_SHADOW   = 0x3D1A1042;   // 悬浮投影：rgba(26,16,66,.24)（≈ demo 的 .22）
+            SHEEN_1        = 0x4DFFFFFF;   // 斜射高光 30%@TL
+            SHEEN_2        = 0x12FFFFFF;   // 7%
         SCRIM          = 0x2E000000;   // 浅色遮罩 18%（35% 压在薰衣草底上发黑 = 用户报的黑窗口）
             SELECT_BG      = 0x0F000000;   // 浅色选中胶囊：黑 6%（参考图侧栏选中行的浅灰胶囊）
             SELECT_BG_HI   = 0x14000000;   // 浅色强调一档：黑 8%
@@ -466,6 +626,8 @@ public final class Ui {
             // 而来自 CardBg 新加的 135° 斜射高光层 + 内发光；卡体本身只负责"透出环境背景"。
             SURFACE_G1     = GLASS;
             SURFACE_G2     = GLASS;
+            GLASS_CARD     = 0x99FFFFFF;   // 浅色：白 60%（环境底换成真图后要够白，深色文字才读得清；demo 的卡片本身也是 ~82% 不透明）
+            GLASS_CARD_2   = 0x2EFFFFFF;   // 白 18%
             SEG_DOCK_BG    = 0xFFDCD9E8;
             SEG_DOCK_FG    = 0xFF5F5F66;
             SEG_DOCK_ON    = 0xFFFFFFFF;
@@ -485,16 +647,54 @@ public final class Ui {
     // 并对照改版前的实测值（大标题 27、气泡 15.5/14.5、列表标题 15.5、按钮 14.5、
     // 说明 12.5/11.5）取"比改版前略大一点点"的中间值 —— 既回到原来的观感，又保留 iOS 层级。
     // 层级比例保持不变：大标题 29 > 标题 19/17.5 > 正文 15.5 > 次要 13.5 > 脚注 12.5 > 说明 11.5/10.5。
-    public static final float S_LARGE   = 29f;   // Large Title（我的设备 / 对话） 改前 34
-    public static final float S_TITLE2  = 19f;   // Title2                        改前 22
-    public static final float S_TITLE3  = 17.5f; // Title3                        改前 20
-    public static final float S_HEAD    = 15.5f; // Headline / Body（设置行标题、气泡正文）改前 17
-    public static final float S_BODY    = 15.5f; // Body                          改前 17
-    public static final float S_CALLOUT = 14.5f; // Callout（按钮文字）            改前 16
-    public static final float S_SUB     = 13.5f; // Subheadline                   改前 15
-    public static final float S_FOOT    = 12.5f; // Footnote（组标题、说明）        改前 13
-    public static final float S_CAP1    = 11.5f; // Caption1                      改前 12
-    public static final float S_CAP2    = 10.5f; // Caption2（徽标）               改前 11
+    // [V3.81 · 用户「设置里面再增加一个**字体大小**，这样有人喜欢内容显示多点，可以把字调小点，
+    //   弄个**大 / 中 / 小**三个档就行，目前这个是标准档（中）」]
+    //   ⇒ 十个字号**从 final 改成可调**：基准值不动，统一乘一个比例 ⇒ 所有页面（对话/设置/抽屉/设备…）
+    //     一起变，层级比例保持不变。
+    public static final float S_LARGE_BASE   = 29f;   // Large Title（我的设备 / 对话）
+    public static final float S_TITLE2_BASE  = 19f;   // Title2
+    public static final float S_TITLE3_BASE  = 17.5f; // Title3
+    public static final float S_HEAD_BASE    = 15.5f; // Headline / Body
+    public static final float S_BODY_BASE    = 15.5f; // Body
+    public static final float S_CALLOUT_BASE = 14.5f; // Callout（按钮文字）
+    public static final float S_SUB_BASE     = 13.5f; // Subheadline
+    public static final float S_FOOT_BASE    = 12.5f; // Footnote（组标题、说明）
+    public static final float S_CAP1_BASE    = 11.5f; // Caption1
+    public static final float S_CAP2_BASE    = 10.5f; // Caption2（徽标）
+
+    public static float S_LARGE   = S_LARGE_BASE;
+    public static float S_TITLE2  = S_TITLE2_BASE;
+    public static float S_TITLE3  = S_TITLE3_BASE;
+    public static float S_HEAD    = S_HEAD_BASE;
+    public static float S_BODY    = S_BODY_BASE;
+    public static float S_CALLOUT = S_CALLOUT_BASE;
+    public static float S_SUB     = S_SUB_BASE;
+    public static float S_FOOT    = S_FOOT_BASE;
+    public static float S_CAP1    = S_CAP1_BASE;
+    public static float S_CAP2    = S_CAP2_BASE;
+
+    /** 当前字号档位的比例（1.0 = 标准档「中」）。 */
+    public static float FONT_SCALE = 1f;
+
+    /**
+     * 应用字号档位：小 = 0.9、中 = 1.0（默认）、大 = 1.12。
+     *
+     * <p>调用方：宿主启动时 + 设置里切换时各调一次，然后**触发一次重建/重组**让界面吃到新值
+     * （Compose 侧读的是这些静态常量，靠 `themeRev` 这类状态触发重组）。
+     */
+    public static void applyFontScale(float scale) {
+        FONT_SCALE = scale <= 0f ? 1f : scale;
+        S_LARGE   = S_LARGE_BASE   * FONT_SCALE;
+        S_TITLE2  = S_TITLE2_BASE  * FONT_SCALE;
+        S_TITLE3  = S_TITLE3_BASE  * FONT_SCALE;
+        S_HEAD    = S_HEAD_BASE    * FONT_SCALE;
+        S_BODY    = S_BODY_BASE    * FONT_SCALE;
+        S_CALLOUT = S_CALLOUT_BASE * FONT_SCALE;
+        S_SUB     = S_SUB_BASE     * FONT_SCALE;
+        S_FOOT    = S_FOOT_BASE    * FONT_SCALE;
+        S_CAP1    = S_CAP1_BASE    * FONT_SCALE;
+        S_CAP2    = S_CAP2_BASE    * FONT_SCALE;
+    }
 
     /** iOS 分组卡片圆角。 */
     public static final float R_CARD  = 28f;
@@ -526,7 +726,7 @@ public final class Ui {
     //   G_SECTION    6dp  —— 组标题到组内容
     public static final float M_SIDE     = 16f;
     public static final float M_CARD_PAD = 16f;
-    public static final float M_GAP      = 14f;
+    public static final float M_GAP      = 8f;   // [2026-10-07 用户] 卡片间距 14→8dp：省空间
     public static final float G_TITLE_SUB = 5f;
     public static final float G_SUB_BODY  = 18f;
     public static final float G_SECTION   = 6f;
@@ -660,8 +860,372 @@ public final class Ui {
         // [毛玻璃 v3] 顶栏玻璃 = 体 + 135° 斜射高光。一层 GradientDrawable 就能表达：
         // 高光压在同色体上，等价于"同一色相、更高不透明度"的 TL→BR 三段渐变
         // （原生 GradientDrawable 不支持叠层，见 over()）。
-        return new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+        return glassBar(0f);
+    }
+
+    /** 同上，但带圆角（demo 的顶栏是**浮起来的胶囊**：左右 8dp、圆角 22dp）。 */
+    public static GradientDrawable glassBar(float radiusDp) {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[] { over(GLASS_BAR, SHEEN_1), over(GLASS_BAR, SHEEN_2), GLASS_BAR });
+        d.setCornerRadius(radiusDp);
+        // demo 的 `.glass-bar` 带 `border: .5px solid rgba(255,255,255,.5)`：玻璃胶囊必须有
+        // 一圈白棱才"立"得起来，否则和背景糊在一起。
+        d.setStroke(1, GLASS_HAIRLINE);
+        return d;
+    }
+
+    /**
+     * 玻璃件底 = **真模糊底图** + 原来的玻璃层。
+     *
+     * <p>叠法：模糊层在下（提供"后面真的糊了"的内容），玻璃层在上（提供 tint / 斜射高光 /
+     * 内发光 / 白棱发丝线）。两层圆角必须一致（{@code cornerDp}），否则模糊会在圆角外露方角。
+     *
+     * @param source  被模糊的"下层"View（与面板不必同父）
+     * @param panel   面板自身（用来算偏移与圆角）
+     */
+    public static android.graphics.drawable.Drawable blurredGlass(View source, View panel,
+                                                                  float blurDp, float cornerDp,
+                                                                  android.graphics.drawable.Drawable glass) {
+        android.graphics.drawable.Drawable blur =
+                new BackdropBlurDrawable(source, panel, blurDp, 0x00000000, cornerDp);
+        return new BlurredGlassDrawable(blur, glass);
+    }
+
+    /**
+     * 面板的玻璃底 = 真·背景模糊 + 玻璃层，**模糊源在绘制期解析**为
+     * 「panel 所在的应用根容器」（含环境背景 → 糊出来是不透明的底）。
+     *
+     * <p>为什么必须抓整页而不是"列表 / 内容层本身"：列表（ListView）自己的背景是透明的，
+     * 只抓它糊出来的仍是半透明层，底下**清晰**的正文照样透上来 —— 看起来就是"没糊"。
+     * 2026-10-07 模拟器实测（`evidence/liquid-20261007/L1a-topbar-zoom.png`）：对话页顶栏
+     * 背后的日志文字逐字可读，即源取 `list` 时真模糊**没有生效**（代码与
+     * {@link #applyBottomShelf} 上方的设计注释本就写着"源取应用根容器"，属回归）。
+     *
+     * <p>又因为构造期 View 还没 attach（那时拿不到根容器），解析必须推迟到绘制期 ——
+     * 所以这条 API 不收 source，只收 panel。
+     */
+    public static android.graphics.drawable.Drawable blurredGlassRoot(
+            View panel, float blurDp, float cornerDp, android.graphics.drawable.Drawable glass) {
+        // 用 5 参构造 = 折射幅度取类内默认 LENS_AMT_PX（38px），行为与 V3.21 完全一致
+        android.graphics.drawable.Drawable blur =
+                new BackdropBlurDrawable(null, panel, blurDp, 0x00000000, cornerDp);
+        return new BlurredGlassDrawable(blur, glass);
+    }
+
+    /**
+     * 同上，但**按调用处指定折射幅度**（px）。
+     *
+     * <p>给"整屏高的大面板"用：抽屉传 `0f` —— 理由见 {@link BackdropBlurDrawable#LENS_AMT_PX}
+     * （默认 38px 会在抽屉内侧 ≈11dp 处留一条竖向色阶缝）。**默认重载不受影响**。
+     */
+    public static android.graphics.drawable.Drawable blurredGlassRoot(
+            View panel, float blurDp, float cornerDp, android.graphics.drawable.Drawable glass,
+            float lensAmtPx) {
+        android.graphics.drawable.Drawable blur =
+                new BackdropBlurDrawable(null, panel, blurDp, 0x00000000, cornerDp, lensAmtPx);
+        return new BlurredGlassDrawable(blur, glass);
+    }
+
+    /**
+     * 此刻是否有玻璃件正在**离屏抓取**。
+     *
+     * <p>抓取会把目标层软件重画一遍，这一遍里别的元素的**外投影**也会被画进去 ——
+     * 糊完就是玻璃里一块块深色斑（用户报「玻璃卡片后面怎么还是有深色的阴影」）。
+     * 所以所有"外投影容器"在自己的 onDraw 里先问这一句，抓取期间停画。
+     */
+    public static boolean isCapturing() {
+        return BackdropBlurDrawable.capturingGlobal || com.dsh.mobile.proto.Frost.capturing;
+    }
+
+    /**
+     * 把一个**已经有底**的 View（按钮 / 卡片 / 气泡）就地升级成真·液态玻璃：
+     * 保留它原来那层底当「玻璃层」，下面再垫一层真模糊（源＝应用根容器）。
+     *
+     * <p>为什么这样包：全工程的卡片/按钮底色是几十处 {@code CardBg} / {@code cardGrad} /
+     * {@code secondaryButton} 造出来的，逐个重写既容易漏、又会丢掉各处的语义色
+     * （品牌渐变、危险红、强调条…）。包一层即可原样保留玻璃层，只把"假磨砂"换成真模糊。
+     *
+     * @param cornerDp 模糊底图的圆角，**必须与玻璃层一致**，否则圆角外会露方角
+     */
+    public static <T extends View> T glassBacked(T v, float blurDp, float cornerDp) {
+        if (v == null) return null;
+        android.graphics.drawable.Drawable inner = v.getBackground();
+        if (inner != null) v.setBackground(blurredGlassRoot(v, blurDp, cornerDp, inner));
+        return v;
+    }
+
+    /**
+     * **列表内**玻璃件（消息卡 / 工具行 / 气泡）的底：**静态环境底模糊**。
+     *
+     * <p>为什么不逐帧真抓取：这类件一屏十几个，每个都去离屏抓一次整页
+     * （{@code Frost.capture} 会把整棵视图树软件重绘一遍）—— 实测滚动
+     * {@code dumpsys gfxinfo}：Janky 66%、90th=133ms、95th=200ms，不能上线。
+     * 而它们背后**只有环境背景**（列表自身透明、卡片互不重叠），环境背景是静态的
+     * → 它的模糊也是静态的：全屏只算一次并缓存，每个件按自己的**窗口坐标**去取那一块，
+     * 位置天然对齐、滚动时跟着走、零逐帧成本。
+     */
+    public static <T extends View> T ambientBacked(T v, float cornerDp) {
+        if (v == null) return null;
+        android.graphics.drawable.Drawable inner = v.getBackground();
+        if (inner != null) v.setBackground(new AmbientGlassDrawable(v, cornerDp, inner));
+        return v;
+    }
+
+    /** 环境底模糊图的降采样倍数（整屏一张，1/4 足够）。 */
+    private static final int AMB_DS = 4;
+    private static Bitmap ambBlur;
+    private static int ambW, ambH, ambPal = -1;
+    private static boolean ambDarkCache;
+
+    /** 环境底（模糊后）整屏缓存；配色 / 主题 / 尺寸变了才重算（几毫秒，一次性）。 */
+    private static Bitmap ambientBlur(int screenW, int screenH) {
+        if (ambBlur != null && !ambBlur.isRecycled() && ambW == screenW && ambH == screenH
+                && ambPal == ambientPalette && ambDarkCache == dark) {
+            return ambBlur;
+        }
+        try {
+            int bw = Math.max(1, screenW / AMB_DS), bh = Math.max(1, screenH / AMB_DS);
+            Bitmap b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(b);
+            c.scale(1f / AMB_DS, 1f / AMB_DS);
+            AmbientDrawable amb = new AmbientDrawable();
+            amb.setBounds(0, 0, screenW, screenH);
+            amb.draw(c);
+            int[] px = new int[bw * bh];
+            b.getPixels(px, 0, bw, 0, 0, bw, bh);
+            float dens = android.content.res.Resources.getSystem().getDisplayMetrics().density;
+            boxBlur(px, bw, bh, Math.max(1, Math.round(26f * dens / AMB_DS)));
+            b.setPixels(px, 0, bw, 0, 0, bw, bh);
+            Bitmap old = ambBlur;
+            ambBlur = b;
+            ambW = screenW; ambH = screenH; ambPal = ambientPalette; ambDarkCache = dark;
+            if (old != null && old != b && !old.isRecycled()) old.recycle();
+            return b;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 静态环境底 + 玻璃层（含按下态转发，与 {@link BlurredGlassDrawable} 同契约）。 */
+    public static final class AmbientGlassDrawable extends android.graphics.drawable.Drawable {
+        private final View panel;
+        private final float cornerDp;
+        private final android.graphics.drawable.Drawable glass;
+        private final android.graphics.Paint paint =
+                new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final android.graphics.Path clipPath = new android.graphics.Path();
+        private final android.graphics.RectF clipRf = new android.graphics.RectF();
+        private final int[] loc = new int[2];
+        private final android.graphics.Rect src = new android.graphics.Rect();
+        private final android.graphics.Rect dst = new android.graphics.Rect();
+
+        AmbientGlassDrawable(View panel, float cornerDp, android.graphics.drawable.Drawable glass) {
+            this.panel = panel;
+            this.cornerDp = cornerDp;
+            this.glass = glass;
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            float dens = panel.getResources().getDisplayMetrics().density;
+            int sw = panel.getResources().getDisplayMetrics().widthPixels;
+            int sh = panel.getResources().getDisplayMetrics().heightPixels;
+            Bitmap amb = ambientBlur(sw, sh);
+            // 整块面板统一裁剪到圆角内：底图 / 玻璃体 / 受光环 / 噪点都在同一形状里
+            int save = cv.save();
+            if (cornerDp > 0f) {
+                clipRf.set(0f, 0f, w, h);
+                clipPath.reset();
+                clipPath.addRoundRect(clipRf, cornerDp * dens, cornerDp * dens,
+                        android.graphics.Path.Direction.CW);
+                cv.clipPath(clipPath);
+            }
+            if (amb != null && !amb.isRecycled()) {
+                panel.getLocationInWindow(loc);
+                src.set(loc[0] / AMB_DS, loc[1] / AMB_DS,
+                        (loc[0] + w) / AMB_DS, (loc[1] + h) / AMB_DS);
+                dst.set(0, 0, w, h);
+                // [2026-10-07 用户] 「液态玻璃那种边缘扭曲和质感咋没了」：这里原来直接 drawBitmap，
+                // 一点折射都没有（列表内卡片为了性能走的是"静态环境底"，没走 Frost 的 lens）。
+                // 现在把这一块取出来，**用同一套 CPU lens 做边缘折射**再画回去 —— 成本只是
+                // 本卡区域（1/4 采样后 ~1 万像素），零逐帧抓取，性能不受影响。
+                int bw = Math.max(1, w / AMB_DS), bh = Math.max(1, h / AMB_DS);
+                int sx = Math.max(0, Math.min(amb.getWidth() - 1, src.left));
+                int sy = Math.max(0, Math.min(amb.getHeight() - 1, src.top));
+                bw = Math.max(1, Math.min(bw, amb.getWidth() - sx));
+                bh = Math.max(1, Math.min(bh, amb.getHeight() - sy));
+                if (lensPx == null || lensPx.length != bw * bh) {
+                    lensPx = new int[bw * bh];
+                    if (lensBmp != null && !lensBmp.isRecycled()) lensBmp.recycle();
+                    lensBmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+                }
+                amb.getPixels(lensPx, 0, bw, sx, sy, bw, bh);
+                com.dsh.mobile.proto.Frost.applyLens(lensPx, bw, bh,
+                        cornerDp * dens / AMB_DS,
+                        28f * dens / AMB_DS,      // 环带 28dp（规范值）
+                        38f / AMB_DS,             // 幅度 38px（规范值）
+                        0);
+                lensBmp.setPixels(lensPx, 0, bw, 0, 0, bw, bh);
+                cv.drawBitmap(lensBmp, null, dst, paint);
+            }
+            if (glass != null) {
+                glass.setBounds(b);
+                glass.draw(cv);
+            }
+            // [2026-10-07 用户] 「只有 Demo 的中间方形 / 底部胶囊那种质感才是正确的」——
+            // 那两块的解剖结构是「底图 → 玻璃体 → **边缘受光环** → **磨砂噪点**」，
+            // 而消息卡原来只有前两件套，所以看着是一块平的半透明白。这里补齐后两件套，
+            // 全工程玻璃的解剖结构就一致了（与 FrostedPanelView 共用同一套实现）。
+            com.dsh.mobile.proto.FrostedPanelView.rim(cv, dens, w, h, cornerDp * dens);
+            com.dsh.mobile.proto.FrostedPanelView.grain(cv, w, h, 12);
+            cv.restoreToCount(save);
+        }
+
+        /** 复用的折射缓冲（每块卡各一份，尺寸随卡变化）。 */
+        private int[] lensPx;
+        private Bitmap lensBmp;
+
+        @Override public void setAlpha(int a) {
+            paint.setAlpha(a);
+            if (glass != null) glass.setAlpha(a);
+        }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) {
+            if (glass != null) glass.setColorFilter(f);
+        }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+        @Override public boolean isStateful() { return glass != null && glass.isStateful(); }
+        @Override protected boolean onStateChange(int[] state) {
+            return glass != null && glass.setState(state);
+        }
+        @Override public void setHotspot(float x, float y) {
+            if (glass != null) glass.setHotspot(x, y);
+        }
+        @Override public boolean setVisible(boolean visible, boolean restart) {
+            return glass != null && glass.setVisible(visible, restart);
+        }
+        @Override public void getOutline(android.graphics.Outline o) {
+            if (glass != null) glass.getOutline(o);
+        }
+        @Override public boolean getPadding(android.graphics.Rect p) {
+            return glass != null && glass.getPadding(p);
+        }
+    }
+
+    /**
+     * 玻璃件的底 = 模糊层 + 玻璃层，**并且在抓取期间整体不绘制**。
+     *
+     * <p>为什么必须"整体不绘制"：抓取时会把根容器重画一遍，如果这一层（连同它盖住的玻璃色）
+     * 也被画进去，就形成**自我反馈** —— 每帧把上一帧的自己再糊一次，越叠越白。
+     * 与 BlurView 的 {@code BlurViewCanvas} 守卫是同一个目的。
+     */
+    public static final class BlurredGlassDrawable extends android.graphics.drawable.Drawable {
+        private final android.graphics.drawable.Drawable blur;
+        private final android.graphics.drawable.Drawable glass;
+
+        BlurredGlassDrawable(android.graphics.drawable.Drawable blur,
+                             android.graphics.drawable.Drawable glass) {
+            this.blur = blur;
+            this.glass = glass;
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            if (BackdropBlurDrawable.capturingGlobal) return;
+            android.graphics.Rect b = getBounds();
+            if (blur != null) {
+                blur.setBounds(b);
+                blur.draw(cv);
+            }
+            if (glass != null) {
+                glass.setBounds(b);
+                glass.draw(cv);
+            }
+        }
+
+        @Override public void setAlpha(int a) {
+            if (blur != null) blur.setAlpha(a);
+            if (glass != null) glass.setAlpha(a);
+        }
+
+        @Override public void setColorFilter(android.graphics.ColorFilter f) {
+            if (blur != null) blur.setColorFilter(f);
+            if (glass != null) glass.setColorFilter(f);
+        }
+
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+
+        // ---- 状态/热点/内衬全部转发给内层玻璃层。
+        // 少了这段，把「已有的按钮底」包进来当玻璃层时，按下态（StateListDrawable）
+        // 与圆角 outline 会全部失效 —— 按钮点了没反馈。
+        @Override public boolean isStateful() {
+            return (blur != null && blur.isStateful()) || (glass != null && glass.isStateful());
+        }
+
+        @Override protected boolean onStateChange(int[] state) {
+            boolean a = blur != null && blur.setState(state);
+            boolean b = glass != null && glass.setState(state);
+            return a || b;
+        }
+
+        @Override public void setHotspot(float x, float y) {
+            if (blur != null) blur.setHotspot(x, y);
+            if (glass != null) glass.setHotspot(x, y);
+        }
+
+        @Override public boolean setVisible(boolean visible, boolean restart) {
+            boolean a = blur != null && blur.setVisible(visible, restart);
+            boolean b = glass != null && glass.setVisible(visible, restart);
+            return a || b;
+        }
+
+        @Override public void getOutline(android.graphics.Outline o) {
+            if (glass != null) glass.getOutline(o);
+        }
+
+        @Override public boolean getPadding(android.graphics.Rect p) {
+            return glass != null && glass.getPadding(p);
+        }
+    }
+
+    /**
+     * 玻璃卡容器：**抓取期间不画自己的子 View**。
+     *
+     * <p>不这么做的话，卡里的文字/徽标会被烘进模糊层，卡面上就出现自己文字的模糊重影
+     * （2026-10-06 首页实测踩到）。BlurView 没这个问题，是因为它的 BlurView 是**空 View**；
+     * 我们的"面板"是有内容的容器，所以要在抓取那一刻把自己整个摘出去。
+     */
+    public static final class GlassCardLayout extends LinearLayout {
+        public GlassCardLayout(Context c) { super(c); }
+
+        @Override protected void dispatchDraw(android.graphics.Canvas cv) {
+            if (BackdropBlurDrawable.capturingGlobal) return;
+            super.dispatchDraw(cv);
+        }
+    }
+
+    /**
+     * 全应用统一用的 TextView：**抓取期间不画自己的文字**。
+     *
+     * <p>悬浮件（卡片 / 线路行 / 按钮）都要各自的真模糊，而抓取时会把整页重画一遍 ——
+     * 如果这些件自己的文字也画进去，就会把自己的字烘进自己的模糊层，形成重影
+     * （2026-10-06 首页实测踩到）。BlurView 没这问题是因为它的 BlurView 是**空 View**；
+     * 我们这里是"有内容的悬浮件"，所以统一在抓取那一刻把文字摘出去。
+     */
+    public static final class GlassTextView extends TextView {
+        public GlassTextView(Context c) { super(c); }
+
+        @Override protected void onDraw(android.graphics.Canvas cv) {
+            if (BackdropBlurDrawable.capturingGlobal) return;
+            super.onDraw(cv);
+        }
+    }
+
+    /** 建一个"抓取期间不画子 View"的玻璃卡容器。 */
+    public static GlassCardLayout glassCardLayout(Context c) {
+        GlassCardLayout v = new GlassCardLayout(c);
+        v.setOrientation(LinearLayout.VERTICAL);
+        return v;
     }
 
     /**
@@ -779,7 +1343,7 @@ public final class Ui {
     }
 
     public static TextView text(Context c, String s, float sizeSp, int color, boolean bold) {
-        TextView t = new TextView(c);
+        TextView t = new GlassTextView(c);
         t.setText(s);
         t.setTextSize(sizeSp);
         t.setTextColor(color);
@@ -843,17 +1407,27 @@ public final class Ui {
      * <p>与 CardBg 的差别：不含左侧 3dp 强调条与顶部棱光/底部暗线（那些同样依赖自绘 Path）。
      */
     public static android.graphics.drawable.Drawable cardGrad(int radiusPx, int strokePx, int lineColor) {
-        // [毛玻璃 v3] 版式：半透明玻璃体 + 白色发丝线 + 135° 斜射高光。
-        // 为什么还要这一版：自绘 CardBg 在**超高卡片**上会整片压暗成灰（见上方真机教训），
-        // 提问卡/审批卡这两张长卡必须走框架版；框架版没有自绘层，所以高光用一层
-        // GradientDrawable 叠上去补（LayerDrawable = 体 + 光，两层圆角一致）。
+        return cardGrad(radiusPx, strokePx, lineColor, GLASS);
+    }
+
+    /**
+     * {@link #cardGrad} 的**薄卡体**版：卡体色换成 {@link #GLASS_CARD}（白 25%），
+     * 用在已接真模糊的列表内长卡（提问卡 / 审批卡）—— 卡体太厚会把底下的炫彩背景洗成灰白。
+     */
+    public static android.graphics.drawable.Drawable cardGradThin(int radiusPx, int strokePx,
+                                                                  int lineColor) {
+        return cardGrad(radiusPx, strokePx, lineColor, GLASS_CARD);
+    }
+
+    private static android.graphics.drawable.Drawable cardGrad(int radiusPx, int strokePx,
+                                                               int lineColor, int bodyColor) {
         android.graphics.drawable.GradientDrawable body =
                 new android.graphics.drawable.GradientDrawable(
                         android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                        new int[] { GLASS, GLASS });
+                        new int[] { bodyColor, bodyColor });
         body.setCornerRadius(radiusPx);
         if (strokePx > 0) {
-            body.setStroke(strokePx, android.graphics.Color.alpha(GLASS) < 250
+            body.setStroke(strokePx, android.graphics.Color.alpha(bodyColor) < 250
                     ? GLASS_HAIRLINE : lineColor);
         }
         android.graphics.drawable.GradientDrawable sheen =
@@ -870,7 +1444,7 @@ public final class Ui {
      * （按下整颗变淡缩一点，抬起回弹）。
      */
     public static TextView circleButton(Context c, String glyph, int fill, int fg) {
-        TextView t = new TextView(c);
+        TextView t = new GlassTextView(c);
         t.setText(glyph);
         t.setTextSize(S_BODY);
         t.setTextColor(fg);
@@ -1061,20 +1635,35 @@ public final class Ui {
      * 仍然返回 false，点击/长按照旧。
      */
     public static void tapRow(final View v, GradientDrawable normal, int pressFill) {
+        tapRow(v, normal, pressFill, 0f);
+    }
+
+    /**
+     * 同上，但行底也走**真·液态玻璃**（背景模糊 + 边缘折射）。
+     *
+     * @param glassCornerDp &gt; 0 = 把正常态/按下态两层都包上真模糊，圆角传行的圆角；
+     *                      0 = 老行为（纯色行底）。抽屉的会话行用它。
+     */
+    public static void tapRow(final View v, GradientDrawable normal, int pressFill,
+                              float glassCornerDp) {
         if (v == null || normal == null) return;
         final GradientDrawable pressed = normal.getConstantState() == null
                 ? round(normal.getCornerRadius(), pressFill)
                 : (GradientDrawable) normal.getConstantState().newDrawable().mutate();
         pressed.setColor(pressFill);
-        v.setBackground(normal);
+        final android.graphics.drawable.Drawable normalD = glassCornerDp > 0f
+                ? blurredGlassRoot(v, 26f, glassCornerDp, normal) : normal;
+        final android.graphics.drawable.Drawable pressedD = glassCornerDp > 0f
+                ? blurredGlassRoot(v, 26f, glassCornerDp, pressed) : pressed;
+        v.setBackground(normalD);
         // 安全网（2026-10-04 用户报「子智能体弹窗里一滑动就变色」）：手势被父容器
         // （ScrollView / ListView）抢走时，子 View **不保证**收到 ACTION_CANCEL ——
         // 那时按下态就永远停在灰底上，看起来像"滑动把行染色了"。这里挂一个延时还原，
         // 无论走哪条路（UP / CANCEL / 被抢走），灰底最长只存活 RESTORE_MS。
         final Runnable restore = new Runnable() {
             @Override public void run() {
-                v.setBackground(normal);
-                if (v.getBackground() != normal) v.setBackground(normal);
+                v.setBackground(normalD);
+                if (v.getBackground() != normalD) v.setBackground(normalD);
             }
         };
         v.setOnTouchListener(new View.OnTouchListener() {
@@ -1082,7 +1671,7 @@ public final class Ui {
             public boolean onTouch(View view, android.view.MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case android.view.MotionEvent.ACTION_DOWN:
-                        view.setBackground(pressed);
+                        view.setBackground(pressedD);
                         view.removeCallbacks(restore);
                         view.postDelayed(restore, PRESS_RESTORE_MS);
                         break;
@@ -1090,7 +1679,7 @@ public final class Ui {
                     case android.view.MotionEvent.ACTION_CANCEL:
                     case android.view.MotionEvent.ACTION_OUTSIDE:
                         view.removeCallbacks(restore);
-                        view.setBackground(normal);
+                        view.setBackground(normalD);
                         break;
                     default:
                         break;
@@ -1313,11 +1902,13 @@ public final class Ui {
             // 折叠卡/大面积容器：厚玻璃（GLASS_SHEET 76%）+ 发丝描边 + 阴影（无强调条）。
             // 用比卡片更厚的一档：这类卡里嵌着不透明的 FIELD_BG 说明块，太透会显得"脏"。
             c0.setBackground(new CardBg(dp(c, R_CARD), GLASS_SHEET, dp(c, 1f), LINE, 0, dp(c, 3f)));
-            c0.setElevation(dp(c, isDark() ? 2f : 3f));
+            c0.setElevation(0f);   // [液态玻璃 2026-10-07] 半透明卡面不能挂框架 elevation：阴影会透过卡面变灰环
         } else {
             c0.setBackground(new CardBg(dp(c, R_CARD),
                     new int[] { SURFACE_G1, SURFACE_G2 }, dp(c, 1f), LINE, accent, dp(c, 3f)));
-            c0.setElevation(dp(c, isDark() ? 2f : 3f));
+            // [液态玻璃 2026-10-07] 强调条卡同样是半透明卡面 → 不能挂框架 elevation
+            // （阴影透上来把卡面压灰 + 边缘黑边）。阴影一律走 Ui.shadowed（画在形状之外）。
+            c0.setElevation(0f);
         }
         c0.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -1379,7 +1970,8 @@ public final class Ui {
                 ? new CardBg(dp(c, R_CARD), new int[] { SURFACE_G1, SURFACE_G2 },
                         dp(c, 1f), LINE, 0x00000000, dp(c, 3f))
                 : featureFill(c, grad));
-        card.setElevation(dp(c, isDark() ? 2.5f : 4f));
+        // [液态玻璃 2026-10-07] 半透明卡面不挂框架 elevation（阴影透上来 → 卡面发灰 + 黑边）
+        card.setElevation(0f);
         card.setPadding(dp(c, M_CARD_PAD), dp(c, 13), dp(c, 12), dp(c, 13));
         card.setMinimumHeight(dp(c, 64));
 
@@ -1428,12 +2020,32 @@ public final class Ui {
      *
      * <p>深色档按 demo 的口径整体压暗：`brightness(.42) saturate(1.25)`（素雅档 .30 / 1.1）。
      */
+    /**
+     * [2026-10-07 整合] 兼容 shim —— 朋友 fork 的 API 名。
+     *
+     * <p>朋友那边是 {@code Ui.setAmbientBackground(View)} + 内部类 {@code AmbientBg}；
+     * 我们这边功能等价物是 {@link AmbientDrawable}（同一套彩色环境底，且额外支持
+     * 我们的 {@link #setAmbientPalette(int)} 索引配色档）。所以这里**不搬他的实现**，
+     * 只补一个同名入口：朋友那边写法的调用点（DrawerHost / ArtifactActivity 等）
+     * 可以零改动直接用，两套代码合流时不至于因为"没有这个方法"而编译不过。
+     */
+    public static void setAmbientBackground(android.view.View v) {
+        if (v == null) return;
+        v.setBackground(new AmbientDrawable());
+    }
+
     public static final class AmbientDrawable extends android.graphics.drawable.Drawable {
 
         private final android.graphics.Paint basePaint =
                 new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Paint[] blobPaints = new android.graphics.Paint[4];
         private final float[] bx = new float[4], by = new float[4], br = new float[4];
+        /** 极光档：把 aurora_bg 中心裁切铺满（不拉伸），保持比例。 */
+        private final android.graphics.Paint imgPaint =
+                new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final android.graphics.RectF imgDst = new android.graphics.RectF();
+        /** 深色档的压暗滤镜（图/渐变共用）。 */
+        private android.graphics.ColorFilter darkFilter;
         private int cacheW = -1, cacheH = -1, cachePal = -1;
         private boolean cacheDark;
 
@@ -1469,6 +2081,8 @@ public final class Ui {
                 filter = new android.graphics.ColorMatrixColorFilter(cm);
             }
             basePaint.setColorFilter(filter);
+            darkFilter = filter;
+            imgPaint.setColorFilter(filter);
 
             // 四枚光斑：demo 用「固定尺寸的圆 + blur(42px)」，这里换算成圆心/半径 + 径向柔边。
             float[] r = { dp(150f), dp(130f), dp(160f), dp(120f) };
@@ -1500,9 +2114,24 @@ public final class Ui {
             ensure(w, h);
             cv.save();
             cv.translate(b.left, b.top);
-            cv.drawRect(0f, 0f, w, h, basePaint);
-            for (int i = 0; i < 4; i++) {
-                cv.drawCircle(bx[i], by[i], br[i], blobPaints[i]);
+            // [2026-10-07 用户明确指出：「和背景完全没有关系，就是玻璃来回瞎搞」→ 背景不再动]
+            // 保持"有图就用图"（极光图当底）。
+            android.graphics.Bitmap img = ambientImage;
+            if (img != null && !img.isRecycled()) {
+                // 极光档：中心裁切铺满（保持比例，不拉伸）
+                float sw = img.getWidth(), sh = img.getHeight();
+                if (sw > 0 && sh > 0) {
+                    float scale = Math.max(w / sw, h / sh);
+                    float dw = sw * scale, dh = sh * scale;
+                    imgDst.set((w - dw) / 2f, (h - dh) / 2f, (w + dw) / 2f, (h + dh) / 2f);
+                    imgPaint.setColorFilter(dark ? darkFilter : null);
+                    cv.drawBitmap(img, null, imgDst, imgPaint);
+                }
+            } else {
+                cv.drawRect(0f, 0f, w, h, basePaint);
+                for (int i = 0; i < 4; i++) {
+                    cv.drawCircle(bx[i], by[i], br[i], blobPaints[i]);
+                }
             }
             cv.restore();
         }
@@ -1510,6 +2139,442 @@ public final class Ui {
         @Override public void setAlpha(int a) { basePaint.setAlpha(a); }
         @Override public void setColorFilter(android.graphics.ColorFilter f) { /* 环境背景自管滤镜 */ }
         @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
+    }
+
+    /**
+     * 真·背景模糊（自己实现，不依赖不存在的 API）。
+     *
+     * <p><b>为什么要有它</b>：Android 确实没有 CSS 的 {@code backdrop-filter}，也没有
+     * "模糊兄弟 View" 的现成 API —— 但**不代表做不到**。可以自己把面板背后那块内容
+     * 渲染到离屏缓冲、模糊它、再当面板底图铺回去。这才是 demo 毛玻璃观感的真正来源：
+     * 面板后面是**真的糊掉的内容**，而不是一块半透明白（后者一眼假）。
+     *
+     * <p>[2026-10-07 定版] 抓取**统一走 {@link com.dsh.mobile.proto.Frost}** —— 隔离 Demo
+     * 里已验证可用的那一套（降采样 + 5-tap 近高斯 + CPU 版 lens 折射 + 四周 padding）。
+     * 本类原先自写的两条路都已删除：
+     * <ul>
+     *   <li>RenderNode + RenderEffect：在本工程**必崩**（模拟器实测 RenderThread SIGSEGV，
+     *       见 2026-10-07 诊断记录），不能开；</li>
+     *   <li>自写"缩略位图 + 盒式模糊"：实测**抓不到内容**（直接抓 ListView 全透明）。</li>
+     * </ul>
+     *
+     * <p>坐标系：{@code source} 与 {@code panel} 可以在任意层级（用
+     * {@code getLocationInWindow} 求偏移），所以"输入胶囊在 bottomStack 里、列表在 stage 里"
+     * 这种不同父容器的组合也成立。
+     *
+     * <p><b>已知限制</b>（与 BlurView 相同）：离屏渲染拿不到 {@code SurfaceView} /
+     * {@code GLSurfaceView} / 部分视频层的内容 —— 它们不走普通 View 绘制流程。
+     */
+    public static final class BackdropBlurDrawable extends android.graphics.drawable.Drawable {
+        /** 抓取间隔：60ms ≈ 16fps，滚动时糊的内容跟着走，但不会每帧重算。 */
+        private static final long REFRESH_MS = 60L;
+        /** 降采样倍数（与 Demo 的 FrostedPanelView 同档）：1/4。 */
+        private static final int DOWNSCALE = 4;
+
+        private final View source;
+        private final View panel;
+        private final float radiusDp;
+        private final int tint;
+        private final float cornerDp;
+        private final android.graphics.Path clipPath = new android.graphics.Path();
+        private final android.graphics.RectF clipRf = new android.graphics.RectF();
+        private final android.graphics.Paint paint =
+                new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final android.graphics.Paint tintPaint = new android.graphics.Paint();
+        private final int[] panLoc = new int[2];
+        private long lastCapture;
+        /**
+         * 全局递归保护（**静态**，不是实例级）：一次抓取会重画整页，而页面上可能挂着**多个**
+         * 玻璃件；实例级标记只挡得住自己，挡不住"卡 A 抓取时画到卡 B、卡 B 又开始抓取"的嵌套。
+         * 与 BlurView 用专用 {@code BlurViewCanvas} 子类做递归守卫是同一个目的。
+         */
+        private static boolean capturingGlobal;
+
+        public BackdropBlurDrawable(View source, View panel, float radiusDp, int tintColor) {
+            this(source, panel, radiusDp, tintColor, 0f);
+        }
+
+        /**
+         * @param cornerDp 底图圆角（0 = 直角）。必须与盖在它上面的玻璃层圆角一致，
+         *                 否则模糊底图会在圆角外露方角。
+         */
+        public BackdropBlurDrawable(View source, View panel, float radiusDp, int tintColor,
+                                    float cornerDp) {
+            this(source, panel, radiusDp, tintColor, cornerDp, LENS_AMT_PX);
+        }
+
+        /**
+         * @param lensAmtPx 折射幅度（px）。**按调用处传**：大面板（抽屉）传 0 —— 见
+         *                  {@link #LENS_AMT_PX} 的注释（V3.22 实测 drawer 右缘内侧 11dp 那条色阶缝）。
+         */
+        public BackdropBlurDrawable(View source, View panel, float radiusDp, int tintColor,
+                                    float cornerDp, float lensAmtPx) {
+            this.source = source;
+            this.panel = panel;
+            this.radiusDp = radiusDp;
+            this.tint = tintColor;
+            this.cornerDp = cornerDp;
+            this.lensAmtPx = lensAmtPx;
+        }
+
+        /**
+         * 绘制期解析模糊源。
+         *
+         * <p>{@code source} 为 null 时（见 {@link Ui#blurredGlassRoot}）解析成
+         * **panel 所在的应用根容器**：从 panel 一路向上，停在"父 View 的父不是 View"的那一层
+         * —— 也就是 DecorView 的子 View（应用根容器）。**不能直接抓 DecorView**：它是窗口层，
+         * 抓取恒为 0（{@code ConversationView.blurSource()} 的注释里记着这个结论）。
+         */
+        private View resolveSource() {
+            if (source != null && source.isAttachedToWindow()) return source;
+            View v = panel;
+            while (v != null && v.getParent() instanceof View) {
+                View pv = (View) v.getParent();
+                if (!(pv.getParent() instanceof View)) return v;
+                v = pv;
+            }
+            return v;
+        }
+
+        /**
+         * [2026-10-07 换实现] 捕获交给 {@link com.dsh.mobile.proto.Frost}（隔离 Demo 里
+         * **已验证可用**的那一套：降采样 + 5-tap 近高斯 + CPU 版 lens 折射 + 四周 padding）。
+         *
+         * <p>为什么换：本类原来的"缩略位图 + 盒式模糊"实测在本工程**抓不到任何子 View 内容**
+         * —— 抓整页只有根容器自己的背景（不透明壁纸），抓 ListView 干脆全透明
+         * （逐像素实测 avgAlpha=0），而 Demo 的同一原理（Frost）能抓到卡片与文字。
+         * 统一到 Frost 后，两处的磨砂行为一致，也不再各自维护两份折射代码。
+         */
+        private void capture(int w, int h, View src) {
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - lastCapture < REFRESH_MS) return;
+            lastCapture = now;
+            try {
+                panel.getLocationInWindow(panLoc);
+                float dens = panel.getResources().getDisplayMetrics().density;
+                int refrH = Math.round(LENS_H_DP * dens);
+                int refrAmt = Math.round(lensAmtPx);
+                frostPad = com.dsh.mobile.proto.Frost.padFor(
+                        com.dsh.mobile.proto.Frost.BLUR_RADIUS, refrH);
+                // 抓取期间把面板自身置为全透明：源可能包含本面板（整页根容器），
+                // 不透明化的话会把面板自己的 tint 烘进模糊层（自我反馈、越叠越白）。
+                float oldAlpha = panel.getAlpha();
+                panel.setAlpha(0f);
+                Bitmap b;
+                try {
+                    b = com.dsh.mobile.proto.Frost.capture(src, panLoc[0], panLoc[1], w, h,
+                            glassDownscale(), cornerDp * dens, refrH, refrAmt);
+                } finally {
+                    panel.setAlpha(oldAlpha);
+                }
+                if (b == null || b.isRecycled()) return;
+                Bitmap old = frostBmp;
+                frostBmp = b;
+                if (old != null && old != b && !old.isRecycled()) old.recycle();
+            } catch (Throwable ignored) {
+                // 抓取失败就画不到模糊（下面仍会铺 tint），绝不因此崩
+            }
+        }
+
+        /** Frost 抓回来的图（含四周 padding 溢出区）。 */
+        private Bitmap frostBmp;
+        private int frostPad;
+        /** 本实例的折射幅度（px）。默认 {@link #LENS_AMT_PX}；大面板可由调用处传 0。 */
+        private float lensAmtPx = LENS_AMT_PX;
+
+        @Override
+        public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            View src = panel == null ? null : resolveSource();
+            if (src != null && !capturingGlobal) {
+                capturingGlobal = true;
+                capture(w, h, src);              // Frost：降采样 + 近高斯 + CPU lens
+                Bitmap fb = frostBmp;
+                if (fb != null && !fb.isRecycled()) {
+                    // 位图含四周 padding 溢出区：玻璃区域在 (pad,pad) 处（同 FrostedPanelView）
+                    float ds = glassDownscale();
+                    // [2026-10-07 修「屏幕左缘一条怪竖带」] **必须把模糊层裁进面板自己的矩形**：
+                    // padding 溢出区（74px）是给"边缘采样到真实内容"用的，但它同时会画到面板**外面**。
+                    // 抽屉关着时整体在屏外（translationX=-886），它的溢出区就落在屏幕 x0..74 —— 那条
+                    // 20% 暗的竖带就是这么来的（实测：把抽屉底置空 → 竖带消失）。
+                    // 普通面板四边都被父容器裁掉所以看不出来，抽屉这种"父容器不裁"的就露了。
+                    int save = cv.save();
+                    cv.clipRect(0, 0, w, h);
+                    if (cornerDp > 0f) {
+                        clipForCorner(w, h);
+                        cv.clipPath(clipPath);
+                    }
+                    cv.scale(ds, ds);
+                    cv.drawBitmap(fb, -frostPad / ds, -frostPad / ds, paint);
+                    cv.restoreToCount(save);
+                }
+                capturingGlobal = false;
+            }
+            if (android.graphics.Color.alpha(tint) > 0) {
+                tintPaint.setColor(tint);
+                cv.drawRect(0, 0, w, h, tintPaint);
+            }
+        }
+
+        /** [规范定版] 折射环带高 28dp、折射幅度 38px（交给 Frost 的 lens 用）。 */
+        private static final float LENS_H_DP = 28f;
+        /**
+         * 默认折射幅度（px）。**顶栏 / 输入条 / 底部条**用这个值（它们的父容器会裁掉四边，
+         * 折射是"液态"的主要线索，不能丢）。
+         *
+         * <p>[V3.22 抽屉那条竖条的根因] 抽屉底是**整屏高的大面板、且父容器不裁边**：
+         * CPU lens 的位移被 `pad*0.7` 夹取，在近均匀底色上会在**面板内侧 ≈11dp 处留下一条竖向色阶缝**
+         * （实测列均值 213 → 205 → 216，缝中心距右缘 28px=10.7dp；把本值置 0 则该缝完全消失）。
+         * 所以抽屉走**按调用处传参**：{@code blurredGlassRoot(..., 0f)}，不动这里的全局默认。
+         */
+        /**
+         * [V3.27 · 用户「玻璃磨砂程度改成『液态玻璃 / 磨砂玻璃』两种，把现在液态玻璃的直接换成磨砂玻璃，
+         * 主要减小硬件资源损耗」] **改为可切换的默认值**：由 {@link Ui#setGlassMode(String)} 置 0 或 38。
+         *
+         * <p>只动这一个"折射幅度默认值"（SOP 明确把 `lensAmt` 列为允许调整的质感参数），
+         * **不动**捕获 / 降采样 / 模糊 / 着色顺序 ⇒ 本体逻辑不变。
+         */
+        private static float LENS_AMT_PX = 38f;
+
+        /** 圆角裁剪路径（模糊底图必须与盖在它上面的玻璃层同圆角）。 */
+        private void clipForCorner(float w, float h) {
+            float r = cornerDp * panel.getResources().getDisplayMetrics().density;
+            clipRf.set(0f, 0f, w, h);
+            clipPath.reset();
+            clipPath.addRoundRect(clipRf, r, r, android.graphics.Path.Direction.CW);
+        }
+
+        @Override public void setAlpha(int a) { paint.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { paint.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** 按钮悬浮投影的内缩量（dp）：见 {@link #shadowed}。 */
+    public static final float BTN_SHADOW_PAD = 6f;
+    /** 卡片 / 线路行的悬浮投影内缩量（dp）—— 越大影子铺得越开、越柔。 */
+    public static final float CARD_SHADOW_PAD = 18f;
+
+    /**
+     * 悬浮投影：把一个 drawable 套上"浮起来"的柔和阴影。
+     *
+     * <p><b>为什么不能用 {@code View.setElevation}</b>：框架阴影画在 View **底下**，
+     * 而玻璃件是**半透明**的 —— 阴影会透上来把卡面压灰（2026-10-06 逐像素反推：
+     * 卡面被额外叠了约 24% 的黑，用户原话「都是灰底，完全没有毛玻璃的效果」）。
+     * 所以阴影必须画在**形状之外**。
+     *
+     * <p>做法：形状在 View 里**内缩 {@code padDp}**，那一圈留给阴影 —— 由外向内画
+     * {@link ShadowedDrawable#STEPS} 圈圆角矩形，越往外越淡、整体下移 {@code dyDp}
+     * （对应 demo 的 `0 18px 44px rgba(26,16,66,.22)` + `0 3px 10px rgba(26,16,66,.12)`）。
+     * 调用方要把 {@code padDp} 补进 padding / 用负 margin 抵消，视觉尺寸才不变。
+     */
+    public static android.graphics.drawable.Drawable shadowed(
+            android.graphics.drawable.Drawable inner, float radiusDp, float padDp, float dyDp) {
+        return new ShadowedDrawable(inner, radiusDp, padDp, dyDp, padDp * 0.85f);
+    }
+
+    /** 可分离盒式模糊：横一遍、竖一遍（对缩略图足够，且是 O(n)）。 */
+    private static void boxBlur(int[] p, int w, int h, int r) {
+        int[] tmp = new int[p.length];
+        for (int y = 0; y < h; y++) {                     // 横向
+            int base = y * w;
+            int sa = 0, sr = 0, sg = 0, sb = 0;
+            for (int i = -r; i <= r; i++) {
+                int x = Math.min(w - 1, Math.max(0, i));
+                int c = p[base + x];
+                sa += (c >>> 24); sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF;
+            }
+            int n = 2 * r + 1;
+            for (int x = 0; x < w; x++) {
+                tmp[base + x] = ((sa / n) << 24) | ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+                int out = Math.min(w - 1, Math.max(0, x - r));
+                int in = Math.min(w - 1, Math.max(0, x + r + 1));
+                int co = p[base + out], ci = p[base + in];
+                sa += (ci >>> 24) - (co >>> 24);
+                sr += ((ci >> 16) & 0xFF) - ((co >> 16) & 0xFF);
+                sg += ((ci >> 8) & 0xFF) - ((co >> 8) & 0xFF);
+                sb += (ci & 0xFF) - (co & 0xFF);
+            }
+        }
+        for (int x = 0; x < w; x++) {                     // 纵向
+            int sa = 0, sr = 0, sg = 0, sb = 0;
+            for (int i = -r; i <= r; i++) {
+                int y = Math.min(h - 1, Math.max(0, i));
+                int c = tmp[y * w + x];
+                sa += (c >>> 24); sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF;
+            }
+            int n = 2 * r + 1;
+            for (int y = 0; y < h; y++) {
+                p[y * w + x] = ((sa / n) << 24) | ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+                int out = Math.min(h - 1, Math.max(0, y - r));
+                int in = Math.min(h - 1, Math.max(0, y + r + 1));
+                int co = tmp[out * w + x], ci = tmp[in * w + x];
+                sa += (ci >>> 24) - (co >>> 24);
+                sr += ((ci >> 16) & 0xFF) - ((co >> 16) & 0xFF);
+                sg += ((ci >> 8) & 0xFF) - ((co >> 8) & 0xFF);
+                sb += (ci & 0xFF) - (co & 0xFF);
+            }
+        }
+    }
+
+    /**
+     * 给任意圆角底加一条**上沿亮棱**。
+     *
+     * <p>demo 里**每一个**玻璃件都带 `box-shadow: inset 0 1px 0 var(--rim)` ——
+     * 线路行、图标砖、次按钮、会话行、工具行、气泡、输入胶囊……一个不落。
+     * 这条 1px 亮棱就是"玻璃有厚度"的来源（第二篇也把它列为四要素里的**边缘高光**）。
+     *
+     * <p>做法：把画布裁到**顶部一条**，再沿圆角矩形描一圈 —— 于是只有上沿那一小段亮，
+     * 且天然跟着圆角走（不是一条直角亮线）。
+     */
+    public static android.graphics.drawable.Drawable rimmed(
+            android.graphics.drawable.Drawable base, float radiusDp) {
+        return new RimmedDrawable(base, radiusDp, GLASS_RIM);
+    }
+
+    /** 同上，但可指定内棱颜色（demo 里主按钮的内棱是 35% 白，比幽灵按钮弱）。 */
+    public static android.graphics.drawable.Drawable rimmed(
+            android.graphics.drawable.Drawable base, float radiusDp, int rimColor) {
+        return new RimmedDrawable(base, radiusDp, rimColor);
+    }
+
+    public static final class RimmedDrawable extends android.graphics.drawable.Drawable {
+        private final android.graphics.drawable.Drawable base;
+        private final float radiusDp;
+        private final int rimColor;
+        private final android.graphics.Paint p =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.RectF rf = new android.graphics.RectF();
+
+        RimmedDrawable(android.graphics.drawable.Drawable base, float radiusDp, int rimColor) {
+            this.base = base;
+            this.radiusDp = radiusDp;
+            this.rimColor = rimColor;
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0 || base == null) return;
+            base.setBounds(b);
+            base.draw(cv);
+            int rim = android.graphics.Color.alpha(rimColor);
+            if (rim <= 0) return;
+            float d = android.content.res.Resources.getSystem().getDisplayMetrics().density;
+            float rimH = Math.max(1f, d * 1.6f);          // ≈1.6dp 的亮棱（1.2dp 偏细，提体积感）
+            float inset = rimH / 2f;
+            float r = radiusDp * d;
+            // **必须用 bounds 的原点**：本 drawable 常被套在 InsetDrawable / ShadowedDrawable
+            // 里面，那时 bounds 的 left/top 不是 0 —— 写死 (0,0) 会把亮棱画到整个 View 的顶部
+            // （表现就是一条白线飘在元素上方，2026-10-06 实测踩到）。
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(rimH);
+            rf.set(b.left + inset, b.top + inset, b.right - inset, b.bottom - inset);
+            // 上沿亮棱
+            cv.save();
+            cv.clipRect(b.left, b.top, b.right, b.top + rimH);
+            p.setColor(rimColor);
+            cv.drawRoundRect(rf, r, r, p);
+            cv.restore();
+            // 下沿暗棱：与卡片同一套"上亮下暗"配方 —— 只有上亮会显得薄，补下暗才有体积感
+            if (android.graphics.Color.alpha(GLASS_LO) > 0) {
+                cv.save();
+                cv.clipRect(b.left, b.bottom - rimH, b.right, b.bottom);
+                p.setColor(GLASS_LO);
+                cv.drawRoundRect(rf, r, r, p);
+                cv.restore();
+            }
+        }
+
+        @Override public void setAlpha(int a) { base.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { base.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    public static final class ShadowedDrawable extends android.graphics.drawable.Drawable {
+        /** 缩略图比例：阴影是低频信息，1/4 采样足够，模糊成本也降 16 倍。 */
+        private static final int DOWNSCALE = 4;
+        private final android.graphics.drawable.Drawable inner;
+        private final float radiusDp, padDp, dyDp, blurDp;
+        private final android.graphics.Paint bmpPaint =
+                new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final android.graphics.Paint fillPaint =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint clearPaint =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.RectF rf = new android.graphics.RectF();
+        private Bitmap bmp;
+        private int[] px;
+        private int bw = -1, bh = -1;
+        private boolean built;
+
+        ShadowedDrawable(android.graphics.drawable.Drawable inner,
+                         float radiusDp, float padDp, float dyDp, float blurDp) {
+            this.inner = inner;
+            this.radiusDp = radiusDp;
+            this.padDp = padDp;
+            this.dyDp = dyDp;
+            this.blurDp = blurDp;
+        }
+
+        private static float density() {
+            return android.content.res.Resources.getSystem().getDisplayMetrics().density;
+        }
+
+        @Override public void draw(android.graphics.Canvas cv) {
+            android.graphics.Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0 || inner == null) return;
+            float d = density();
+            float pad = padDp * d, dy = dyDp * d, r = radiusDp * d, blur = blurDp * d;
+            int lw = Math.max(1, w / DOWNSCALE), lh = Math.max(1, h / DOWNSCALE);
+            if (bmp == null || bw != lw || bh != lh) {
+                if (bmp != null) bmp.recycle();
+                bmp = Bitmap.createBitmap(lw, lh, Bitmap.Config.ARGB_8888);
+                px = new int[lw * lh];
+                bw = lw;
+                bh = lh;
+                built = false;
+            }
+            if (!built) {
+                // 阴影形状只跟尺寸有关 → 只算一次（每帧重算没必要）
+                built = true;
+                bmp.eraseColor(0);
+                android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+                float s = 1f / DOWNSCALE;
+                // ① 阴影本体：内缩 pad、整体下移 dy
+                fillPaint.setColor(GLASS_SHADOW);
+                fillPaint.setXfermode(null);
+                rf.set(pad * s, pad * s + dy * s, (w - pad) * s, (h - pad) * s + dy * s);
+                c.drawRoundRect(rf, r * s, r * s, fillPaint);
+                // ② 模糊
+                bmp.getPixels(px, 0, bw, 0, 0, bw, bh);
+                boxBlur(px, bw, bh, Math.max(1, Math.round(blur * s)));
+                bmp.setPixels(px, 0, bw, 0, 0, bw, bh);
+                // ③ **把形状本体那一块从阴影里抠掉**（PorterDuff.CLEAR）。
+                //    不抠的话，阴影会从**半透明**的形状下面透上来，把整块面压暗 ——
+                //    2026-10-06 逐像素实测：卡面因此比理论值暗约 5~7%、且明显偏灰
+                //    （用户原话「这些色块都不对了」）。真实投影本来就被物体挡住，抠掉才对。
+                clearPaint.setColor(0);
+                clearPaint.setXfermode(new android.graphics.PorterDuffXfermode(
+                        android.graphics.PorterDuff.Mode.CLEAR));
+                // ③a 形状**顶边以上一律不留阴影**：模糊半径比下移量大时，阴影会被糊到
+                //     形状上方（表现就是"元素顶上飘着一圈灰"）。CSS 的 box-shadow 也有这个
+                //     现象，但真实投影不该长在物体上面 —— 直接裁掉。
+                c.drawRect(0f, 0f, w * s, pad * s, clearPaint);
+                rf.set(pad * s, pad * s, (w - pad) * s, (h - pad) * s);
+                c.drawRoundRect(rf, r * s, r * s, clearPaint);
+                clearPaint.setXfermode(null);
+            }
+            cv.drawBitmap(bmp, null, new android.graphics.RectF(0, 0, w, h), bmpPaint);
+            inner.setBounds((int) pad, (int) pad, (int) (w - pad), (int) (h - pad));
+            inner.draw(cv);
+        }
+
+        @Override public void setAlpha(int a) { inner.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { inner.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
     }
 
     /**
@@ -1615,7 +2680,8 @@ public final class Ui {
             p.setShader(null);
             p.setStyle(android.graphics.Paint.Style.STROKE);
             p.setStrokeWidth(band * 2f);
-            float[] f = { 0.85f, 0.42f, 0.18f };
+            // 三圈总 alpha 控制在 ≈0.7（上一版 0.85+0.42+0.18=1.45 偏白，把白刷到卡面中央）
+            float[] f = { 0.45f, 0.18f, 0.06f };
             for (int i = 0; i < f.length; i++) {
                 float in = Math.max(0f, stroke + i * band * 1.6f);
                 if (in * 2f >= w || in * 2f >= h) break;
@@ -1624,6 +2690,73 @@ public final class Ui {
                 cv.drawRoundRect(in, in, w - in, h - in, rad, rad, p);
             }
             p.setStyle(android.graphics.Paint.Style.FILL);
+        }
+
+        // ---- 磨砂噪点（demo 的 `fractalNoise` + `soft-light`）
+        //
+        // demo 明确把噪点列为「玻璃 vs 磨砂塑料」的第二区别（v3 打磨清单 ②）：
+        // 表面有颗粒感，不再像纯色贴片。原生没有 feTurbulence，用**两层伪随机平铺**近似：
+        //   · 细层（每像素随机）—— 对应 baseFrequency .9 的高频；
+        //   · 粗层（4px 块随机）—— 对应 numOctaves 4 叠出来的低频起伏。
+        // 两张 Bitmap 进程内各生成一次、全局复用；绘制时以 GLASS_GRAIN 的 alpha 平铺。
+        private static android.graphics.Bitmap grainFine;
+        private static android.graphics.Bitmap grainCoarse;
+        private static android.graphics.Shader grainShader;
+        private final android.graphics.Paint grainPaint =
+                new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+        private static void ensureGrain() {
+            if (grainFine != null && grainCoarse != null && grainShader != null) return;
+            java.util.Random rnd = new java.util.Random(20261006L);   // 固定种子：每台设备纹理一致
+            // 细层：100x100 逐像素随机灰度
+            grainFine = android.graphics.Bitmap.createBitmap(100, 100,
+                    android.graphics.Bitmap.Config.ARGB_8888);
+            for (int y = 0; y < 100; y++) {
+                for (int x = 0; x < 100; x++) {
+                    int v = rnd.nextInt(256);
+                    grainFine.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+                }
+            }
+            // 粗层：100x100 的 4px 块（低频起伏）
+            grainCoarse = android.graphics.Bitmap.createBitmap(100, 100,
+                    android.graphics.Bitmap.Config.ARGB_8888);
+            for (int y = 0; y < 100; y++) {
+                for (int x = 0; x < 100; x++) {
+                    int v = 128 + (rnd.nextInt(2) == 0 ? -1 : 1) * rnd.nextInt(64);
+                    grainCoarse.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+                }
+            }
+            // 合成：把两层各画进一张 100x100，粗层半透明压在细层上 —— 有粗有细才像磨砂
+            android.graphics.Bitmap merged = android.graphics.Bitmap.createBitmap(100, 100,
+                    android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas mc = new android.graphics.Canvas(merged);
+            android.graphics.Paint mp = new android.graphics.Paint();
+            mc.drawBitmap(grainFine, 0f, 0f, mp);
+            mp.setAlpha(110);   // 粗层占 ~43%
+            mc.drawBitmap(grainCoarse, 0f, 0f, mp);
+            grainShader = new android.graphics.BitmapShader(merged,
+                    android.graphics.Shader.TileMode.REPEAT,
+                    android.graphics.Shader.TileMode.REPEAT);
+        }
+
+        /** 磨砂噪点：以 {@link #GLASS_GRAIN} 的 alpha 平铺在卡面上。 */
+        private void drawGrain(android.graphics.Canvas cv, float w, float h) {
+            int a = android.graphics.Color.alpha(GLASS_GRAIN);
+            if (a <= 0) return;
+            ensureGrain();
+            grainPaint.setShader(grainShader);
+            grainPaint.setColor(GLASS_GRAIN);
+            grainPaint.setAlpha(a);
+            // [毛玻璃 v3] demo 的 `.grain` 用的是 `mix-blend-mode: overlay` —— 暗处压暗、
+            // 亮处提亮，**平均值中性**。若用普通 srcOver 叠一张随机灰（均值 127），
+            // 在浅色卡面上等于整体压暗几个色阶（卡面会"发灰"）。
+            // API 29+ 直接用 PorterDuff.OVERLAY 复刻；低版本退回普通叠加（有 4% 上限，影响有限）。
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                grainPaint.setXfermode(new android.graphics.PorterDuffXfermode(
+                        android.graphics.PorterDuff.Mode.OVERLAY));
+            }
+            cv.drawRect(0f, 0f, w, h, grainPaint);
+            if (android.os.Build.VERSION.SDK_INT >= 29) grainPaint.setXfermode(null);
         }
 
         private void ensureGd(float w, float h) {
@@ -1668,12 +2801,14 @@ public final class Ui {
                     b.right - (int) inset, b.bottom - (int) inset);
             gd.draw(cv);
 
-            // ①.5 毛玻璃 v3：斜射高光（135°）+ 内发光 —— 只有半透明体才叠。
+            // ①.5 毛玻璃 v3：斜射高光（135°）+ 内发光 + 磨砂噪点 —— 只有半透明体才叠。
             if (glassy()) {
                 cv.save();
                 cv.clipPath(shape);
                 ensureSheen(w, h);
                 cv.drawRect(0f, 0f, w, h, sheenPaint);
+                // 磨砂噪点（demo 的 fractalNoise）：让玻璃表面"有颗粒"，不是塑料贴片
+                drawGrain(cv, w, h);
                 cv.restore();
                 drawInnerGlow(cv, w, h);
             }
@@ -1704,29 +2839,32 @@ public final class Ui {
             // 修法（沿顶部圆角内切）：高光带从**描边内侧**（y ≥ stroke）开始，水平方向
             // 两端各收进 radius*0.6 避开圆角区；圆角的棱光由 ③ 的发丝描边补（描边沿
             // shape 走，天然跟着圆角）。底棱同理。
-            cv.save();
-            cv.clipPath(shape);
-            p.setStyle(android.graphics.Paint.Style.FILL);
-            p.setShader(null);
-            float band = Math.max(1f, stroke * 0.6f);
-            float bx0 = Math.min(radius * 0.6f, w * 0.5f);
-            float bx1 = w - bx0;
-            float by0 = stroke;
-            float[] bandAlpha = { 1f, 0.5f, 0.25f, 0.10f };
-            for (int i = 0; i < bandAlpha.length; i++) {
-                float y0 = by0 + band * i;
-                if (y0 >= h) break;
-                p.setColor(alpha(GLASS_RIM, bandAlpha[i]));
-                cv.drawRect(bx0, y0, bx1, Math.min(by0 + band * (i + 1), h), p);
+            // ④ 棱光：**沿圆角描边画**，用一条贯穿全高的 5 段纵向渐变 ——
+            //    上沿最亮（高光）→ 12% 处减半 → 45% 起全透明 → 80% 仍透明 → 下沿一条暗棱。
+            //
+            // 为什么是"上亮 + 下暗"：第二篇（CSDN 文库《Android 里怎么做出那种通透带高光的
+            // 毛玻璃效果》）把**边缘高光**列为玻璃四要素之一，并点明"1px 亮色边框是升级成
+            // 高级玻璃感的关键"。只提亮上沿仍显平；补一条下沿暗棱，玻璃才有"厚度"、才立体。
+            // 描边沿圆角矩形走，所以高光天然跟着圆角（旧版 4 条矩形在圆角处会断成直角）。
+            int rim = GLASS_RIM;
+            if (android.graphics.Color.alpha(rim) != 0) {
+                cv.save();
+                cv.clipPath(shape);
+                float in = stroke;
+                float rad = Math.max(0f, radius - in);
+                float top = in, bottom = Math.max(in + 1f, h - in);
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                // 描边加粗到 2×：高光要"看得见"才谈得上立体感（原来 1.4× 偏弱）
+                p.setStrokeWidth(Math.max(1f, stroke * 2f));
+                p.setShader(new android.graphics.LinearGradient(0f, top, 0f, bottom,
+                        new int[] { rim, alpha(rim, 0.45f), 0x00FFFFFF, 0x00FFFFFF, GLASS_LO },
+                        new float[] { 0f, 0.12f, 0.45f, 0.80f, 1f },
+                        android.graphics.Shader.TileMode.CLAMP));
+                cv.drawRoundRect(in, in, w - in, h - in, rad, rad, p);
+                p.setShader(null);
+                p.setStyle(android.graphics.Paint.Style.FILL);
+                cv.restore();
             }
-            // 底棱：一条极淡的暗线，让玻璃"有厚度"（浅色 6% 黑 / 深色 5% 白）。
-            // 同样收进描边内侧并避开下两角圆角区，由发丝描边补。
-            float ly0 = h - stroke - Math.max(1f, stroke);
-            if (ly0 > by0 + band * bandAlpha.length) {
-                p.setColor(GLASS_LO);
-                cv.drawRect(bx0, ly0, bx1, h - stroke, p);
-            }
-            cv.restore();
         }
 
         @Override public void setAlpha(int a) { p.setAlpha(a); invalidateSelf(); }
@@ -1893,7 +3031,7 @@ public final class Ui {
 
     public static TextView circleIconButton(Context c, int resId, int fill, int fg,
                                             float iconDp, float boxDp) {
-        TextView t = new TextView(c);
+        TextView t = new GlassTextView(c);
         t.setGravity(Gravity.CENTER);
         t.setBackground(new IconBg(c, resId, fg, fill, boxDp / 2f, iconDp));
         t.setLayoutParams(new LinearLayout.LayoutParams(dp(c, boxDp), dp(c, boxDp)));
@@ -1912,7 +3050,7 @@ public final class Ui {
      */
     public static TextView iconBox(Context c, int resId, int fill, int fg,
                                    float boxDp, float radiusDp, float iconDp) {
-        TextView t = new TextView(c);
+        TextView t = new GlassTextView(c);
         t.setGravity(Gravity.CENTER);
         t.setBackground(new IconBg(c, resId, fg, fill, radiusDp, iconDp));
         t.setLayoutParams(new LinearLayout.LayoutParams(dp(c, boxDp), dp(c, boxDp)));
@@ -2096,9 +3234,12 @@ public final class Ui {
         TextView t = text(c, s, S_HEAD, ON_BRAND, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
+        // [毛玻璃 v3] 视图高度回到 48dp（触区不变）：**不挂自绘外投影** ——
+        // 那需要给 View 内缩留边，会把按钮和整张卡的高度撑高（demo 的 box-shadow 不占布局）。
+        // 立体感改由"上亮下暗"的棱光承担（见 rimmed）。
         t.setMinHeight(dp(c, B_BTN_TOUCH));
         t.setPadding(dp(c, 16), dp(c, 9), dp(c, 16), dp(c, 9));
-        t.setBackground(insetV(c, brandPill(), (B_BTN_TOUCH - B_BTN_H) / 2f));
+        t.setBackground(insetV(c, rimmed(brandPill(), 999f, BTN_RIM_PRIMARY), (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
         return t;
@@ -2120,6 +3261,20 @@ public final class Ui {
         return d;
     }
 
+    /** 玻璃次按钮：底色 {@link #ghostPill()}，尺寸/热区与 {@link #primaryButton} 完全一致。 */
+    public static TextView ghostButton(Context c, String s) {
+        TextView t = text(c, s, S_HEAD, INK, false);
+        t.setTypeface(medium());
+        t.setGravity(Gravity.CENTER);
+        t.setMinHeight(dp(c, B_BTN_TOUCH));
+        t.setPadding(dp(c, 14), dp(c, 9), dp(c, 14), dp(c, 9));
+        // [毛玻璃 v3] **不挂外投影**：demo 的 `.btn-ghost` 只有 `inset 0 1px 0 var(--rim)`。
+        t.setBackground(insetV(c, rimmed(ghostPill(), 999f), (B_BTN_TOUCH - B_BTN_H) / 2f));
+        t.setClickable(true);
+        tap(t);
+        return t;
+    }
+
     /**
      * 主色渐变填充（上 #0A84FF → 下 #0071E3）。
      *
@@ -2134,6 +3289,9 @@ public final class Ui {
                 GradientDrawable.Orientation.TL_BR, new int[] { BRAND_G1, BRAND_G2 });
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(radiusDp);
+        // [毛玻璃 v3] 亮边：第二篇把"1px 亮色边框"列为高级玻璃感的关键细节；
+        // 主按钮同样吃这一条 —— 一圈 25% 白让它在玻璃卡上"立"起来，不再是一块平色块。
+        d.setStroke(1, 0x40FFFFFF);
         return d;
     }
 
@@ -2170,12 +3328,29 @@ public final class Ui {
      * @param fg   文字色（纯白底配 {@link #INK_ON_WHITE}）
      */
     public static TextView pillButton(Context c, String s, int fill, int fg) {
+        return pillButton(c, s, fill, fg, 0);
+    }
+
+    /**
+     * 任意底色 + **可选描边**的胶囊按钮（尺寸/热区与 {@link #primaryButton} 完全一致）。
+     *
+     * <p>[毛玻璃 v3] 为什么要描边：demo 的 `.btn-danger` 是
+     * `background:rgba(255,59,48,.16); border:.5px solid rgba(255,59,48,.28)` ——
+     * **那圈红边就是它的"高光"**。旧版 pillButton 没有描边参数，删除按钮只剩一块淡红底，
+     * 用户反馈「右边红色高光怎么没了」。
+     */
+    public static TextView pillButton(Context c, String s, int fill, int fg, int strokeColor) {
         TextView t = text(c, s, S_HEAD, fg, false);
         t.setTypeface(medium());
         t.setGravity(Gravity.CENTER);
         t.setMinHeight(dp(c, B_BTN_TOUCH));
         t.setPadding(dp(c, 14), dp(c, 9), dp(c, 14), dp(c, 9));
-        t.setBackground(insetV(c, pill(fill), (B_BTN_TOUCH - B_BTN_H) / 2f));
+        GradientDrawable d = pill(fill);
+        if (android.graphics.Color.alpha(strokeColor) > 0) {
+            d.setStroke(Math.max(1, dp(c, 0.5f)), strokeColor);
+        }
+        // [毛玻璃 v3] **不给内棱**：demo 的 `.btn-danger` 只有 background + border，没有内棱。
+        t.setBackground(insetV(c, d, (B_BTN_TOUCH - B_BTN_H) / 2f));
         t.setClickable(true);
         tap(t);
         return t;
@@ -2213,6 +3388,12 @@ public final class Ui {
      * 也是"边缘过大"的一部分。热区仍由 {@link #B_BTN_TOUCH} 48dp 保证。
      */
     public static final float B_BTN_H = 36f;
+    /**
+     * [毛玻璃 v3] 主按钮内棱的强度（demo `.btn-primary` 是 `inset 0 1px 0 rgba(255,255,255,.35)`）。
+     * 注意：**三个按钮的内棱强度按 demo 各不相同** —— 主按钮 .35（弱）、幽灵按钮 var(--rim)（强）、
+     * 危险按钮**没有内棱**。之前我给三个都套同一条 95% 白棱，用户反馈「高光也和其他的不一个质感」。
+     */
+    public static final int BTN_RIM_PRIMARY = 0x73FFFFFF;
     /** 按钮的**可点**高度（dp）：iOS 最小触区，视觉再小也不许低于它。 */
     public static final float B_BTN_TOUCH = 48f;
 
@@ -2247,9 +3428,31 @@ public final class Ui {
         // 重绘后**面板底那一层整个没被画出来** —— 只剩行卡片和按钮，背后聊天文字整片透上来。
         // 换成框架标准的 GradientDrawable（纯色不透明 + 上两角圆角），走系统优化路径，
         // 不再出现"父层底丢失"。颜色用 SURFACE（各主题档里的不透明卡片色）。
-        box.setBackground(sheetBg(c));
+        // [液态玻璃 2026-10-07] 实测 4 个弹窗**都已不再使用 FLAG_BLUR_BEHIND**（只剩 FLAG_DIM_BEHIND），
+        // 而"自绘玻璃底丢层"那条历史结论正是由 FLAG_BLUR_BEHIND 引起的 → 换真玻璃值得实测。
+        // 背后内容取 Activity 的 content 视图（弹窗窗口与 Activity 窗口都是全屏，窗口坐标可直接对齐）。
+        android.view.View behind = activityContent(c);
+        android.graphics.drawable.Drawable sheetGlass = sheetBg(c);
+        box.setBackground(behind == null ? sheetGlass : blurredGlass(behind, box, 26f, R_SHEET, sheetGlass));
         box.setPadding(dp(c, M_CARD_PAD), dp(c, 8), dp(c, M_CARD_PAD), dp(c, 14));
         return box;
+    }
+
+    /**
+     * 取 Activity 的 content 视图 —— 弹窗要糊的"背后那层"。
+     *
+     * <p>弹窗（Dialog）自带窗口，`getContext()` 往往是 ContextWrapper，需要逐层解包到 Activity；
+     * 弹窗窗口与 Activity 窗口都是全屏，因此两边的"窗口坐标"可直接相减对齐。
+     */
+    private static android.view.View activityContent(Context c) {
+        Context x = c;
+        while (x instanceof android.content.ContextWrapper) {
+            if (x instanceof android.app.Activity) {
+                return ((android.app.Activity) x).findViewById(android.R.id.content);
+            }
+            x = ((android.content.ContextWrapper) x).getBaseContext();
+        }
+        return null;
     }
 
     /**
@@ -2290,7 +3493,7 @@ public final class Ui {
      * 纯排版装饰：不可点、不给无障碍读出来。
      */
     public static TextView quoteMark(Context c) {
-        TextView t = new TextView(c);
+        TextView t = new GlassTextView(c);
         t.setText("\u201C");
         t.setTextSize(36f);
         t.setTextColor(QUOTE);
@@ -2441,3 +3644,17 @@ public final class Ui {
         return f.format(new java.util.Date(millis));
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+

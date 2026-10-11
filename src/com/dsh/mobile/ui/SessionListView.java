@@ -277,12 +277,18 @@ public final class SessionListView extends FrameLayout {
             card.setMinimumHeight(Ui.dp(ctx, 52));
             // 抽屉会话卡也浮起来（用户点名「对话卡片没有阴影」）；top/bottom 分组卡只在
             // 组边界挂影会闪，整行统一 1.5dp 柔影即可。
-            card.setElevation(Ui.dp(ctx, 1.5f));
+            // [液态玻璃 2026-10-07] 行底是半透明的 → 撤掉框架 elevation（阴影会透上来
+            // 把行压灰、行缘发黑）。抽屉的"浮起"由抽屉面板那一层玻璃给。
+            card.setElevation(0f);
             card.setPadding(Ui.dp(ctx, Ui.M_CARD_PAD) + Ui.dp(ctx, 18) * depth,
                     Ui.dp(ctx, 10), Ui.dp(ctx, 12), Ui.dp(ctx, 10));
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             card.setLayoutParams(rlp);
+            // [液态玻璃 2026-10-07] 「对话栏」的真玻璃在**抽屉面板**上（DrawerHost 的
+            // blurredGlassRoot：抽屉背后是对话页，糊出来有内容）。行本身背后是那块玻璃面板
+            // （不透明 62% 白），再给每行套一层逐帧抓取既看不出差别、又会让开抽屉时掉帧，
+            // 所以行底保持半透明奶白（透过面板的玻璃层，观感已经是磨砂卡）。
             Ui.tapRow(card, bg, Ui.PRESS);
 
             // 子会话左侧画一条竖向导引线：一眼看出它挂在上面那个父会话下面

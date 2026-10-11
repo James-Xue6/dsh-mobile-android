@@ -69,9 +69,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onOpenPlan();
         /** 点「待发送」条上的一条：弹出 立即插入 / 编辑 / 删除（itemId 来自网关队列）。 */
         void onQueueItemAction(String itemId, String text);
+        /** [V3.89] 点消息里的**文件链接/路径** ⇒ 打开预览（相对路径由宿主兜底）。 */
+        void onOpenPath(String path, String label);
         void onVoiceInput();
         void onPickImage();
         void onDownloadFile(ChatItem item, String path);
+        /** [V3.76] 交付物：**先打开预览**（宿主把文件落到预览缓存并打开 `ArtifactActivity`）。 */
+        void onPreviewFile(ChatItem item, String path);
         void onCopyPath(String path);
 
         // ---- 2026-10-05 四项优化（契约 docs/CONTRACT-20261005.md §3.2，签名逐字冻结）
@@ -103,6 +107,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     private LinearLayout inputBarHost;
     /** 顶栏下沿的发丝线。 */
     private View barLine;
+    /** 顶栏浮层容器（[毛玻璃 v3] 浮在列表上的玻璃胶囊，挂进 stage 当 overlay）。 */
+    private LinearLayout barBox;
     private final TextView banner;
     private final ListView list;
     private final ChatAdapter adapter;
@@ -195,8 +201,23 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      * <p>[P0 修复·灰框] 改前这里是固定 132dp 的层高：底部渐隐从屏幕底往上铺 462px，
      * 卡片一滚进这个区间就像被一块灰幕盖住（用户两次反馈"渐变太大""一滑动就有灰框"）。
      * 现在层高改为**跟随底部悬浮层实测高度 + 这一小段余量**，渐隐只作用在输入区正上方。
+     *
+     * <p>[毛玻璃 v3 修正] 余量从 18dp 提到 120dp：玻璃变薄（卡体 36%、胶囊 60%）后，
+     * 消息正文会从**胶囊上方那一小段**透出来（chip 行与胶囊之间），截图里能看到一行行"鬼影"。
+     * 120dp ≈ chip 行 + 一行多消息的高，把 chip 行所在的范围也纳入渐隐的 95% 不透明段。
+     * 多出的 100dp 落在渐隐**最透明的那一段**（顶部），不会形成灰幕，但足以把内容压到看不见。
      */
-    private static final float FADE_MARGIN_DP = 18f;
+    private static final float FADE_MARGIN_DP = 40f;
+    /**
+     * [毛玻璃 v3] 顶栏浮层距 stage 顶部的距离（dp）——demo 是 8px，这里取 6dp 更贴状态栏。
+     */
+    private static final float BAR_TOP_DP = 6f;
+    /**
+     * [毛玻璃 v3] 列表顶部要让开的留白（dp）= 顶栏浮层（6dp 上边距 + 44dp 胶囊）+ 12dp 余量。
+     * 列表铺满整个 stage（消息从胶囊下面滚过并被真模糊糊掉），所以必须靠内边距把首条消息
+     * 推到胶囊下方。
+     */
+    private static final float BAR_CLEAR_DP = 72f;
     /**
      * 底部渐隐层的高度上限（相对本 View 高度）。
      *
@@ -286,14 +307,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // [毛玻璃 v3] 透明（环境背景由 MainActivity 根容器铺）。
         setBackgroundColor(android.graphics.Color.TRANSPARENT);
 
-        // ---- 顶部栏（iOS 导航栏：44dp、细箭头返回、标题 17sp 粗体、底部一条发丝线）
-        // [毛玻璃 v3] 顶栏回到**玻璃条**（demo 的 .glass-bar）：顶栏与列表在本页是上下两行、
-        // 互不重叠（消息不会钻到顶栏底下），所以薄玻璃只透出环境背景、不会撞字。
-        // 旧注释里那条"浅底上渲染成实心白条"的前提（页面底=浅薰衣草纯色）已经不成立。
+        // ---- 顶部栏（demo 制式：**浮在列表上的圆角玻璃胶囊**，不是通栏玻璃条）
+        // 胶囊的底在 barBox 上（真模糊 + 玻璃层，见 applyBarGlass），这里只管内容。
         LinearLayout bar = Ui.row(ctx);
         barRow = bar;
-        barBg = Ui.glassBar();
-        bar.setBackground(barBg);
         bar.setMinimumHeight(Ui.dp(ctx, 44));
         bar.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 5), Ui.dp(ctx, 8), Ui.dp(ctx, 5));
 
@@ -330,15 +347,16 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         menu.setContentDescription("更多");
         menu.setOnClickListener(v -> host.onMenu());
         bar.addView(menu);
-        addView(bar, Ui.fill());
+        // [毛玻璃 v3 · 真模糊] 顶栏不再挂进根容器（那会渲染成一条**通栏灰带**，一眼假），
+        // 改成 demo 制式：**浮在消息列表之上的圆角玻璃胶囊**，等 stage 建好后再挂上去
+        // （见下面「顶栏浮层」一段）。这里先装进一个竖向容器，方便整体定位。
+        barBox = Ui.col(ctx);
+        barBox.addView(bar, Ui.fill());
         View barLine = new View(ctx);
-        barLine.setBackgroundColor(Ui.GLASS_HAIRLINE);   // [毛玻璃 v3] 白棱发丝线（原来是深色 HAIRLINE）
+        barLine.setBackgroundColor(0x00000000);   // 胶囊自带白棱描边，不再需要通栏发丝线
         this.barLine = barLine;
         barLine.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(ctx, 0.5f))));
-        // 同 SettingsView：Ui.fill() 高度是 WRAP_CONTENT，普通 View 在 AT_MOST 下会吃满
-        // 剩余高度 —— 会话页会因此只剩标题栏（正文/输入条全被挤掉）。
-        addView(barLine);
 
         // ---- 状态横幅（可点时整条可点）
         banner = Ui.text(ctx, "", Ui.S_FOOT, Ui.BANNER_WARN_FG, false);
@@ -417,6 +435,14 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             @Override public void onScroll(AbsListView view, int first, int visible, int total) {
                 atBottom = computeAtBottom();
                 if (toBottom != null) toBottom.setVisibility(atBottom ? GONE : VISIBLE);
+                // [2026-10-07 **「滑动时玻璃里的画面不动」的真因**] 玻璃件的模糊底是在**自己的
+                // draw()** 里抓的；而滚动时窗口只会重绘"脏区"（列表那一块），顶栏/输入条/
+                // 磨砂板这些**固定悬浮件根本不会被重绘** → 它们的玻璃一直停在上一帧的画面。
+                // 实测：列表滚了（40% 像素变化），顶栏区域差=0，完全没变。
+                // 修法：滚动时显式 invalidate 这些玻璃件，逼它们重新抓取。
+                if (barBox != null) barBox.invalidate();
+                if (bottomStackView != null) bottomStackView.invalidate();
+                if (inputBarHost != null) inputBarHost.invalidate();
                 // 触顶就请求更早的一页。`canScrollVertically(-1)` 只在"第一条被顶出去一截"
                 // 时为真 —— 恰好停在最顶端、再往下拽时它是 false，那时就什么都不会加载
                 // （用户报的"往上看不到更早的内容"有一部分就是这个）。
@@ -484,6 +510,28 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         stage.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         stage.addView(listWrap);
+
+        // ---- 顶栏浮层（[毛玻璃 v3 · 真模糊]）
+        //
+        // demo 的顶栏是 `position:absolute; left:8px; right:8px; border-radius:22px` 的
+        // **浮动玻璃胶囊**，消息从它下面滚过并被真模糊糊掉。旧版把顶栏做成根容器里的一行
+        // 通栏玻璃条 —— 那不叫玻璃，就是一条灰带（用户原话「这设计太傻了」）。
+        // 现在：胶囊挂在 stage 里当 overlay，列表铺满整个 stage（消息从胶囊下面过），
+        // 胶囊的底 = 真·背景模糊（糊列表）+ 玻璃层。
+        FrameLayout.LayoutParams barLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        barLp.gravity = Gravity.TOP;
+        barLp.leftMargin = Ui.dp(ctx, 8);
+        barLp.rightMargin = Ui.dp(ctx, 8);
+        barLp.topMargin = Ui.dp(ctx, BAR_TOP_DP);
+        barBox.setLayoutParams(barLp);
+        // [液态玻璃 2026-10-07] 顶栏底已换成半透明玻璃 → 不能再挂框架 elevation：
+        // 阴影会从半透明面板透上来（顶栏发灰 + 边缘一圈黑边）。浮起感由玻璃层自身的
+        // 白棱 + 顶部高光给。
+        barBox.setElevation(0f);
+        stage.addView(barBox);
+        applyBarGlass();
+
         // 「回到底部」按钮改挂到舞台层（列表之上、悬浮层之下按添加顺序 == 悬浮层之上），
         // 这样它的位置能跟着悬浮层高度走，不会被「N 子智能体」入口盖住。
         stage.addView(toBottom, toBottomFlp);
@@ -492,7 +540,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 悬浮输入条下方必须让内容**淡出**，否则消息文字硬撞胶囊、两层字糊在一起。
         // 这是原生能做到的"磨砂替身"——真·背景模糊只有独立窗口才能做（Dialog 那条路），
         // 普通 View 无 API 可用。渐隐层在列表之上、输入区之下。
-        if (listBasePadTop == 0) listBasePadTop = Ui.dp(ctx, 12);
+        if (listBasePadTop == 0) listBasePadTop = Ui.dp(ctx, BAR_CLEAR_DP);
         bottomFade = new View(ctx);
         // [P0 修复·灰框] 初始只给"余量"那么高；真实高度在下面 bottomStack 的布局监听里
         // 按悬浮层实测高度动态设置（悬浮层多高，渐隐就多高 + FADE_MARGIN_DP）。
@@ -550,8 +598,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         FrameLayout.LayoutParams tfLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 40));
         tfLp.gravity = Gravity.TOP;
+        tfLp.topMargin = Ui.dp(ctx, BAR_CLEAR_DP);   // [毛玻璃 v3] 让开浮起来的顶栏胶囊
         topFade.setLayoutParams(tfLp);
         topFade.setBackground(buildTopFade(ctx));
+        topFade.setVisibility(GONE);   // [毛玻璃 v3] 初始必须 GONE：没有目标卡时它是一条白硬边
         stage.addView(topFade);
 
         FrameLayout.LayoutParams planTopLp = new FrameLayout.LayoutParams(
@@ -560,7 +610,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 与底部输入框同侧边距（M_SIDE=16dp），不要通到两边
         planTopLp.leftMargin = Ui.dp(ctx, Ui.M_SIDE);
         planTopLp.rightMargin = Ui.dp(ctx, Ui.M_SIDE);
-        planTopLp.topMargin = Ui.dp(ctx, 6);
+        planTopLp.topMargin = Ui.dp(ctx, BAR_CLEAR_DP);   // [毛玻璃 v3] 目标卡排在顶栏胶囊下方
         stage.addView(planView, planTopLp);
         planView.addOnLayoutChangeListener((v, l, tt, r, b, ol, ot, or, ob) -> {
             boolean hasCard = v.getVisibility() == View.VISIBLE && planFullText != null && !planFullText.trim().isEmpty();
@@ -595,6 +645,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         bsLp.gravity = Gravity.BOTTOM;
         stage.addView(bottomStack, bsLp);
+
+        // [毛玻璃 v3 · 真模糊] 底部悬浮区整体加一层**磨砂底板**：
+        //   底 = 真模糊（糊列表）+ 上透明→下玻璃的渐变 tint。
+        // 为什么不能只靠"渐隐"：渐隐是半透明色块，chip 行与胶囊之间的**缝隙**照样透出正文
+        // （截图里能看到 "MainActivity is not abstract…" 从 chip 缝里露出来）。有了真模糊，
+        // 缝隙里透出的是**糊掉的内容**，这才是 demo 的观感；而且上缘用渐变收口，不会有硬边。
+        applyBottomShelf();
 
         // **底部留白按悬浮层实际高度算（2026-10-04 用户报「子智能体这条把最下面的字挡住了」）**：
         // 固定 92dp 只够输入胶囊；「N 子智能体」入口出现时悬浮层会高出一截，最后一条消息
@@ -680,8 +737,12 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         inputBarHost = inputBar;
         inputBarBg = new Ui.CardBg(999f, Ui.GLASS_INPUT, Ui.dp(ctx, 1f),
                 Ui.LINE, 0x00000000, 0f);
-        inputBar.setBackground(inputBarBg);
-        inputBar.setElevation(Ui.dp(ctx, 3f));   // 悬浮输入条也该有影子（不透明胶囊，安全）
+        // [毛玻璃 v3 · 真模糊] 胶囊背后也是消息列表：真模糊（糊列表）+ 玻璃层。
+        // 圆角必须与玻璃层一致（999 = 胶囊），否则模糊底会在胶囊外露方角。
+        inputBar.setBackground(Ui.blurredGlassRoot(inputBar, 26f, 999f, inputBarBg));
+        // [液态玻璃 2026-10-07] 胶囊底已是真玻璃（半透明）→ 撤掉框架 elevation：
+        // 否则阴影透上来把胶囊压灰、边缘发黑（旧注释"不透明胶囊，安全"已不成立）。
+        inputBar.setElevation(0f);
         inputBar.setPadding(Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6), Ui.dp(ctx, 6));
 
         // [P0 修复·输入胶囊] 用带**像素级硬上限**的 EditText：maxLines 只约束行数，
@@ -711,6 +772,9 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
         pick = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_plus,
                 Ui.CHIP_BG, Ui.INK_SUB, 18f, 34f);
+        // [液态玻璃 2026-10-07] 用户要求「对话框按钮」也换真玻璃：输入条上的 + / ↑
+        // 两个圆钮各垫一层真·背景模糊（它们浮在输入胶囊/底部磨砂板之上，背后是消息列表）
+        Ui.ambientBacked(pick, 999f);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(Ui.dp(ctx, 34), Ui.dp(ctx, 34));
         plp.rightMargin = Ui.dp(ctx, 6);
         pick.setLayoutParams(plp);
@@ -720,6 +784,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
 
         action = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_arrow_up,
                 Ui.BRAND_FILL, Ui.ON_BRAND, 20f, 36f);
+        // [液态玻璃 2026-10-07] 发送钮同样垫真模糊：品牌实心圆降到 88%，
+        // 底下的模糊才透得出来（100% 不透明的圆包了等于没包）
+        if (action.getBackground() != null) action.getBackground().setAlpha(224);
+        Ui.ambientBacked(action, 999f);
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(Ui.dp(ctx, 36), Ui.dp(ctx, 36));
         alp.leftMargin = Ui.dp(ctx, 8);
         action.setLayoutParams(alp);
@@ -1173,12 +1241,71 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         }
     }
 
-    /** 顶部渐隐：GLASS_BAR → 半透明 → 全透明（从上往下），与底部渐隐镜像。 */
-    private android.graphics.drawable.Drawable buildTopFade(Context c) {
-        int rgb = Ui.GLASS_BAR & 0x00FFFFFF;   // [毛玻璃 v3] 同底部渐隐：透到玻璃体，不刷实色
+    /**
+     * 底部悬浮区的**磨砂底板** = 真模糊（糊列表）+ 上透明→下玻璃的渐变 tint。
+     *
+     * <p>上缘必须透明收口：否则会在列表中间出现一条硬边（正是旧版渐隐被用户嫌弃的那种
+     * "一块盖住列表的灰幕"）。下缘铺到 GLASS_SHEET，与输入胶囊同一族。
+     */
+    /**
+     * 模糊要抓的"下层内容"：**应用自己的根容器**（DecorView 下面那一层）。
+     *
+     * <p>为什么不直接 {@code getRootView()}：那返回的是 DecorView，它走**窗口的硬件层**，
+     * {@code draw(softwareCanvas)} 什么都画不出来（实测 hits=0/18900）。
+     * 而应用根容器是普通 ViewGroup（环境背景就挂在它上面），软件画布画得出来 ——
+     * 这一层才同时含"环境背景 + 内容"，糊出来才是不透明的、能真正替换掉背后的清晰内容。
+     */
+    private android.view.View blurSource() {
+        android.view.View v = this;
+        while (v.getParent() instanceof android.view.View) {
+            android.view.View pv = (android.view.View) v.getParent();
+            // pv 的 parent 不是 View ⇒ pv 就是 DecorView ⇒ **v** 才是应用根容器。
+            // （上一版这里 return pv，把 DecorView 当成了源 —— 它是窗口层，抓取恒为 0，
+            //   所以"抓根容器抓不到"那个结论是错的，是我这个函数写错了。）
+            if (!(pv.getParent() instanceof android.view.View)) return v;
+            v = pv;
+        }
+        return v;
+    }
+
+    private void applyBottomShelf() {
+        if (bottomStackView == null || list == null) return;
+        int sheet = Ui.GLASS_SHEET;
+        int rgb = sheet & 0x00FFFFFF;
+        android.graphics.drawable.GradientDrawable tint =
+                new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[] { rgb, rgb | 0x99000000, sheet });
+        // 模糊的源取**应用根容器**（含环境背景），不是列表本身 ——
+        // 列表背景是透明的，只抓它的话糊出来的是半透明层，底下**清晰**的正文照样透上来，
+        // 看起来就像"没糊"。抓整页才有不透明的底可糊（BlurView 也是抓一个完整的内容层）。
+        bottomStackView.setBackground(Ui.blurredGlassRoot(bottomStackView, 26f, 0f, tint));
+    }
+
+    /**
+     * 顶栏玻璃底 = **真·背景模糊（糊列表）** + 玻璃层（tint + 斜射高光 + 白棱）。
+     *
+     * <p>模糊半径取 demo 的 `--blur-bar: 34px`，圆角 22px（demo 的 `.glass-bar` 圆角）。
+     * 主题切换时玻璃层的色是烘进去的，必须重建（见 {@link #applyTheme()}）。
+     */
+    private void applyBarGlass() {
+        if (barBox == null || list == null) return;
+        // 模糊源 = **应用根容器**（绘制期解析，见 Ui.blurredGlassRoot 的注释）：
+        // 取列表本身糊出来仍是半透明层（实测 ListView 直接离屏抓取全透明），
+        // 底下清晰的正文会照样透上来 —— 等于没糊。
+        // [2026-10-07 修复] 本行原来被一个**字面量 \r\n**（不是换行）吞进了上一行的
+        // `//` 注释里 → barBox 背景恒为 null，顶栏玻璃/模糊整条失效（实测 bg=null）。
+        barBox.setBackground(Ui.blurredGlassRoot(barBox, 34f, 22f, Ui.glassBar(22f)));
+    }
+
+    /** 顶部渐隐：GLASS_BAR → 半透明 → 全透明（从上往下），与底部渐隐镜像。 */    private android.graphics.drawable.Drawable buildTopFade(Context c) {
+        int rgb = Ui.GLASS_BAR & 0x00FFFFFF;
+        int solid = rgb | 0xF4000000;
+        int half  = rgb | 0xA8000000;
+        int faint = rgb | 0x44000000;
         return new android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { Ui.GLASS_BAR, rgb | 0xAA000000, rgb });
+                new int[] { solid, half, faint, rgb });
     }
 
     /** 文字/高度变化后补算顶部留白（多次 post，覆盖"换行后高度变化"的时序）。 */
@@ -1538,7 +1665,8 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             if (it.kind != ChatItem.TOOL) continue;
             anyTool = true;
             kinds.add(StepProcess.activity(it.toolName));
-            names.add(it.toolName == null || it.toolName.isEmpty() ? "工具" : it.toolName);
+            // [V3.78] 摘要里**不再出现原始英文工具名**（用户："一会英文一会中文"）
+            names.add(StepProcess.toolNameCn(it.toolName));
             if (it.toolError) anyError = true;
             // toolRunning 可能因为历史窗口里没有 turn/end 而残留在 true：
             // 只有整个回合确实还在跑时才算"正在运行"，否则按已完成处理。
@@ -1550,13 +1678,13 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         ChatItem row = ChatItem.of(ChatItem.STEP, "compact:" + view.size() + ":" + kinds.size(), "");
         StringBuilder sb = new StringBuilder();
         if (lastRunningTool != null) {
+            // [V3.78] 运行中也**不带工具名**：那条尾巴每来一个事件就重写一次 ⇒ 就是"一直闪烁"的来源。
             sb.append(StepProcess.runningLabel(StepProcess.activity(lastRunningTool.toolName)))
-                    .append(" · ").append(lastRunningTool.toolName.isEmpty() ? "工具" : lastRunningTool.toolName)
                     .append('…');
             row.stepRunning = true;
         } else {
             sb.append(StepProcess.title(kinds));
-            // 只有一次调用时把工具名带上，让「一句话」本身就能读懂做了什么
+            // 只有一次调用时把工具名带上（**中文名**），让「一句话」本身就能读懂做了什么
             if (names.size() == 1) sb.append(" · ").append(names.get(0));
         }
         if (anyError) sb.append("（有失败）");
@@ -1883,19 +2011,30 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
      */
     private static android.graphics.drawable.Drawable buildFade(Context c) {
         // [毛玻璃 v3] 渐隐不再刷纯色 Ui.BG：页面底已是彩色环境背景，刷实色会在页底留一块
-        // 对不上的灰幕。改成**透到玻璃体**（GLASS_SHEET，与悬浮胶囊同一族）——
+        // 对不上的灰幕。改成**透到玻璃体**（GLASS_SHEET 同色）——
         // 于是"内容淡出"看起来就是玻璃自身的厚度，而不是一块盖上去的遮罩。
+        //
+        // **必须收到接近不透明**（2026-10-06 模拟器实测）：只到 GLASS_SHEET 的 76% 时，
+        // 消息正文会以约 8% 透到输入胶囊里，和胶囊自己的占位文字叠成"重影"
+        // （截图 02-chat-light 可见）。原生没有真背景模糊，这一层就是唯一的遮挡，
+        // 所以末端取 95%，前端仍留全透明让内容平滑淡出。
+        // 95% 比上一版 92% 更狠：上一轮 GLASS_INPUT 提到 68%，胶囊本身挡住一部分；
+        // 这一轮把它降到 60% 让 demo 的"下层透出来"的感觉回来，胶囊薄了，渐隐必须更狠。
         int rgb = Ui.GLASS_SHEET & 0x00FFFFFF;   // 同色、全透明
-        int half = rgb | 0x66000000;             // 同色、40%
+        // [毛玻璃 v3] 余量加大到 120dp 后，渐隐区上半段要让消息"缓缓消失"，下半段快速不透明
+        int faint = rgb | 0x44000000;            // 同色、27%
+        int half  = rgb | 0xA8000000;            // 同色、66%
+        int solid = rgb | 0xF4000000;            // 同色、96%（遮挡）
         return new android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { rgb, half, Ui.GLASS_SHEET });
+                new int[] { rgb, faint, half, solid });
     }
 
     public void applyTheme() {
         // [毛玻璃 v3] 透明（环境背景由 MainActivity 根容器铺）。
         setBackgroundColor(android.graphics.Color.TRANSPARENT);
         if (bottomFade != null) bottomFade.setBackground(buildFade(ctx));   // 渐隐色随主题
+        applyBottomShelf();                                                 // [毛玻璃 v3] 磨砂底板
         if (topFade != null) topFade.setBackground(buildTopFade(ctx));
         if (modelChip != null) {
             for (TextView c : new TextView[] { projectChip, modelChip, permissionChip,
@@ -1908,9 +2047,10 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         // 附件条：胶囊底色/文字色也是创建时烘进去的，主题切换必须整条重画
         // （缩略图有缓存，重建不会重新解码）。
         if (attachRow != null) rebuildAttachStrip();
-        // 顶栏/preInput：顶栏回到玻璃条（[毛玻璃 v3]），下沿发丝线改白色
-        if (barRow != null) barRow.setBackground(Ui.glassBar());
-        if (barLine != null) barLine.setBackgroundColor(Ui.GLASS_HAIRLINE);
+        // 顶栏：[毛玻璃 v3] 玻璃胶囊的底挂在 barBox 上（含真模糊），主题变了必须重建
+        if (barRow != null) barRow.setBackground(null);
+        if (barLine != null) barLine.setBackgroundColor(0x00000000);
+        applyBarGlass();
         if (backBtn != null) Ui.setIcon(backBtn, com.dsh.mobile.R.drawable.ic_chevron_left, Ui.BRAND);
         if (menuBtn != null) Ui.setIcon(menuBtn, com.dsh.mobile.R.drawable.ic_more, Ui.INK_SUB);
         if (title != null) title.setTextColor(Ui.INK);
@@ -1927,7 +2067,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
             // 主题切换必须重建输入条胶囊（旧版漏了这条 → 深色下输入条还是浅白底）
             inputBarBg = new Ui.CardBg(999f, Ui.GLASS_INPUT, Ui.dp(ctx, 1f),
                     Ui.LINE, 0x00000000, 0f);
-            inputBarHost.setBackground(inputBarBg);
+            inputBarHost.setBackground(Ui.blurredGlassRoot(inputBarHost, 26f, 999f, inputBarBg));
         }
         if (subEntry != null) {
             subEntry.setTextColor(Ui.BRAND);
@@ -1953,10 +2093,27 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
     }
 
     // ---- ChatAdapter.Host 转发
+    /**
+     * [V3.3 镜像用] 当前列表**真正显示**的行 —— 已经按「完整 / 简洁」模式跑过 {@link #applyFilter()}。
+     *
+     * <p>为什么需要它：Compose 版对话页要显示与旧页**同一份可见行**（简洁模式会把一串工具调用压成一条
+     * STEP 摘要行，这个变换只在旧视图里）。镜像侧拿不到 {@code adapter}，所以补这个只读 getter。
+     * **纯新增，不改任何既有行为。**
+     */
+    public java.util.List<ChatItem> visibleItems() {
+        if (adapter == null) return new java.util.ArrayList<>();
+        java.util.List<ChatItem> list = adapter.items();
+        return list == null ? new java.util.ArrayList<ChatItem>() : list;
+    }
+
     @Override public void onDownloadFile(ChatItem item, String path) { host.onDownloadFile(item, path); }
+    // [V3.76] 点交付物 = 先打开预览（下载仍走 onDownloadFile：长按/保存按钮）
+    @Override public void onPreviewFile(ChatItem item, String path) { host.onPreviewFile(item, path); }
     @Override public void onCopyPath(String path) { host.onCopyPath(path); }
     @Override public void onApprove(ChatItem item, String outcome) { host.onApprove(item, outcome); }
     @Override public void onQuestionSubmit(ChatItem item, JSONArray answers) { host.onQuestionSubmit(item, answers); }
     @Override public void onQuestionCancel(ChatItem item) { host.onQuestionCancel(item); }
 }
+
+
 

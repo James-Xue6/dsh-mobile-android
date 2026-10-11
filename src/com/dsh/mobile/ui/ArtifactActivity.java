@@ -121,7 +121,72 @@ public final class ArtifactActivity extends Activity {
         sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titles.addView(sub);
         bar.addView(titles);
+
+        // [V3.76 · 用户「先以打开为主，**打开后增加一个保存的按钮**，愿意保存的就保存，不愿意就直接打开看」]
+        //   ⇒ 预览页顶栏加一个「保存」：把这份**已在预览缓存里的文件**复制进手机「下载」目录
+        //     （不必再回网关下载一次 —— 文件本来就已经完整落到本机了）。
+        TextView save = Ui.text(this, "保存", Ui.S_BODY, Ui.BRAND, true);
+        save.setPadding(Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6));
+        save.setContentDescription("保存到手机下载目录");
+        save.setOnClickListener(v -> { Ui.haptic(v); saveToDownloads(); });
+        bar.addView(save);
         return bar;
+    }
+
+    /**
+     * [V3.76] 把预览缓存里的文件**另存一份进手机「下载」目录**。
+     *
+     * <p>为什么不回调网关再下一次：文件在进入预览前就已经**完整校验并落盘**（`finishDownload` 里
+     * sha256 通过才走 preview 分支）⇒ 直接本地复制即可，且离线也能存。
+     */
+    private void saveToDownloads() {
+        if (file == null || !file.exists() || !file.isFile()) {
+            android.widget.Toast.makeText(this, "文件不在了，回对话里重新点一下打开",
+                    android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String name = file.getName();
+        new Thread(() -> {
+            String where = null;
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    android.content.ContentValues cv = new android.content.ContentValues();
+                    cv.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name);
+                    cv.put(android.provider.MediaStore.Downloads.MIME_TYPE,
+                            android.webkit.MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(extOf(name).toLowerCase(Locale.ROOT)));
+                    android.net.Uri uri = getContentResolver().insert(
+                            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    if (uri != null) {
+                        try (java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+                             java.io.InputStream is = new java.io.FileInputStream(file)) {
+                            if (os == null) throw new java.io.IOException("no stream");
+                            byte[] buf = new byte[64 * 1024];
+                            int n;
+                            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+                        }
+                        where = "下载目录";
+                    }
+                } else {
+                    File dir = android.os.Environment
+                            .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+                    if (dir != null && (dir.exists() || dir.mkdirs())) {
+                        File out = new File(dir, name);
+                        try (java.io.OutputStream os = new java.io.FileOutputStream(out);
+                             java.io.InputStream is = new java.io.FileInputStream(file)) {
+                            byte[] buf = new byte[64 * 1024];
+                            int n;
+                            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+                        }
+                        where = out.getAbsolutePath();
+                    }
+                }
+            } catch (Throwable ignored) { }
+            final String w = where;
+            runOnUiThread(() -> android.widget.Toast.makeText(this,
+                    w == null ? "保存失败（存储不可写）" : ("已保存到 " + w),
+                    android.widget.Toast.LENGTH_LONG).show());
+        }).start();
     }
 
     /** 第二行小字：类型 + 大小（"HTML · 12.3 KB"）。 */

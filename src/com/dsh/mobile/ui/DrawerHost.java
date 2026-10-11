@@ -43,6 +43,8 @@ public final class DrawerHost extends FrameLayout {
     private final FrameLayout content;
     private final View scrim;
     private final FrameLayout drawer;
+    /** 抽屉的玻璃底（独立子 View，见构造里的说明）。 */
+    private final View bg;
 
     /** 抽屉当前平移量：0 = 全开，-drawerWidth = 全关。 */
     private float tx;
@@ -80,10 +82,20 @@ public final class DrawerHost extends FrameLayout {
         // **不给抽屉挂 elevation**（2026-10-03 模拟器实测）：抽屉底板是 88% 不透明的玻璃，
         // 系统的 elevation 阴影同样会从半透明体下面透出来，在面板内部画出一圈灰环。
         // 抽屉与内容层的分界改由「遮罩 + 右缘 1px 发丝线（见 applyDrawerBg）+ 真模糊」承担。
-        applyDrawerBg();
         // 宽度在 onMeasure 里按屏宽比例写进 LayoutParams；先丢到屏幕外，避免首帧闪一下
         drawer.setTranslationX(-100000f);
+        bg = new View(ctx);
+        bg.setElevation(0f);
+        // [V3.9.4] 玻璃底单独放一个子 View，不挂 `drawer` 身上：
+        // `drawer` 现在会带**安全区内边距**（applySafeInsets），而 View 的背景是**按 padding 盒**绘制的
+        // —— 挂在 drawer 上的玻璃底会被裁短/形状错位，面板内部会多出一圈"边"。
+        // 独立子 View 不参与 drawer 的 padding，玻璃始终铺满整块面板。
+        addView(bg, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        drawer.setBackground(null);
+        drawer.setElevation(0f);
         addView(drawer, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        // 玻璃底必须在 bg 建好之后再画（顺序写错会 NPE，2026-10-08 实测崩过一次）
+        applyDrawerBg();
 
         ViewConfiguration vc = ViewConfiguration.get(ctx);
         touchSlop = vc.getScaledTouchSlop();
@@ -134,31 +146,90 @@ public final class DrawerHost extends FrameLayout {
      * （88~90% 不透明）。抽屉是"厚玻璃"——它盖住的是对话内容，太透会让两层文字互相干扰。
      * 配合 {@link #applyTx} 里对 content 挂的**真模糊**，右侧透出来的内容才是"磨砂玻璃后的影子"。
      */
-    private void applyDrawerBg() {
-        Context c = getContext();
+    /** [V3.94] 两色按比例混合（`t=0` 全 a、`t=1` 全 b）—— 用于"白底混一点点主题色"。 */
+    private static int blend(int a, int b, float t) {
+        float u = 1f - t;
+        return android.graphics.Color.argb(
+                (int) (android.graphics.Color.alpha(a) * u + android.graphics.Color.alpha(b) * t),
+                (int) (android.graphics.Color.red(a) * u + android.graphics.Color.red(b) * t),
+                (int) (android.graphics.Color.green(a) * u + android.graphics.Color.green(b) * t),
+                (int) (android.graphics.Color.blue(a) * u + android.graphics.Color.blue(b) * t));
+    }
+
+    private void applyDrawerBg() {        Context c = getContext();
         // [毛玻璃 v3] 抽屉 = 厚玻璃 + 135° 斜射高光 + 白色右缘发丝线（demo 的 .drawer 制式：
         // `--noise, --sheen, --glass-sheet` 三层 + `border: .5px solid rgba(255,255,255,.5)`）。
         android.graphics.drawable.GradientDrawable sheen =
                 new android.graphics.drawable.GradientDrawable(
                         android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
                         new int[] { Ui.SHEEN_1, Ui.SHEEN_2, 0x00FFFFFF });
+        // [液态玻璃 2026-10-07] 抽屉底升级为**真模糊 + 折射**（Ui.blurredGlass 已按《真液态玻璃制作规范》
+        // 重写 lens：smoothstep + 法线推挤 + 切向弧线 + 双线性 + 向内收）。源取抽屉背后的 content。
+        // 抽屉在 Activity 视图树内（不是 Dialog 窗口），自绘底不会丢层，可安全使用。
         android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
                 new android.graphics.drawable.Drawable[] {
-                        Ui.round(0, Ui.GLASS_SHEET),
+                        // [V3.22 修「抽屉右侧那条竖条」] 折射幅度按调用处传 **0**：
+                        //   抽屉底是整屏高的大面板、且父容器不裁四边，旧引擎 CPU lens 的位移在近均匀底色上
+                        //   会在面板内侧 ≈11dp 处留一条竖向色阶缝（实测列均值 213→205→216）。
+                        //   置 0 后该缝消失、边缘变成平滑过渡；顶栏/输入条/底部条仍用默认 38px（不受影响）。
+                        // [V3.26 用户报①「侧抽屉界面底边白色有点太实，再透明点」]
+                        //   按**调用处**把 GLASS_SHEET 的不透明度降到 82%（不动全局 token ——
+                        //   设置页折叠卡 / 底栏也在用 GLASS_SHEET，避免连坐）。
+                        // [V3.94 · 用户「白底能不能改成**微微的主题色，弱一点**」]
+                        // [V3.97 · 用户再次指出「抽屉底色**还没修复**，这个白**太白了**，都说了切换成
+                        //   **主题色的磨砂虚化**做背景，要求**浅一些**，白里面**微微有一些**就行，
+                        //   能看出和右侧原背景的**层次**」]
+                        //   ⇒ 上一版我只混了 8% 主题色、还把不透明度提到 0.90 ⇒ 更白了 ✗（读错了意图）。
+                        //   现在：主题色占比 **8% → 22%**（看得出是"带色的白"）+ 不透明度 **0.90 → 0.55**
+                        //   （更透、更虚化，右侧原背景能透出层次）。两个质感数值，符合 SOP。
+                        Ui.blurredGlassRoot(bg, 34f, 0f,
+                                Ui.round(0, Ui.alpha(blend(Ui.GLASS_SHEET, Ui.BRAND_FILL, 0.22f), 0.55f)), 0f),
                         sheen,
                         new android.graphics.drawable.ColorDrawable(Ui.GLASS_HAIRLINE) });
         ld.setLayerGravity(2, android.view.Gravity.END);
         ld.setLayerWidth(2, Math.max(1, Ui.dp(c, 0.5f)));
         ld.setLayerHeight(2, LayoutParams.MATCH_PARENT);
-        drawer.setBackground(ld);
+        bg.setBackground(ld);
     }
 
     public boolean isOpen() { return open; }
 
+    /**
+     * [V3.106 · 发布前检查 B3] 玻璃弹窗（独立全屏宿主）是否正显示在最上层。
+     *
+     * <p>`true` 时 `onInterceptTouchEvent` **不再**把"右侧露出条"的按下事件抢给抽屉容器 ——
+     * 否则用户点弹窗遮罩的那一块会变成"关掉抽屉、弹窗还在"（真机实测）。
+     * 默认 `false` = 与改动前**逐字一致**（符合"共用/既有组件加可选参数、默认不改行为"的规则）。
+     */
+    private boolean sheetOnTop = false;
+
+    public void setSheetOnTop(boolean on) { sheetOnTop = on; }
+
     public void openDrawer(boolean animate) {
         open = true;
+        applySafeInsets();
         if (!animate || drawerWidth <= 0) { anim = null; applyTx(0f); return; }
         animateTo(0f);
+    }
+
+    /**
+     * [V3.5 app-wide 全面屏] 抽屉是**盖在内容屏之上**的悬浮层，而 Compose 屏的根容器不再统一留
+     * 系统栏内边距（为的是让环境背景铺到屏幕最上/最下沿）⇒ 抽屉得**自己让开状态栏与手势条**。
+     *
+     * <p>只内缩 {@code drawer} 的 **padding**：View 的背景画在完整 bounds 上，所以抽屉玻璃仍然铺满整高，
+     * 只有里面的文字/图标让开安全区。
+     */
+    private void applySafeInsets() {
+        try {
+            android.view.WindowInsets wi = getRootWindowInsets();
+            if (wi == null) return;
+            int top = wi.getSystemWindowInsetTop();
+            int bottom = wi.getSystemWindowInsetBottom();
+            if (drawer.getPaddingTop() != top || drawer.getPaddingBottom() != bottom) {
+                drawer.setPadding(drawer.getPaddingLeft(), top, drawer.getPaddingRight(), bottom);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     public void closeDrawer(boolean animate) {
@@ -176,6 +247,11 @@ public final class DrawerHost extends FrameLayout {
         int dw = Math.max(1, Math.round(w * fractionFor(w, h)));
         LayoutParams lp = (LayoutParams) drawer.getLayoutParams();
         if (lp.width != dw) lp.width = dw;
+        // 玻璃底（bg）要和抽屉面板同宽同高，否则它会铺满整个宿主（那就不是"抽屉"了）
+        if (bg != null) {
+            LayoutParams blp = (LayoutParams) bg.getLayoutParams();
+            if (blp != null && blp.width != dw) blp.width = dw;
+        }
         drawerWidth = dw;
         super.onMeasure(widthSpec, heightSpec);
     }
@@ -222,6 +298,7 @@ public final class DrawerHost extends FrameLayout {
         if (t < min) t = min;
         tx = t;
         drawer.setTranslationX(t);
+        if (bg != null) bg.setTranslationX(t);
         float p = drawerWidth <= 0 ? 0f : (1f + t / drawerWidth);   // 0=关 1=开
         if (p < 0f) p = 0f;
         if (p > 1f) p = 1f;
@@ -289,7 +366,9 @@ public final class DrawerHost extends FrameLayout {
                 downY = ev.getY();
                 startTx = tx;
                 // 打开状态下右侧露出的一条：点/拖都归抽屉容器处理（收起）
-                if (drawerWidth > 0 && open && downX > drawerWidth) {
+                // [V3.106 · 发布前检查 B3] 但**玻璃弹窗（独立全屏宿主）显示期间**不能抢：
+                //   实测点右侧那条会关掉抽屉、而弹窗仍在（"点遮罩关不掉"）⇒ 弹窗期间跳过这个拦截。
+                if (drawerWidth > 0 && open && !sheetOnTop && downX > drawerWidth) {
                     dragging = true;
                     return true;
                 }
@@ -348,3 +427,4 @@ public final class DrawerHost extends FrameLayout {
         }
     }
 }
+

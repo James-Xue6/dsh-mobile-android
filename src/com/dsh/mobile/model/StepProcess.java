@@ -41,6 +41,39 @@ public final class StepProcess {
     private StepProcess() { }
 
     /**
+     * [V3.78 · 用户「输出过程中这些「执行了命令、读图」啥的**一直闪烁**，**一会英文一会中文**」]
+     *
+     * 工具名（PC 端传来的**原始英文/蛇形名**：`read` / `bash` / `grep` / `todo_write`…）-> **中文短名**。
+     *
+     * <p>为什么需要：步骤摘要把原始工具名直接拼在中文标签后面 ⇒ 一行里中英混排；
+     * 又因为每个工具事件都会重写这一行 ⇒ 观感就是"一直闪烁"。这里统一中文化，
+     * **未知工具也不吐英文**（细节留给工具行展开看）。
+     */
+    public static String toolNameCn(String raw) {
+        if (raw == null) return "工具";
+        String n = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if (n.isEmpty()) return "工具";
+        switch (n) {
+            case "read": return "读取文件";
+            case "read_image": return "查看图片";
+            case "grep": case "glob": return "搜索代码";
+            case "write": return "写入文件";
+            case "edit": case "apply_patch": return "修改文件";
+            case "bash": case "pwsh": case "exec_command": case "write_stdin": return "命令行";
+            case "run_code": return "运行代码";
+            case "web_search": return "联网搜索";
+            case "web_fetch": return "抓取网页";
+            case "todo_write": return "更新任务";
+            case "create_goal": case "update_goal": case "get_goal": return "目标";
+            default:
+                if (n.startsWith("subagent")) return "子智能体";
+                if (n.startsWith("terminal_")) return "命令行";
+                if (n.endsWith("_inspect")) return "搜索代码";
+                return "工具";
+        }
+    }
+
+    /**
      * 工具名 -> 类别。逐条照抄桌面端 `activity()`（app.asar:399154-399177），
      * 顺序保持与桌面端一致（先判 read，再 grep/glob，最后兜底 tools）。
      */
