@@ -110,6 +110,11 @@ private fun ChatSlice(store: Store) {
             override fun menu() { toast(ctx, "更多（模型/权限/项目面板未接管）") }
             override fun openSubagents() { toast(ctx, "子智能体列表（切片未接管）") }
             override fun chipTap(label: String) { toast(ctx, "$label 面板（切片未接管）") }
+            // [新] 一键收起/展开思考过程：切片里直接翻自己的状态（真机走宿主 Store，见 GlassChatView）
+            override fun toggleDisplayMode() {
+                state.compact = !state.compact
+                toast(ctx, if (state.compact) "已收起思考过程（演示）" else "已展开思考过程（演示）")
+            }
             override fun loadMore() { toast(ctx, "加载更早（切片未接管）") }
             override fun togglePlan() { state.planExpanded = !state.planExpanded }
             override fun approve(item: ChatItem, outcome: String) {
@@ -149,7 +154,20 @@ private fun demoItems(): List<ChatItem> {
         .apply { time = now - 10 * 60_000L }
     out += ChatItem.of(ChatItem.ASSISTANT, "a1",
         "现在顶栏和底部输入区都是**独立玻璃件**了；内容从它们下面滑过会被糊掉、边缘还会把线条推开。")
-        .apply { time = now - 9 * 60_000L }
+        .apply {
+            // [2026-10-16 · 思维链一键开关] 给这条**最先可见**的回复挂上思维链。
+            //   为什么：演示数据原来**一条 `reasoning` 都没有** ⇒ 切片页上看不到思考卡，
+            //   那枚「收起 / 展开思考过程」胶囊在这里就没法验证；而手机端配对数据被清掉后，
+            //   切片页是**唯一可控的真机验证入口**（渲染路径与正式版是同一份 `GlassChatScreen`）。
+            //   挂在 a1（列表第 2 条、开屏就在视野内）⇒ 收起/展开的前后对比一张截图就够，
+            //   不用滑动列表（真机上的滑动会被系统手势/别的自动化抢走）。
+            reasoning = "先看用户要什么：思维链完全展开会挡住最后的结论。\n" +
+                "再找渲染分支：全屏只有一处按模式分叉（verbose = !state.compact），" +
+                "思考卡与工具卡的 startOpen 都由它决定。\n" +
+                "所以不必造第二套开关：把既有「完整 / 简洁」翻过去，落点仍是 Store.displayMode()。\n" +
+                "最后确认逐条展开不受影响：卡片自己 remember 的开合态只在全局模式变化时重置。"
+            time = now - 9 * 60_000L
+        }
 
     // [V3.34] 追加两个回合：刻度尺的"方向/跳准/只选中一格/气泡标题行"**都需要 n>1** 才验得出来
     //   （原来演示数据只有 1 条 USER ⇒ n=1 ⇒ 这些项在模拟器上永远测不到）。

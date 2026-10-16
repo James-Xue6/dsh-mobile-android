@@ -87,6 +87,18 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         void onPickPermission();
         /** 附件条上点 ×：移除一个待发送附件。 */
         void onRemoveAttachment(com.dsh.mobile.model.PendingAttachment a);
+
+        // ---- 2026-10-16 新增：思维链一键开关
+        /**
+         * 「收起 / 展开思考过程」胶囊：**一键切换** 完整 ⇄ 简洁 显示模式。
+         *
+         * <p>加在本接口上的理由：玻璃对话页是 Compose（`GlassChatView` 实现 `GlassChatHost`，
+         * 动作**全部**转发到本接口 = `MainActivity`）；而"改显示模式"的完整流程宿主**早就有了**
+         * ——{@code MainActivity.onSetDisplayMode(String)}（原本是 {@code SettingsView.Host} 的同名方法：
+         * 写 {@code Store} + 回灌旧视图 `setCompact` + `refreshNow`）。这里只是把**同一个签名**也声明出来，
+         * 让聊天页能直接调它，**不复制那份逻辑、也不新增第二套"隐藏思维链"的开关**。
+         */
+        void onSetDisplayMode(String mode);
     }
 
     private final Context ctx;

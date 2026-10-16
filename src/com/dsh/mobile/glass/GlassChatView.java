@@ -563,6 +563,17 @@ public final class GlassChatView implements GlassChatHost {
         else if (l.startsWith("用量")) host.onUsageTap();
         else if (l.startsWith("任务")) host.onTasksTap();
     }
+    /**
+     * [新 · 用户「做一个**一键开关思维链**的按钮控件，现在的思维链完全展示，影响我查看最后的结论」]
+     *
+     * <p>「收起 / 展开思考过程」胶囊：把 App **既有**的显示模式翻过去（完整 ⇄ 简洁）。
+     * `state.compact` 是本页当前生效值（宿主 `setCompact` 镜像进来的，见本类 {@code setCompact}），
+     * 真正的**写盘 + 两侧回灌**走宿主原有的 `onSetDisplayMode`（`MainActivity:8166`：
+     * `store.setDisplayMode` + `convo.setCompact` + `refreshNow`）⇒ 这里不复制任何逻辑，只负责"翻"。
+     */
+    @Override public void toggleDisplayMode() {
+        host.onSetDisplayMode(state.getCompact() ? "full" : "compact");
+    }
     @Override public void loadMore() { host.onLoadMore(); }
     @Override public void togglePlan() { host.onOpenPlan(); }
     @Override public void approve(ChatItem item, String outcome) { host.onApprove(item, outcome); }

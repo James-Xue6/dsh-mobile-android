@@ -195,6 +195,16 @@ interface GlassChatHost {
      * 由宿主按前缀路由到正式版已有的面板（`onProjectTap/onPickModel/onPickPermission/onArtifacts/onPickEffort/onUsageTap/onTasksTap`）。
      */
     fun chipTap(label: String)
+    /**
+     * [新 · 用户「做一个**一键开关思维链**的按钮控件，现在的思维链完全展示，影响我查看最后的结论」]
+     *
+     * 一键收起 / 展开**全部思考过程**。实现上**复用既有的显示模式**：
+     * 本屏唯一的渲染分支就是列表里那句 `ChatRow(..., verbose = !state.compact)`
+     * （思考卡/工具卡的 `startOpen`），宿主把它翻过去即可
+     * （真机 = `MainActivity.onSetDisplayMode` ⇒ 落 `Store.displayMode()`，
+     * 与设置页里那对「完整 / 简洁」是**同一个状态**）⇒ 不新增第二套开关。
+     */
+    fun toggleDisplayMode()
     /** 审批：outcome 与正式版一致（"allowOnce" / "deny"）。 */
     fun approve(item: ChatItem, outcome: String)
     fun questionSubmit(item: ChatItem, answers: org.json.JSONArray)
@@ -809,6 +819,15 @@ fun GlassChatScreen(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.Start,
                         ) {
+                            // [新 · 用户「做一个**一键开关思维链**的按钮控件，现在的思维链完全展示，
+                            //   影响我查看最后的结论」]
+                            //   ⇒ 一键收起/展开**全部思考过程**，**复用既有显示模式**
+                            //   （`state.compact` ⇄ `Store.displayMode()` 的「完整/简洁」）：
+                            //   全屏唯一的渲染分支就是上面那句 `ChatRow(verbose = !state.compact)`。
+                            //   放在这一行的理由：它本来就是本页的「状态胶囊行」（权限/模型/思考/用量/生成物…），
+                            //   加一枚**不会挤坏布局**（这行横向可滚：顶栏加会挤窄标题，右下角会和 ↓ 抢位置）；
+                            //   ⚠️ `rebuildChips()` 恒有「权限」「生成物」两枚 ⇒ 这行永远在，胶囊不会时隐时现。
+                            ThinkToggleCapsule(backdrop, state.compact) { host.toggleDisplayMode() }
                             state.chips.forEach { c ->
                                 // [V3.25 · 用户「这一排按钮看不太清楚，**加磨砂、白一些**」]
                                 //   从"平色渐变凑观感"换成**真玻璃胶囊**（真磨砂 + 更白）。
@@ -1157,7 +1176,11 @@ private val STEP_CARD_RADIUS = 22.dp
 @Composable
 private fun ThinkingCard(reasoning: String, ink: Color, startOpen: Boolean = false) {
     // [V3.81] `startOpen`：完整模式开场即展开；精简模式开场收起（用户之后仍可自己点开）
-    var open by androidx.compose.runtime.remember {
+    // [新 · 思维链一键开关] ⚠️ `remember` **必须带 key**（原来不带）：不带 key 时它会在重组中**缓存住**
+    //   旧的开合状态 ⇒ 全局切换对**已经在屏上的**卡片**不起作用**（点了"收起"却没变化）✗。
+    //   带上 key ⇒ 模式一变，卡片重置成新模式的开场态 ✓；而**逐条点击**不受影响
+    //   （那时 key 没变，记住的状态照旧保留）✓ —— 正好满足"全局开关与逐条展开不冲突"。
+    var open by androidx.compose.runtime.remember(startOpen) {
         androidx.compose.runtime.mutableStateOf(startOpen)
     }
     MsgCard(STEP_CARD_RADIUS, Modifier.fillMaxWidth().padding(vertical = 4.dp)
@@ -1234,7 +1257,9 @@ private fun StepCard(text: String, running: Boolean, error: Boolean, ink: Color,
 private fun ToolCard(title: String, body: String, error: Boolean, ink: Color, sub: Color,
                      startOpen: Boolean = false) {
     // [V3.81] `startOpen`：完整模式开场即展开；精简模式开场收起（用户之后仍可自己点开）
-    var open by androidx.compose.runtime.remember {
+    // [新 · 思维链一键开关] 同 `ThinkingCard`：`remember` 必须带 key，否则全局切换对已在屏上的
+    //   卡片无效（缓存住了旧的开合态）✗；带 key 后逐条点击依旧保留各自状态 ✓。
+    var open by androidx.compose.runtime.remember(startOpen) {
         androidx.compose.runtime.mutableStateOf(startOpen)
     }
     MsgCard(STEP_CARD_RADIUS, Modifier.fillMaxWidth().padding(vertical = 4.dp)
@@ -1603,6 +1628,48 @@ private fun SubagentChip(
             Spacer(Modifier.width(6.dp))
             Text("$count 子智能体", color = brand, fontSize = Ui.S_FOOT.sp, fontWeight = FontWeight.Bold)
         }
+    }
+}
+
+/**
+ * [新 · 用户「做一个**一键开关思维链**的按钮控件，现在的思维链完全展示，影响我查看最后的结论」]
+ *
+ * **一键收起 / 展开全部思考过程**的玻璃胶囊（点一下 = 收起来，再点 = 展开）。
+ *
+ * <p>它**不是**第 5 种新的隐藏机制 —— 只把 App 既有的显示模式翻过去：
+ * `Store.displayMode()`（设置页里那对「完整 / 简洁」）⇒ `state.compact`
+ * ⇒ 本屏唯一的渲染分支 `ChatRow(..., verbose = !state.compact)`
+ * （`ThinkingCard(startOpen = verbose)` / `ToolCard(startOpen = verbose)`）。
+ * 所以"完整"时思考卡是**开场即展开**（就是用户报的"完全展示"），"简洁"时收起成一行，
+ * **每条消息自己的「▸ 思考过程」入口照旧保留**、随时可单独点开（需求里的"不冲突"）。
+ *
+ * <p>材质/尺寸与同一排的能力 chip **逐项同值**（`blur 8dp / 折射 6·8dp / 白 55% / 高 30dp /
+ * 圆角=短边半`，见 `RefractionCapsule`）——小元件刻意压小折射档，默认 14/28 会把标签推挤变形
+ * （V3.17 结论）；`wrapContentWidth(unbounded = true)` 也是这一排的既有写法
+ * （V3.23 结论：不给它，宽度有界时胶囊会被撑满整行）。
+ */
+@Composable
+private fun ThinkToggleCapsule(
+    backdrop: com.kyant.backdrop.Backdrop,
+    compact: Boolean,
+    onClick: () -> Unit,
+) {
+    RefractionCapsule(
+        backdrop = backdrop,
+        modifier = Modifier.padding(horizontal = 3.dp)
+            .wrapContentWidth(unbounded = true)
+            .height(30.dp)
+            .glassTap { onClick() }                            // 排在阴影之前（按下整块一起缩）
+            .glassButtonShadow(RoundedCornerShape(999.dp)),    // 与 chip 同款阴影模板
+        blurRadius = 8.dp,
+        refractionHeight = 6.dp,
+        refractionAmount = 8.dp,
+        tint = Color.White.copy(alpha = 0.55f),
+    ) {
+        // 文案按**当前状态**给"下一步动作"：展开着 ⇒ 提示可收起；已收起 ⇒ 提示可展开。
+        Text(if (compact) "展开思考过程" else "收起思考过程",
+            color = Color(Ui.INK), fontSize = Ui.S_CAP1.sp,
+            maxLines = 1, modifier = Modifier.padding(horizontal = 12.dp))
     }
 }
 
