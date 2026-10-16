@@ -270,11 +270,12 @@ private fun WorkspaceHeader(
     Row(
         Modifier.fillMaxWidth()
             .padding(top = 6.dp, bottom = 2.dp)
-            // [层级区分 · 用户「不要完全对调，把父级的透明度降低、或颜色有所区别即可」]
-            // 父级行给一层**比子级卡更淡**的底（白 10%），文字提到主文字色 ink；
-            // 与子级的白色玻璃卡一眼分得开，但**不是**把子级压暗（那会变成反向层级）。
-            // 子级（SessionCard）样式一行未动。
-            .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+            // [层级区分 v2 · 用户「工作区的视觉效果还是没做」]
+            // ⚠️ 上一版用的是「白 10%」——而子级 SessionCard 是**白 26%**，等于把父级做得更淡 ✗（方向反了）。
+            // 现在改用**颜色差异**：品牌色淡底。同一文件里已有 Color(Ui.BRAND_FILL) 的用法（见下方「待处理」徽标），
+            // 主题切换跟着走，浅色/深色下都与子级的白玻璃卡明显不同。
+            .background(Color(Ui.BRAND_FILL).copy(alpha = if (Ui.isDark()) 0.22f else 0.16f),
+                RoundedCornerShape(14.dp))
             .glassTap(corner = 14.dp) { host.toggleWorkspace(g) }
             .padding(start = 6.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
