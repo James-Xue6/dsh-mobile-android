@@ -88,7 +88,7 @@ public final class ConversationView extends LinearLayout implements ChatAdapter.
         /** 附件条上点 ×：移除一个待发送附件。 */
         void onRemoveAttachment(com.dsh.mobile.model.PendingAttachment a);
 
-        // ---- 2026-10-16 新增：思维链一键开关
+        // ---- 思维链一键开关（Host 侧声明；实现见 MainActivity.onSetDisplayMode，与设置页同一个值）
         /**
          * 「收起 / 展开思考过程」胶囊：**一键切换** 完整 ⇄ 简洁 显示模式。
          *

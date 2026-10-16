@@ -3287,7 +3287,7 @@ public final class MainActivity extends Activity implements
                 s.running = o.optBoolean("running", false);
                 s.blank = o.optBoolean("blank", false);
                 // 子智能体 / 专家团识别字段：网关原样透传宿主 session.list 的同名字段
-                // [2026-10-16 修父子层级] 宿主出网的字段名是 **parentId**（宿主实现里映射为
+                // 宿主出网的字段名是 **parentId**（宿主实现里映射为
                 // `entry.parentSessionId !== void 0 ? { parentId: entry.parentSessionId } : {}`），
                 // 而这里一直读 `parentSessionId` → 永远取空 → 抽屉里每条会话都被当顶层：
                 // 平铺、没有父子级、也看不出差异（用户报"全是铺开的"就是这个）。

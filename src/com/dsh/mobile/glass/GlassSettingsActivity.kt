@@ -65,7 +65,7 @@ private fun SettingsSlice(store: Store) {
         state.palette = runCatching { store.ambientPalette() }.getOrDefault(0)
         state.glassLevel = runCatching { store.glassLevel() }.getOrDefault(1)
         state.glassMode = runCatching { store.glassMode() }.getOrDefault("liquid")   // [V3.27] · [V3.52] 默认液态
-        // [2026-10-16] 兜底值跟 `Store.displayMode()` 的新默认一致（compact），免得读失败时回显"完整"。
+        // 兜底值跟 `Store.displayMode()` 的新默认一致（compact），免得读失败时回显"完整"。
         state.displayMode = runCatching { store.displayMode() }.getOrDefault("compact")
         state.allowScreenshot = runCatching { store.allowScreenshot() }.getOrDefault(true)
         state.insecureTls = runCatching { store.insecureTls() }.getOrDefault(false)

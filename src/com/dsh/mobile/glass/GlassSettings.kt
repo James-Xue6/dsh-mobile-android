@@ -86,7 +86,7 @@ class GlassSettingsState {
     /** [V3.27 · 用户] 玻璃模式：`liquid`（液态，带折射）/ `frost`（磨砂，无折射、省资源）。[V3.52] **默认改液态**。 */
     var glassMode by mutableStateOf("liquid")
     // ---- 行为
-    // [2026-10-16] 初值 = `Store.displayMode()` 的新默认（简洁 ⇒ 思考链默认收起）；真机由宿主灌入。
+    // 初值 = `Store.displayMode()` 的新默认（简洁 ⇒ 思考链默认收起）；真机由宿主灌入。
     var displayMode by mutableStateOf("compact")
     var allowScreenshot by mutableStateOf(true)
     var insecureTls by mutableStateOf(false)

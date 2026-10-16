@@ -141,7 +141,7 @@ class GlassChatState {
      *
      * ⚠️ 这里的 Compose 初值只对**切片页/未接宿主的预览**有意义；真机上的值**恒由宿主灌入**
      * （`MainActivity.showChat():1921` ⇒ `convo.setCompact("compact".equals(store.displayMode()))`）。
-     * [2026-10-16] `Store.displayMode()` 默认改成 `compact` ⇒ 初值也跟到 `true`，
+     * `Store.displayMode()` 默认改成 `compact` ⇒ 初值也跟到 `true`，
      * 免得切片页与真机**默认态不一致**、把自证结论带偏。
      */
     var compact by mutableStateOf(true)
