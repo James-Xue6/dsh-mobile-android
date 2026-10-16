@@ -507,16 +507,31 @@ public final class Store {
      * 旧键只要存在（= 他显式选过，哪怕选的是 full）就**原样沿用**，不翻他的选择。
      * 写入时两个键一起写，旧版回退安装也能读到同一个值。
      */
+    /**
+     * [2026-10-16 · 用户「APP 端的思维链还有工具调用还是完全展开的，我需要默认折叠」]
+     *
+     * <p>v2 那次只把"从没选过"的人改成 compact，结果**已经装过旧版的机器**看不到效果
+     * （它们存着 full —— 而且那个 full 往往不是用户自己点的，是上一轮自证时点出来的）。
+     * ⇒ 加 v3 做**一次性迁移**：v3 还没写过 = 升级后第一次读取 ⇒ 一律给新默认 compact 并落盘；
+     * 此后一律以 v3 为准（用户自己再点开关就记在 v3 上）。
+     */
+    private static final String K_DISPLAY_MODE_V3 = "display_mode_v3";
+
     public String displayMode() {
-        String v = sp.getString(K_DISPLAY_MODE_V2, null);
-        if (v == null) v = sp.getString(K_DISPLAY_MODE_V1, null);   // 旧版显式选择：沿用，不给新默认
-        if (v == null) return "compact";                            // [新默认] 从没选过 ⇒ 思考链默认收起
-        return "compact".equals(v) ? "compact" : "full";
+        String v3 = sp.getString(K_DISPLAY_MODE_V3, null);
+        if (v3 != null) return "compact".equals(v3) ? "compact" : "full";
+        // 一次性迁移：把旧版遗留值（含各种 full）统一落到"收起"，只做一次
+        sp.edit().putString(K_DISPLAY_MODE_V3, "compact")
+                .putString(K_DISPLAY_MODE_V2, "compact")
+                .putString(K_DISPLAY_MODE_V1, "compact").apply();
+        return "compact";
     }
 
     public void setDisplayMode(String mode) {
         String v = "compact".equals(mode) ? "compact" : "full";
-        sp.edit().putString(K_DISPLAY_MODE_V2, v).putString(K_DISPLAY_MODE_V1, v).apply();
+        sp.edit().putString(K_DISPLAY_MODE_V3, v)
+                .putString(K_DISPLAY_MODE_V2, v)
+                .putString(K_DISPLAY_MODE_V1, v).apply();
     }
 
     // ---------------------------------------------------------------- 抽屉「工作区」折叠

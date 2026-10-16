@@ -228,7 +228,7 @@ fun GlassSessionListScreen(
             ) {
                 itemsIndexed(state.rows) { _, row ->
                     when (row) {
-                        is WorkspaceGroup -> WorkspaceHeader(row, inkSub, inkFaint, host, state)
+                        is WorkspaceGroup -> WorkspaceHeader(row, ink, inkSub, inkFaint, host, state)
                         is SessionInfo ->
                             SessionCard(row, row.id == state.currentId, ink, inkSub, inkFaint, host, state)
                         else -> Unit
@@ -255,7 +255,7 @@ fun GlassSessionListScreen(
 
 @Composable
 private fun WorkspaceHeader(
-    g: WorkspaceGroup, inkSub: Color, inkFaint: Color,
+    g: WorkspaceGroup, ink: Color, inkSub: Color, inkFaint: Color,
     host: GlassSessionHost, state: GlassSessionState,
 ) {
     // [V3.43 · 补完 V3.32 §2.1] 这里原来弹的是**宿主 Java 菜单**（V3.31 为避 Compose Dialog 闪退回退的）。
@@ -270,20 +270,25 @@ private fun WorkspaceHeader(
     Row(
         Modifier.fillMaxWidth()
             .padding(top = 6.dp, bottom = 2.dp)
+            // [层级区分 · 用户「不要完全对调，把父级的透明度降低、或颜色有所区别即可」]
+            // 父级行给一层**比子级卡更淡**的底（白 10%），文字提到主文字色 ink；
+            // 与子级的白色玻璃卡一眼分得开，但**不是**把子级压暗（那会变成反向层级）。
+            // 子级（SessionCard）样式一行未动。
+            .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
             .glassTap(corner = 14.dp) { host.toggleWorkspace(g) }
             .padding(start = 6.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            if (g.expanded) "▾" else "▸", color = inkFaint, fontSize = Ui.S_CAP1.sp,
+            if (g.expanded) "▾" else "▸", color = inkSub, fontSize = Ui.S_CAP1.sp,
         )
         Spacer(Modifier.width(4.dp))
         Text(
-            g.label.ifBlank { "会话" }, color = inkSub, fontSize = Ui.S_CAP1.sp,
+            g.label.ifBlank { "会话" }, color = ink, fontSize = Ui.S_CAP1.sp,
             fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text("${g.count}", color = inkFaint, fontSize = Ui.S_CAP1.sp)
+        Text("${g.count}", color = inkSub, fontSize = Ui.S_CAP1.sp)
         Spacer(Modifier.width(6.dp))
         // [V3.99] 同上：工作区 ⋯ 也回调宿主（不再在本面板里弹）
         SmallPill("⋯", inkFaint) { host.workspaceMenu(g) }
