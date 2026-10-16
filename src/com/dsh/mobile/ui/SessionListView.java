@@ -30,6 +30,13 @@ public final class SessionListView extends FrameLayout {
         void onArchive(SessionInfo s);
         /** 展开/折叠某父会话名下的子会话（子智能体 / 专家团）。 */
         void onToggleChildren(SessionInfo s);
+        /**
+         * 展开/折叠某个工作区分组（点分组表头）。
+         *
+         * <p>与 {@link #onToggleChildren} 是两层互不相干的折叠：这一层管"工作区名下的会话铺不铺出来"，
+         * 那一层管"父会话名下的子会话铺不铺出来"。
+         */
+        void onToggleWorkspace(WorkspaceGroup g);
         /** 点某工作区分组标题右侧的「⋯」：弹出该工作区的操作菜单（新建任务等）。 */
         void onWorkspaceMenu(WorkspaceGroup g);
     }
@@ -200,7 +207,9 @@ public final class SessionListView extends FrameLayout {
         boolean hasSession = false;
         if (rows != null) {
             for (Object r : rows) {
-                if (r instanceof SessionInfo) { hasSession = true; break; }
+                // [工作区折叠] 分组表头也算"有内容"：所有工作区都收着时 rows 里只剩表头，
+                // 那不是"还没有对话"（真的会话都在，只是折起来了），空态提示会冤枉人。
+                if (r instanceof SessionInfo || r instanceof WorkspaceGroup) { hasSession = true; break; }
             }
         }
         emptyView.setVisibility(hasSession ? GONE : VISIBLE);
@@ -241,6 +250,15 @@ public final class SessionListView extends FrameLayout {
                 head.setGravity(Gravity.CENTER_VERTICAL);
                 head.setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 10), 0, Ui.dp(ctx, 2));
 
+                // [工作区折叠] 整行 = 折叠开关；左侧 ▸/▾ 指示当前是收着还是开着。
+                // 右侧「⋯」是子 View ⇒ Android 的触摸派发先给它，点 ⋯ 不会连带折叠这一组 ✓。
+                TextView arrow = Ui.text(ctx, g.expanded ? "▾" : "▸", Ui.S_FOOT, Ui.INK_FAINT, false);
+                arrow.setPadding(0, 0, Ui.dp(ctx, 6), 0);
+                head.addView(arrow);
+                head.setContentDescription((g.expanded ? "收起工作区：" : "展开工作区：") + g.label);
+                Ui.tap(head, 1.0f);                       // 只做压暗反馈，不消费事件
+                head.setOnClickListener(v -> host.onToggleWorkspace(g));
+
                 TextView gt = Ui.text(ctx, g.label, Ui.S_FOOT, Ui.INK_SUB, false);
                 gt.setLetterSpacing(0.06f);
                 gt.setSingleLine(true);
@@ -250,7 +268,7 @@ public final class SessionListView extends FrameLayout {
                 head.addView(gt);
 
                 // 没有工作目录的分组（「其他」/ IM 会话）不给「⋯」：点了也无处可派，
-                // 挂一个摆设只会误导。整行的点击仍留给下面的会话卡片。
+                // 挂一个摆设只会误导。（整行的点击已被上面的折叠开关用掉，不会再落到会话卡片上。）
                 if (g.canCreateSession()) {
                     TextView more = Ui.circleIconButton(ctx, com.dsh.mobile.R.drawable.ic_more,
                             android.graphics.Color.TRANSPARENT, Ui.INK_SUB, 15f, 28f);

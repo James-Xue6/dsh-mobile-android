@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 
+import java.util.Set;
+
 import com.dsh.mobile.net.LanAddress;
 import com.dsh.mobile.net.NetStatus;
 import com.dsh.mobile.net.RoutePolicy;
@@ -80,6 +82,20 @@ public final class Store {
     private static final String K_KEEPALIVE = "keepalive";
     /** 通知权限是否已经申请过（Android 13+ 只主动问一次，被拒后改为设置页引导）。 */
     private static final String K_NOTIF_ASKED = "notify_perm_asked";
+    /**
+     * 抽屉「工作区」折叠账本（两组**分组键**，见 {@code WorkspaceGroup.key}）。
+     *
+     * <h3>为什么是两个集合而不是一个</h3>
+     * 「没碰过」和「用户明确折叠过」必须分得开：前者的默认值是"折叠，但当前会话那个工作区展开"，
+     * 后者必须永远折叠（哪怕人就停在这个工作区里）。
+     *
+     * <h3>为什么是全新键（不原地改默认值）</h3>
+     * 这是**本次新增**的键，之前的版本从来没写过它们 ⇒ `absent` 天然等于"从没碰过"，
+     * 新默认值一定生效。反过来，若复用任何存量键（例如把某个布尔键改语义），
+     * 老装机上它会一直存在、永远走不到默认分支 —— `display_mode_v2` 那次就是这么踩的。
+     */
+    private static final String K_WS_EXPANDED = "drawer_ws_expanded";
+    private static final String K_WS_COLLAPSED = "drawer_ws_collapsed";
 
     private final SharedPreferences sp;
     /**
@@ -501,6 +517,34 @@ public final class Store {
     public void setDisplayMode(String mode) {
         String v = "compact".equals(mode) ? "compact" : "full";
         sp.edit().putString(K_DISPLAY_MODE_V2, v).putString(K_DISPLAY_MODE_V1, v).apply();
+    }
+
+    // ---------------------------------------------------------------- 抽屉「工作区」折叠
+
+    /** 用户**显式展开过**的工作区分组键。空集合 = 还没碰过任何一个（走默认规则）。 */
+    public Set<String> workspaceExpandedKeys() {
+        return copyKeys(sp.getStringSet(K_WS_EXPANDED, null));
+    }
+
+    /** 用户**显式折叠过**的工作区分组键（含"当前会话就在里面"的那种，用户说了算）。 */
+    public Set<String> workspaceCollapsedKeys() {
+        return copyKeys(sp.getStringSet(K_WS_COLLAPSED, null));
+    }
+
+    /** 一次写两组键（它们必须同步落盘，分开写会出现"两边都记着"的中间态）。 */
+    public void setWorkspaceFold(Set<String> expanded, Set<String> collapsed) {
+        sp.edit()
+                .putStringSet(K_WS_EXPANDED, copyKeys(expanded))
+                .putStringSet(K_WS_COLLAPSED, copyKeys(collapsed))
+                .apply();
+    }
+
+    /**
+     * SharedPreferences 的 StringSet **两端都要拷**：读回来的是同一个实例（改了会脏读），
+     * 存进去的也是引用（平台文档明确要求传副本）。这里一个函数把两头都兜住。
+     */
+    private static Set<String> copyKeys(Set<String> in) {
+        return in == null ? new java.util.HashSet<String>() : new java.util.HashSet<>(in);
     }
 
     /**

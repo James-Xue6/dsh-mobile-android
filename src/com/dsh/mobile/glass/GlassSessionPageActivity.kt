@@ -37,10 +37,16 @@ class GlassSessionPageActivity : android.app.Activity() {
 
         val state = GlassSessionState().apply {
             title = "对话"
-            status = "演示数据 · 3 个会话/工作区（切片未接网关）"
+            status = "演示数据 · 点工作区表头可折叠/展开（切片未接网关）"
             currentId = "s2"
-            rows = demoRows()
         }
+        // [工作区折叠] 切片里也走**与正式版同一条规则**（[MainActivity.isWorkspaceExpanded]）：
+        //   用户显式折叠 > 用户显式展开 > 默认折叠，只有"当前会话所在的那个工作区"默认展开。
+        //   正式版这两个账本落盘在 Store 里；切片是纯演示，只放在内存。
+        val wsExpanded = HashSet<String>()
+        val wsCollapsed = HashSet<String>()
+        fun refreshRows() { state.rows = demoRows(wsExpanded, wsCollapsed) }
+        refreshRows()
 
         val host = object : GlassSessionHost {
             override fun openSession(s: SessionInfo) = toast("打开会话 ${s.displayForList()}")
@@ -51,6 +57,12 @@ class GlassSessionPageActivity : android.app.Activity() {
             override fun rename(s: SessionInfo) = toast("重命名「${s.displayForList()}」")
             override fun archive(s: SessionInfo) = toast("归档「${s.displayForList()}」")
             override fun toggleChildren(s: SessionInfo) = toast("展开/收起子会话")
+            override fun toggleWorkspace(g: WorkspaceGroup) {
+                val key = g.key
+                if (wsExpanded.contains(key)) { wsExpanded.remove(key); wsCollapsed.add(key) }
+                else { wsCollapsed.remove(key); wsExpanded.add(key) }
+                refreshRows()
+            }
             override fun workspaceMenu(g: WorkspaceGroup) = toast("工作区菜单（应走树内浮层，不该调到这里）")
             override fun sessionMenu(s: SessionInfo) = toast("会话菜单（应走树内浮层，不该调到这里）")
             override fun newTaskHere(g: WorkspaceGroup) = toast("在「${g.label}」新建任务")
@@ -86,16 +98,39 @@ class GlassSessionPageActivity : android.app.Activity() {
 /**
  * 演示数据 —— 用**真的** `WorkspaceGroup` / `SessionInfo`（渲染路径与正式版完全一致）：
  * 两个工作区 + 3 个会话 + 1 个子会话（验缩进）+ 一个"运行中"、一个"待处理 N"。
+ *
+ * [工作区折叠] 表头行**恒在**（折叠时只省掉它名下的会话行），键与正式版同一种（小写完整路径）。
+ * 默认规则：只有"当前会话 s2 所在的那个工作区"展开 —— 这正是正式版
+ * `MainActivity.isWorkspaceExpanded()` 的默认档，切片里照搬以便一眼看出效果。
  */
-private fun demoRows(): List<Any> {
+private const val DEMO_WS1_KEY = "f:\\ai\\程序开发"
+private const val DEMO_WS2_KEY = "c:\\users\\administrator\\.dsh"
+/** 当前会话（s2）落在哪个工作区：默认档只有它展开。 */
+private const val DEMO_CURRENT_WS_KEY = DEMO_WS1_KEY
+
+private fun demoRows(expanded: Set<String>, collapsed: Set<String>): List<Any> {
     val out = ArrayList<Any>()
-    out += WorkspaceGroup("程序开发", "F:\\AI\\程序开发", "ws-1", 3)
-    out += demoSession("s1", "GlassUI 刻度尺对齐", running = true, childCount = 1)
-    out += demoSession("s1c", "子会话：按朋友的 MessageScrubber 对齐", depth = 1)
-    out += demoSession("s2", "修设置页顶栏玻璃感")
-    out += demoSession("s3", "验证目标展示列表", pending = 2)
-    out += WorkspaceGroup("default-workspace", "C:\\Users\\Administrator\\.dsh", "ws-2", 1)
-    out += demoSession("s4", "Gitee 插件自动同步检查")
+    fun group(key: String, label: String, path: String, wsId: String, count: Int, rows: List<Any>) {
+        val open = when {
+            collapsed.contains(key) -> false
+            expanded.contains(key) -> true
+            else -> key == DEMO_CURRENT_WS_KEY
+        }
+        out += WorkspaceGroup(key, label, path, wsId, count).apply { this.expanded = open }
+        // [修] out 是 val ArrayList：`out += rows`（rows 是 List）在 Kotlin 里会被解析成
+        // `out = out + rows`（plus + 重新赋值）⇒ 'val' cannot be reassigned。
+        // 要合并列表必须显式 addAll。
+        if (open) out.addAll(rows)
+    }
+    group(DEMO_WS1_KEY, "程序开发", "F:\\AI\\程序开发", "ws-1", 3, listOf(
+        demoSession("s1", "GlassUI 刻度尺对齐", running = true, childCount = 1),
+        demoSession("s1c", "子会话：按朋友的 MessageScrubber 对齐", depth = 1),
+        demoSession("s2", "修设置页顶栏玻璃感"),
+        demoSession("s3", "验证目标展示列表", pending = 2),
+    ))
+    group(DEMO_WS2_KEY, "default-workspace", "C:\\Users\\Administrator\\.dsh", "ws-2", 1, listOf(
+        demoSession("s4", "Gitee 插件自动同步检查"),
+    ))
     return out
 }
 

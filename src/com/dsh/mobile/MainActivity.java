@@ -562,6 +562,21 @@ public final class MainActivity extends Activity implements
     /** 已展开的子会话分组（父会话 id）。默认折叠：子智能体/专家团会话不铺在主列表里。 */
     private final Set<String> expandedParents = new HashSet<>();
 
+    /**
+     * 抽屉「工作区」这一层的折叠账本（分组键，见 {@link WorkspaceGroup#key}）。
+     *
+     * <p>默认规则（用户要求「工作区默认折叠，点一下看它下面的子对话」）：
+     * ① 用户显式折叠过的 → 永远折叠（`collapsedWorkspaces`）；
+     * ② 用户显式展开过的 → 展开（`expandedWorkspaces`）；
+     * ③ 其余（从没碰过）→ **折叠**，只有一条例外：**当前会话所在的那个工作区默认展开**
+     *    （否则人从对话页回到抽屉，看不见自己在用的那条，会以为会话丢了）。
+     *
+     * <p>两个集合都必须落盘（{@code Store.workspaceExpandedKeys/CollapsedKeys}）：
+     * 杀掉进程重进还要记得住。**与上面那一层（子会话折叠）各用各的账本，互不影响**。
+     */
+    private final Set<String> expandedWorkspaces = new HashSet<>();
+    private final Set<String> collapsedWorkspaces = new HashSet<>();
+
     // ============================================================ 生命周期
 
     /**
@@ -769,6 +784,7 @@ public final class MainActivity extends Activity implements
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         contentHost = drawerHost.content();
         listScreen = new SessionListView(this, this);
+        loadWorkspaceFold();                        // 抽屉里"哪些工作区被展开过"（落盘）要在首次 buildRows 之前就位
         if (USE_GLASS_DRAWER) glassSessionView();   // 先建 Compose 版，下面的 setX 才能镜像过去
         drawerHost.drawer().addView(
                 USE_GLASS_DRAWER && sessionView != null ? sessionView : listScreen,
@@ -2041,6 +2057,7 @@ public final class MainActivity extends Activity implements
                 @Override public void rename(SessionInfo s) { MainActivity.this.onRename(s); }
                 @Override public void archive(SessionInfo s) { MainActivity.this.onArchive(s); }
                 @Override public void toggleChildren(SessionInfo s) { MainActivity.this.onToggleChildren(s); }
+                @Override public void toggleWorkspace(WorkspaceGroup g) { MainActivity.this.onToggleWorkspace(g); }
                 @Override public void workspaceMenu(WorkspaceGroup g) { MainActivity.this.onWorkspaceMenu(g); }
                 // [V3.31 · 真机闪退根因修复] 会话卡 ⋯ 菜单：**不要**用 Compose `Dialog`
                 //   （MainActivity 是纯 Activity，Dialog 新窗口里的 ComposeView 拿不到
@@ -2484,10 +2501,55 @@ public final class MainActivity extends Activity implements
             HashSet<String> chain = new HashSet<>();
             for (SessionInfo s : g) emitSession(s, 0, childrenOf, flat, chain);
             renumberUntitled(flat);
-            rows.add(workspaceGroupOf(k, g));
-            rows.addAll(flat);
+            // [工作区折叠] 表头**恒在**：它既是折叠开关，也是别处（如 `onProjectTap()` 的项目清单、
+            //   子智能体弹窗）认「有哪些工作区」的唯一来源 —— 折叠时**只**省掉它名下的会话行，
+            //   绝不把表头一起吞掉，否则「项目」列表会跟着少项目 ✗。
+            WorkspaceGroup head = workspaceGroupOf(k, g);
+            head.expanded = isWorkspaceExpanded(k);
+            rows.add(head);
+            if (head.expanded) rows.addAll(flat);
         }
         return rows;
+    }
+
+    /** 抽屉「工作区」折叠账本：从 Store 读回（进程被杀重进后仍记得）。 */
+    private void loadWorkspaceFold() {
+        expandedWorkspaces.clear();
+        collapsedWorkspaces.clear();
+        if (store == null) return;
+        expandedWorkspaces.addAll(store.workspaceExpandedKeys());
+        collapsedWorkspaces.addAll(store.workspaceCollapsedKeys());
+    }
+
+    /** 账本写回 Store：每次展开/折叠都立刻落盘（不靠 onPause，杀进程也不丢）。 */
+    private void saveWorkspaceFold() {
+        if (store == null) return;
+        store.setWorkspaceFold(expandedWorkspaces, collapsedWorkspaces);
+    }
+
+    /**
+     * 当前会话（人此刻在看的那条）落在哪个工作区分组里。
+     *
+     * <p>找不到（没有当前会话 / 那条已被归档或清空）时返回 {@code null} —— **不能返回空串**：
+     * 空串恰好是「其他」那一组的键，会把「其他」误判成"当前工作区"而莫名其妙地展开。
+     */
+    private String currentWorkspaceKey() {
+        if (currentSessionId == null || currentSessionId.isEmpty()) return null;
+        SessionInfo cur = findSession(currentSessionId);
+        return cur == null ? null : workspaceKey(cur);
+    }
+
+    /**
+     * 某个工作区分组此刻该不该展开（抽屉里它的会话行铺不铺出来）。
+     *
+     * <p>优先级：**用户显式折叠 &gt; 用户显式展开 &gt; 默认（折叠，但当前会话所在的那个展开）**。
+     */
+    private boolean isWorkspaceExpanded(String key) {
+        if (key == null) return false;
+        if (collapsedWorkspaces.contains(key)) return false;
+        if (expandedWorkspaces.contains(key)) return true;
+        String cur = currentWorkspaceKey();
+        return cur != null && cur.equals(key);
     }
 
     /** 深度优先摊平：父会话在前，展开时紧跟缩进后的子会话。 */
@@ -2631,13 +2693,13 @@ public final class MainActivity extends Activity implements
      */
     private WorkspaceGroup workspaceGroupOf(String key, List<SessionInfo> group) {
         int count = group == null ? 0 : group.size();
-        if ("im:".equals(key)) return new WorkspaceGroup("IM 会话", "", "", count);
-        if (key.isEmpty()) return new WorkspaceGroup("其他", "", "", count);
+        if ("im:".equals(key)) return new WorkspaceGroup(key, "IM 会话", "", "", count);
+        if (key.isEmpty()) return new WorkspaceGroup(key, "其他", "", "", count);
         String path = (group == null || group.isEmpty()) ? "" : normPath(group.get(0).cwd);
         String title = workspaceTitleByPath.get(key);
         String label = (title != null && !title.trim().isEmpty()) ? title.trim() : tailOf(path);
         String id = workspaceIdByPath.get(key);
-        return new WorkspaceGroup(label, path, id == null ? "" : id, count);
+        return new WorkspaceGroup(key, label, path, id == null ? "" : id, count);
     }
 
     /**
@@ -7472,6 +7534,31 @@ public final class MainActivity extends Activity implements
     public void onToggleChildren(SessionInfo s) {
         if (s == null || s.id == null || s.id.isEmpty()) return;
         if (!expandedParents.remove(s.id)) expandedParents.add(s.id);
+        if (listScreen != null) setSessionRows(buildRows());
+    }
+
+    /**
+     * 展开/折叠某个**工作区**（抽屉里点分组表头）。
+     *
+     * <p>用户显式点过就记进账本并落盘，**再也不走默认规则**：
+     * 点开过的工作区重进 App 还是展开的；在自己正待着的那个工作区上点收起，它也老老实实收起
+     * （不会因为"当前会话在这里"又被自动弹开）—— 用户的手动选择优先级最高。
+     *
+     * <p>与上面 {@link #onToggleChildren} 是**两层独立账本**（工作区键 vs 父会话 id），
+     * 谁也不会把谁的状态覆盖掉。
+     */
+    @Override
+    public void onToggleWorkspace(WorkspaceGroup g) {
+        if (g == null) return;
+        String key = g.key == null ? "" : g.key;
+        if (isWorkspaceExpanded(key)) {
+            expandedWorkspaces.remove(key);
+            collapsedWorkspaces.add(key);
+        } else {
+            collapsedWorkspaces.remove(key);
+            expandedWorkspaces.add(key);
+        }
+        saveWorkspaceFold();
         if (listScreen != null) setSessionRows(buildRows());
     }
 

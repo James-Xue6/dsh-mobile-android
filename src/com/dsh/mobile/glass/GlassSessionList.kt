@@ -91,6 +91,13 @@ interface GlassSessionHost {
     fun rename(s: SessionInfo)
     fun archive(s: SessionInfo)
     fun toggleChildren(s: SessionInfo)
+    /**
+     * [工作区折叠] 点工作区分组表头：展开/折叠该工作区名下的会话行。
+     *
+     * 与 [toggleChildren] 是**两层不同的折叠**（这一层按工作区、那一层按父会话），
+     * 账本也各存各的 —— 展开工作区不该顺手把某个父会话的子会话也弹开，反之亦然。
+     */
+    fun toggleWorkspace(g: WorkspaceGroup)
     fun workspaceMenu(g: WorkspaceGroup)
     /** [V3.31] 会话卡的 ⋯ 菜单（宿主用 Java 对话框实现 ⇒ 不开 Compose 新窗口）。 */
     fun sessionMenu(s: SessionInfo)
@@ -254,10 +261,23 @@ private fun WorkspaceHeader(
     // [V3.43 · 补完 V3.32 §2.1] 这里原来弹的是**宿主 Java 菜单**（V3.31 为避 Compose Dialog 闪退回退的）。
     //   现在改成：只把"要开哪个菜单"记进屏状态（`state.wsFor`），由**屏根**渲染树内浮层
     //   ⇒ 既有玻璃观感，又不开新窗口（不会触发 `ViewTreeLifecycleOwner` 那条真机闪退）。
+    //
+    // [工作区折叠 · 用户「我要的父级是工作区。工作区可以展开查看工作区一下的子对话」]
+    //   整行 = 折叠开关（`toggleWorkspace`），左侧给 ▸/▾ 指示当前是收着还是开着。
+    //   ⚠️ 右侧「⋯」是**嵌套**的可点元素：Compose 内层 `clickable` 命中区在它自己的边界内
+    //   ⇒ 点 ⋯ 只开菜单、不会连带把这一组折叠掉（两件事不会互相触发）。
+    //   收起时右侧计数照常显示 —— 收起来的组也要能一眼看出里面有多少条。
     Row(
-        Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 14.dp, bottom = 4.dp),
+        Modifier.fillMaxWidth()
+            .padding(top = 6.dp, bottom = 2.dp)
+            .glassTap(corner = 14.dp) { host.toggleWorkspace(g) }
+            .padding(start = 6.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Text(
+            if (g.expanded) "▾" else "▸", color = inkFaint, fontSize = Ui.S_CAP1.sp,
+        )
+        Spacer(Modifier.width(4.dp))
         Text(
             g.label.ifBlank { "会话" }, color = inkSub, fontSize = Ui.S_CAP1.sp,
             fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,

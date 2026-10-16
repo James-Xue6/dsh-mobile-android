@@ -17,6 +17,14 @@ package com.dsh.mobile.model;
  */
 public final class WorkspaceGroup {
 
+    /**
+     * 分组键（`MainActivity.buildRows()` 的分组键原样带出来）：
+     * 规范化后的**小写完整路径**、`im:`（IM 会话）、空串（「其他」）。
+     *
+     * <p>折叠状态要用它当账本键：路径比"第几组"稳（组会随新会话/排序变化），
+     * 也比显示名稳（「其他」和两个同名目录会撞车）。
+     */
+    public final String key;
     /** 标题上显示的工作区名（优先用工作区注册表里的 title，取不到时退回目录名）。 */
     public final String label;
     /** 完整工作目录；空表示这一组没有可派发的工作区（「其他」/ IM 会话）。 */
@@ -25,8 +33,14 @@ public final class WorkspaceGroup {
     public final String workspaceId;
     /** 该组下的顶层会话数。 */
     public final int count;
+    /**
+     * 这一组名下的会话行**此刻是否铺在抽屉里**（派生字段，由 `buildRows` 每轮重算，不持久化）：
+     * 折叠时只有本行可见、展开时才跟出会话行。默认值 true 只是构造期的安全兜底。
+     */
+    public boolean expanded = true;
 
-    public WorkspaceGroup(String label, String path, String workspaceId, int count) {
+    public WorkspaceGroup(String key, String label, String path, String workspaceId, int count) {
+        this.key = key == null ? "" : key;
         this.label = label == null ? "" : label;
         this.path = path == null ? "" : path;
         this.workspaceId = workspaceId == null ? "" : workspaceId;
