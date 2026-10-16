@@ -3225,7 +3225,12 @@ public final class MainActivity extends Activity implements
                 s.running = o.optBoolean("running", false);
                 s.blank = o.optBoolean("blank", false);
                 // 子智能体 / 专家团识别字段：网关原样透传宿主 session.list 的同名字段
-                s.parentSessionId = o.optString("parentSessionId", "");
+                // [2026-10-16 修父子层级] 宿主出网的字段名是 **parentId**（宿主实现里映射为
+                // `entry.parentSessionId !== void 0 ? { parentId: entry.parentSessionId } : {}`），
+                // 而这里一直读 `parentSessionId` → 永远取空 → 抽屉里每条会话都被当顶层：
+                // 平铺、没有父子级、也看不出差异（用户报"全是铺开的"就是这个）。
+                // 两个名字都读一遍，宿主改名前/后都能工作。
+                s.parentSessionId = o.optString("parentId", o.optString("parentSessionId", ""));
                 s.origin = o.optString("origin", "");
                 s.raw = o;
                 // 拿到标题就落缓存（投影缓存命中时列表本身带 title，省掉一次历史请求）
