@@ -27,6 +27,9 @@ public final class Store {
     private static final String K_GATEWAY_NAME = "gateway_name";
     private static final String K_LAN = "lan_url";
     private static final String K_WAN = "wan_url";
+    /** 对话显示模式。v2 = 本次把默认改成 compact 后的新键；v1 只用来认"旧版里显式选过"的人。 */
+    private static final String K_DISPLAY_MODE_V2 = "display_mode_v2";
+    private static final String K_DISPLAY_MODE_V1 = "display_mode";
     /**
      * 「当前生效设备怎么选线路」的旧字段：auto（自动，默认）/ lan（只用内网）/ wan（只用公网）。
      * **它是真身**，设备表里的 {@link Device#netMode} 是它的镜像 —— 与 {@link #K_LAN}/{@link #K_WAN}
@@ -474,14 +477,30 @@ public final class Store {
 
     public boolean paired() { return !token().isEmpty() && !url().isEmpty(); }
 
-    /** 对话显示模式：full（完整，默认） / compact（简洁，只显示正在运行什么）。 */
+    /**
+     * 对话显示模式：compact（简洁，**默认**） / full（完整）。
+     *
+     * <p>[2026-10-16 · 用户「父级菜单与思维链都要**默认折叠**，看的时候再点开」]
+     *
+     * <h3>为什么换了个键名（{@code display_mode_v2}）而不是原地改默认值</h3>
+     * 因为旧键 {@code display_mode} **已经是 shared_preferences 里的存量值**：
+     * 老版本读取时带的默认值是 {@code full}，所以「显式选过完整」和「从没选过」在存储里
+     * **长得一模一样**，无法区分。原地把默认值改成 compact 的话，对已经装过旧版的机器**永远不生效**
+     * （键已存在，压根走不到默认值）——那就等于"改了但没用"。
+     * <p>⇒ 新键 absent **且** 旧键也 absent（= 这个人从没选过）才给新默认 {@code compact}；
+     * 旧键只要存在（= 他显式选过，哪怕选的是 full）就**原样沿用**，不翻他的选择。
+     * 写入时两个键一起写，旧版回退安装也能读到同一个值。
+     */
     public String displayMode() {
-        String v = sp.getString("display_mode", "full");
+        String v = sp.getString(K_DISPLAY_MODE_V2, null);
+        if (v == null) v = sp.getString(K_DISPLAY_MODE_V1, null);   // 旧版显式选择：沿用，不给新默认
+        if (v == null) return "compact";                            // [新默认] 从没选过 ⇒ 思考链默认收起
         return "compact".equals(v) ? "compact" : "full";
     }
 
     public void setDisplayMode(String mode) {
-        sp.edit().putString("display_mode", "compact".equals(mode) ? "compact" : "full").apply();
+        String v = "compact".equals(mode) ? "compact" : "full";
+        sp.edit().putString(K_DISPLAY_MODE_V2, v).putString(K_DISPLAY_MODE_V1, v).apply();
     }
 
     /**

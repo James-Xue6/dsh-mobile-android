@@ -138,8 +138,13 @@ class GlassChatState {
      *
      * `true` = 精简（思考/工具行**默认收起**）；`false` = 完整（**默认展开**）。
      * 由宿主 `GlassChatView.setCompact()` 镜像（`MainActivity` 换会话/改设置时都会调）。
+     *
+     * ⚠️ 这里的 Compose 初值只对**切片页/未接宿主的预览**有意义；真机上的值**恒由宿主灌入**
+     * （`MainActivity.showChat():1921` ⇒ `convo.setCompact("compact".equals(store.displayMode()))`）。
+     * [2026-10-16] `Store.displayMode()` 默认改成 `compact` ⇒ 初值也跟到 `true`，
+     * 免得切片页与真机**默认态不一致**、把自证结论带偏。
      */
-    var compact by mutableStateOf(false)
+    var compact by mutableStateOf(true)
     /** 输入条上方的能力 chip（正式版：权限/模型/思考/用量/项目…，空则不显示）。 */
     var chips by mutableStateOf<List<String>>(emptyList())
     /** 输入框草稿 —— **双向**：宿主发送时要读它、发完要清它。 */
