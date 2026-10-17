@@ -1,9 +1,29 @@
 # 下一步计划（NEXT-UPDATE）
 
 > 状态标记：`[x]` 已完成并验证 / `[~]` 部分完成 / `[ ]` 待办。
-> 最近更新：2026-10-06 凌晨（**毛玻璃 v3 UI 同步**，已在 Android 模拟器上逐屏实测；**未发版**）。
+> 最近更新：2026-10-17（**合并朋友 fork `feat/session-tree`**：抽屉工作区折叠 + 思维链一键开关 + `parentId` 层级修复；构建通过、已推 Gitee/GitHub，**未发版**）。
 
-## 零、本轮：毛玻璃 v3 UI 同步（2026-10-06 · 已实测）
+## 零、2026-10-17：合并朋友 fork `feat/session-tree`（7 个提交）
+
+> 来源：`friend` = `gitee.com/tang-changxu/dsh-mobile-android` 分支 `feat/session-tree`（父提交正好是本仓库 `6590ef7` ⇒ 直接 fast-forward）。
+> 处置：逐条审阅 → FF 合并进 `main` → Gradle `:app:assembleRelease` 通过 → 推 `gitee` + `origin`（**未发版**，`versionCode` 仍 27 / `0.87.0`）。
+
+- [x] **抽屉父子层级修复（真 bug）** —— 宿主 `session.list` 出网的字段是 **`parentId`**
+  （在 `app.asar` 里实测到 `...entry.parentSessionId !== void 0 ? { parentId: entry.parentSessionId } : {}`），
+  而 App 一直读 `parentSessionId` ⇒ 恒空 ⇒ 抽屉里每条会话都被当顶层、平铺看不出父子。现两个名字都读。
+- [x] **工作区层可折叠** —— 分组表头恒在（它同时是"有哪些工作区"的唯一来源，折叠只省掉名下会话行）；
+  默认折叠，只有**当前会话所在的工作区**默认展开；用户显式展开/折叠各一套账本，落盘
+  `Store.drawer_ws_expanded/collapsed`，与子会话折叠（`expandedParents`）互不影响。
+- [x] **思维链一键开关** —— 对话页状态胶囊行加一枚玻璃胶囊「收起/展开思考过程」，
+  **复用既有显示模式**（`Store.displayMode()` ⇄ `state.compact`），不新增第二套隐藏机制；
+  同时修 `ThinkingCard/ToolCard` 的 `remember(startOpen)` 缺 key（不带 key 时全局切换对已在屏上的卡片无效）。
+- [x] **默认改「简洁」** —— `Store.displayMode()` 新增 `display_mode_v3` 做**一次性迁移**（老装机也生效），此后以 v3 为准。
+- [x] **构建自证** —— Gradle 9.6 `:app:assembleRelease` = BUILD SUCCESSFUL；`apksigner` 证书 SHA-256
+  `2e518d75…d8ece8e` 与 HANDOFF §5 的期望指纹一致。
+- ⏳ **未做**：真机逐项验收（当时 adb 无设备；模拟器启动即报
+  `emu-last-feature-flags.protobuf.lock (error: 5)`，起不来）；**未发版**，`dist/version.json` 仍指向 0.87.0。
+
+## 零（上一轮）：毛玻璃 v3 UI 同步（2026-10-06 · 已实测）
 
 > 需求：用户给了一份界面 demo（存档 `F:\AI\程序开发\.tmp\demo_d.html`），要求"同步优化 App UI"，
 > 并明确 **只做 UI 优化、不发版**。逐条口径、执行结果、未做项见 `docs/UI-毛玻璃-任务清单.md`。
