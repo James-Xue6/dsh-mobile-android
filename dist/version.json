@@ -1,10 +1,10 @@
 {
-  "versionCode": 29,
-  "versionName": "0.87.2",
-  "notes": "0.87.2：① 修复设备页弹窗按钮串线——更新时点「去设置」不再跳到扫码取景页 ② 修复在设置页/设备页点「检查更新」查到新版本却没有提示 ③ 授权「安装未知应用」后回到 App 自动续上安装 ④ 已下载的更新包不再重复下载",
-  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.2/dist/dsh-mobile.apk",
-  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.2/dist/dsh-mobile.apk",
-  "sha256": "42e2a86c6107559247e2b5cfe3ba468534a53bae3bf1383652437ca6681ec609",
+  "versionCode": 30,
+  "versionName": "0.87.3",
+  "notes": "0.87.3：① 修复升级后每次启动还提示安装旧包（现在按安装包里的真实 versionCode 与当前版本对比）② 只提示最新的那一个安装包 ③ 安装包装完或已过期会自动删掉，不再反复打扰、不占空间",
+  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.3/dist/dsh-mobile.apk",
+  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.3/dist/dsh-mobile.apk",
+  "sha256": "aa1f44a3369c1a60f28ca1ef5ef9f379f36a81a5f399cfddb79358ad343d4af9",
   "size": 9628786,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
