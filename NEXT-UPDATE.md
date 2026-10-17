@@ -51,6 +51,23 @@
 
 ## 一、已完成（保留记录，避免重复讨论）
 
+- [x] **更新链路三个真机 bug（0.87.2 已修 · ⏳ 待真机复验）**
+  用户 2026-10-17 实测：`关于`里查到新版本**没有任何提示**；`立即更新`下载完点「去设置」授权
+  「安装未知应用」，**直接跳进扫码取景页**，安装始终没发生。
+  - ① **设备页弹窗按钮串线（根因）**：`GlassDeviceScreen` 的 `onPick` 原来**无条件**转给宿主
+    `host.sheetPick(it)`，而宿主 `sheetPick` 只认本页自有菜单（tag=`add` 二选一 / `delete:<id>`），
+    其余一律按「index 0 = 扫码添加」处理 ⇒ 更新链路在本页弹的**确认框**（去设置 / 立即安装 / 重试）
+    按下去都变成「添加设备 → 扫码添加」⇒ 跳相机取景页，`去设置` 的回调根本没跑。
+    修法：与抽屉/设置页/对话页同一条纪律 —— 先收起，再按 `state.sheet.onListPick` 分派，
+    只有本页自有菜单才落给宿主。
+  - ② **更新提示写死弹到对话页**：`handleUpdateResult()` 里 `((GlassChatView) convo).showSheetList(...)`
+    ⇒ 人在设置页/设备页时对话页没显示，弹窗没人渲染 ⇒「查到了但毫无提示」。
+    修法：改走 `glassInScreenList()`（`currentSheetState()` 按当前界面路由）。
+  - ③ **授权后不续装**：`maybePromptPendingUpdate()` 有"同一版本只提示一次"去重，授权回来提示额度已用完
+    ⇒ 什么都不发生。修法：新增 `pendingInstallApk` + `maybeContinuePendingInstall()`，回前台发现授权已给就续上安装器。
+  - 发版核验：`node tools/verify-live.js` 主/备两条线路 sha256 一致 ✓（备用线路首次 `ECONNRESET` 是
+    jsDelivr 抖动，重跑即通过）。
+
 - [x] **跨会话/后台通知** —— 正解在**服务端**：网关插件新增 `hasAnyInteractionClient()`，放宽提问/审批两道 waterfall 门；
   并让被 `filterSessionId` 过滤的连接照样收到（带 `global:true`，字段最小化）。**已发版 v0.86.4，用户实测通过。**
   - 作废的三条客户端 hack（勿重提）：第二条 WS 连接（握手永远超时）/ `unsubscribe` 窗口（网关不推新交互）/ 周期强制重连（会毁输入与回答）。
