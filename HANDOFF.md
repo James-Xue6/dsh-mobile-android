@@ -25,7 +25,7 @@
 |---|---|
 | 仓库 | `F:\AI\程序开发\dsh-mobile-android`（分支 `main`） |
 | 包名 | `com.dsh.mobile` |
-| 当前版本 | `versionName 0.87.1` / `versionCode 28`（2026-10-17 实测） |
+| 当前版本 | `versionName 0.87.3` / `versionCode 30`（2026-10-17 实测） |
 | 构建 | **Gradle 9.6**（`gradle.bat :app:assembleRelease`，命令见 `AGENTS.md`）；~~`build.ps1`~~ 已失效 |
 | 发版 | `release.ps1 -Version X.Y[.Z] -Notes "…"`（构建已走 Gradle，见顶部说明） |
 | 同步 Gitee | `tools/push-gitee.ps1 -GiteeUser <用户名>`（⚠️ 它内部是 `git push --tags`，会把本地残留的对方 33 个 tag 一起推 —— 见 §4.5，推荐改用 `git push gitee v<版本>`） |
@@ -40,6 +40,7 @@
 | `CONTRIBUTING.md` | 新手怎么提（网页点哪里 / fork / PR） | ✓ |
 | **`HANDOFF.md`（本文件）** | **上传、版本号、签名的硬规则** | ✓ |
 | `NEXT-UPDATE.md` | 下一步计划 + 已完成记录 | ✓ |
+| `CHANGELOG.md` | **已发版**的逐版更新日志（发版后手工补，`release.ps1` 不管它） | ✓ |
 | `docs/friend-fork/HANDOFF.md` | 对方 fork 那一侧的**历史**交接单 —— 是材料，不是规则 | ✓ |
 | `docs/*.md`（`docs/` 根目录下的） | 协议核实 / 契约 / 任务明细 | ✗ **不入库**（见第 2 节） |
 

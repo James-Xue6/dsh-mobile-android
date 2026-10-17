@@ -52,7 +52,7 @@ You can also download the APK directly (**these two links always point to the la
 - CDN (usually faster in mainland China): `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/dsh-mobile.apk`
 - GitHub: `https://github.com/James-Xue6/dsh-mobile-android/raw/main/dist/dsh-mobile.apk`
 
-> Pin a version by replacing `@main` with a tag, e.g. `@v0.86.9`. The current version can be read from
+> Pin a version by replacing `@main` with a tag, e.g. `@v0.87.3`. The current version can be read from
 > `https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@main/dist/version.json` (larger `versionCode` = newer).
 > The release script purges the `@main` CDN cache on every release, so these links never lag behind.
 
@@ -173,7 +173,21 @@ Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desk
 
 ---
 
+## Recent releases
+
+Per-version notes live in [CHANGELOG.md](CHANGELOG.md) (Chinese); the newest lines:
+
+- **v0.87.3** — the update prompt now compares the downloaded APK's **real `versionCode`** with the
+  installed one: only the newest pending package is offered, older/stale ones are deleted, and the
+  package is removed after installation.
+- **v0.87.2** — fixed two update-chain bugs (tapping "go to settings" opened the QR scanner; the
+  "new version" sheet was routed to the chat screen while you were on Settings) and the install now
+  resumes automatically after granting "install unknown apps".
+- **v0.87.1** — workspace groups are collapsible in the drawer; one-tap collapse/expand for reasoning
+  chains (collapsed by default); fixed parent/child session nesting (the host sends `parentId`).
+
+---
+
 ## License
 
-This repository does not ship a `LICENSE` file yet. Please confirm the terms with the author before
-redistributing or using it commercially.
+This repository ships a `LICENSE` file in the root — see [LICENSE](LICENSE) for the terms.
