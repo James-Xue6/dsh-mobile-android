@@ -1,10 +1,10 @@
 {
-  "versionCode": 28,
-  "versionName": "0.87.1",
-  "notes": "0.87.1：① 抽屉修好父子层级（宿主出网字段是 parentId，之前读错导致会话全平铺）② 工作区可折叠：默认折叠，当前会话所在工作区自动展开，手动选择会记住 ③ 对话页新增「收起/展开思考过程」一键开关，思考链默认收起，不再挡住结论 ④ 修复全局开关对已在屏上的思考卡不生效",
-  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.1/dist/dsh-mobile.apk",
-  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.1/dist/dsh-mobile.apk",
-  "sha256": "c1f78f5caeb59c00439cbb0239256f1e5d565c7d0a47e7efbf5bd145bbcdc738",
+  "versionCode": 29,
+  "versionName": "0.87.2",
+  "notes": "0.87.2：① 修复设备页弹窗按钮串线——更新时点「去设置」不再跳到扫码取景页 ② 修复在设置页/设备页点「检查更新」查到新版本却没有提示 ③ 授权「安装未知应用」后回到 App 自动续上安装 ④ 已下载的更新包不再重复下载",
+  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.2/dist/dsh-mobile.apk",
+  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.2/dist/dsh-mobile.apk",
+  "sha256": "42e2a86c6107559247e2b5cfe3ba468534a53bae3bf1383652437ca6681ec609",
   "size": 9628786,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
