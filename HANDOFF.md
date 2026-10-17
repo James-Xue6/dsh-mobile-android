@@ -405,4 +405,46 @@ pwsh -File .\tools\ensure-ps1-bom.ps1
 
 ---
 
-*最后更新：2026-10-07 · 本文件描述的规则与实际脚本（`build.ps1` / `release.ps1` / `tools/push-gitee.ps1` / `tools/verify-live.js` / `.gitignore`）一致；脚本改了请同步改这里。*
+## 12. 共创者提 PR 之后，作者怎么合（2026-10-17 定）
+
+**结论先行：用 PR 本身评审、用快进合并，别点 Gitee 页面的「合并」按钮。**
+
+```powershell
+# ① 把 PR 直接拉成本地引用（不需要拉对方整个 fork，也不依赖对方的分支名）
+git fetch gitee refs/pull/<N>/head:refs/pr/<N>
+
+# ② 看这个 PR 到底带进来什么（三点对比：只算 PR 独有的改动）
+git diff --stat main...refs/pr/<N>
+
+# ③ 快进合并（能快进就快进，不制造无意义的 merge 提交）
+git checkout main
+git merge --ff-only refs/pr/<N>
+
+# ④ 构建自证（Gradle）→ 在 NEXT-UPDATE.md 记一行 → 发版仍然只走 release.ps1
+```
+
+**为什么不能点「合并」按钮**：
+
+- 它会绕开 `release.ps1` 的版本号 / tag / `dist/version.json` 流程；
+- 会在 main 上多一个 `Pre Merge pull request !N from …` 提交，本地与远端各走一步就会分叉；
+- 作者侧纪律是「main 只由作者合并、只由 `release.ps1` 发版」，页面按钮等于绕开纪律。
+
+**PR 状态怎么变**：只要 PR head 成了 main 的祖先，Gitee 就会把 PR 显示成 **merged**。
+实测（2026-10-17 · PR !1）：head `6c424ef` 被快进合入后状态即 merged，
+而 Gitee 预生成的 `Pre Merge pull request !1`（`e36a8bc`）**从未进入 main** —— 不需要手动关。
+
+**核对"到底合没合"的三条命令**（比看页面可靠）：
+
+```powershell
+git fetch gitee 'refs/pull/<N>/head:refs/pr/<N>'
+git diff --stat 'refs/pr/<N>' main          # 空 = PR 的每个提交都已在 main 里
+git merge-base --is-ancestor 'refs/pr/<N>' main; $LASTEXITCODE   # 0 = 是祖先
+```
+
+**留痕（可选）**：想在 PR 下自动评论，需要 Gitee token 带 `pull_requests` 权限；
+本机 git 凭据里那个 token 只有仓库读写，调评论接口会 `401 no 'pull_requests' scope`（实测），
+这种情况就由作者手写一条评论。
+
+---
+
+*最后更新：2026-10-17 · 本文件描述的规则与实际脚本（`release.ps1` / `tools/push-gitee.ps1` / `tools/verify-live.js` / `.gitignore`）一致；脚本改了请同步改这里。*
