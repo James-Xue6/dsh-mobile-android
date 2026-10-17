@@ -1299,7 +1299,8 @@ public final class MainActivity extends Activity implements
         if (store == null) return;
         // [更新修复·2026-10-05] 回前台先自检「更新包已下载好但还没安装」→ 主动提示安装。
         // 放在连接判断**之前**：离线时也要能提示（它跟连不连得上电脑无关）。
-        maybePromptPendingUpdate();
+        // [0.87.2] 但先看有没有"卡在授权那一步"的包：有就直接续装（且不再弹"已下载好"）。
+        if (!maybeContinuePendingInstall()) maybePromptPendingUpdate();
         if (gw == null) return;
         if (!gw.wantConnected()) return;
         gw.foregroundLivenessCheck();
@@ -10189,35 +10190,37 @@ public final class MainActivity extends Activity implements
         // 用户对同一版本点过「以后再说」就不再自动弹（手动点仍会弹）
         if (!manual && name.equals(store.skipVersion())) return;
 
-        // [V3.112 · 迁移] 三选一 ⇒ **玻璃列表**（立即更新 / 复制链接 + 骨架自带"以后再说"收口）
-        if (convo instanceof com.dsh.mobile.glass.GlassChatView) {
-            java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
-            g.add(new com.dsh.mobile.glass.GlassSheetOption("立即更新",
-                    notes.isEmpty() ? "下载后覆盖安装即可，无需卸载" : notes, false, ""));
-            g.add(new com.dsh.mobile.glass.GlassSheetOption("复制链接",
-                    url.isEmpty() ? mirror : url, false, ""));
-            ((com.dsh.mobile.glass.GlassChatView) convo).showSheetList("updnew",
-                    "发现新版本 v" + name, "当前 v" + myVersionName(), g, "以后再说",
-                    idx -> {
-                        if (idx != null && idx == 0) {
-                            startInAppUpdate(name, url, mirror, sha256, size);
-                        } else if (idx != null && idx == 1) {
-                            String target = url.isEmpty() ? mirror : url;
-                            try {
-                                android.content.ClipboardManager cm =
-                                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                                if (cm != null) {
-                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("apk", target));
-                                }
-                                Toast.makeText(this, "下载链接已复制", Toast.LENGTH_SHORT).show();
-                            } catch (Throwable ignored) { }
-                        } else {
-                            store.setSkipVersion(name);
-                        }
-                        return kotlin.Unit.INSTANCE;
-                    }, null);
-            return;
-        }
+        // [0.87.2 · 真机 bug「关于里查到新版本却没有任何提示」] ⚠️ 原来这里是：
+        //   `if (convo instanceof GlassChatView) { ((GlassChatView) convo).showSheetList(...); return; }`
+        //   —— **写死弹到对话页** ✗。用户停在设置页/设备页时，对话页根本没有显示在屏幕上，
+        //   弹窗被塞进对话页的状态里 ⇒ 没人渲染它 ⇒ 表现成「查到了新版本，但一点提示都没有」。
+        //   （`convo` 是懒建的，进过一次对话就一直非空，所以这个分支几乎总会命中 ⇒ 问题必现。）
+        //   ⇒ 改走 `glassInScreenList()`：内部用 `currentSheetState()` 按**当前界面**路由
+        //   （设置页 / 设备页 / 对话页各自那一套宿主），与工程规则一致。
+        java.util.List<com.dsh.mobile.glass.GlassSheetOption> g = new java.util.ArrayList<>();
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("立即更新",
+                notes.isEmpty() ? "下载后覆盖安装即可，无需卸载" : notes, false, ""));
+        g.add(new com.dsh.mobile.glass.GlassSheetOption("复制链接",
+                url.isEmpty() ? mirror : url, false, ""));
+        if (glassInScreenList("updnew", "发现新版本 v" + name, "当前 v" + myVersionName(), g,
+                "以后再说", idx -> {
+                    if (idx != null && idx == 0) {
+                        startInAppUpdate(name, url, mirror, sha256, size);
+                    } else if (idx != null && idx == 1) {
+                        String target = url.isEmpty() ? mirror : url;
+                        try {
+                            android.content.ClipboardManager cm =
+                                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            if (cm != null) {
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("apk", target));
+                            }
+                            Toast.makeText(this, "下载链接已复制", Toast.LENGTH_SHORT).show();
+                        } catch (Throwable ignored) { }
+                    } else {
+                        store.setSkipVersion(name);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                })) return;
         Ui.dialog(this)
                 .setTitle("发现新版本 v" + name)
                 .setMessage((notes.isEmpty() ? "有新版本可用。" : notes)
@@ -10247,6 +10250,16 @@ public final class MainActivity extends Activity implements
     /** 下载中标志（防重入 / 取消）。 */
     private volatile boolean updateDownloading = false;
     private volatile boolean updateCancelled = false;
+
+    /**
+     * [0.87.2 · 真机流程补完] 已经下载好、正卡在「允许安装未知应用」那一步的包。
+     *
+     * <p>为什么要记住它：原来用户点「去设置」授权后回到 App **什么都不会发生** ——
+     * `maybePromptPendingUpdate()` 有"同一版本只提示一次"的去重（第一次提示已经用掉了），
+     * 用户只能自己再去「检查更新」里找一遍，很容易以为"点了没反应"。
+     * 现在回前台一发现授权已给就直接续上安装器（见 {@link #maybeContinuePendingInstall()}）。
+     */
+    private java.io.File pendingInstallApk = null;
 
     /** [回前台自检] 已经提示过安装的版本，避免反复弹。 */
     private String pendingUpdatePrompted = "";
@@ -10290,6 +10303,7 @@ public final class MainActivity extends Activity implements
     private void startInAppUpdate(final String versionName, final String url, final String mirror,
                                   final String sha256, final long expectSize) {
         if (updateDownloading) { Toast.makeText(this, "正在下载中…", Toast.LENGTH_SHORT).show(); return; }
+        pendingInstallApk = null;      // 开始新的一轮下载：上一次"等授权续装"的意图作废
         final java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
         // 文件名带 versionName：避免"上一版的包被当成这一版" ✗
         final java.io.File out = new java.io.File(dir, "dsh-mobile-" + versionName + ".apk");
@@ -10512,6 +10526,8 @@ public final class MainActivity extends Activity implements
     private void installDownloadedApk(final java.io.File apk) {
         try {
             if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                // [0.87.2] 记下来：用户从系统设置授权回来后自动续装（见 maybeContinuePendingInstall）
+                pendingInstallApk = apk;
                 // [V3.112 · 迁移] 更新链路统一玻璃确认框
                 if (glassConfirm("updperm", "还差一步：允许安装应用", "系统要求先授权本应用「安装未知应用」，否则安装界面打不开。", "去设置", false, () -> { try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:" + getPackageName()))); } catch (Throwable t) { Toast.makeText(this, "打不开系统设置页", Toast.LENGTH_LONG).show(); } })) return;
                 Ui.dialog(this)
@@ -10535,10 +10551,36 @@ public final class MainActivity extends Activity implements
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(u, "application/vnd.android.package-archive");
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            pendingInstallApk = null;          // 已经拉起安装器：不再"续装"
             startActivity(i);
         } catch (Throwable t) {
             Toast.makeText(this, "拉起安装器失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    /**
+     * [0.87.2] 回前台续上"卡在授权那一步"的安装。
+     *
+     * <p>真机流程（0.87.1 实测）：点「立即更新」→ 下载 → 点「去设置」授权「安装未知应用」→
+     * 回到 App 后**什么都不发生**（旧逻辑里同一版本只提示一次，提示额度已经用掉了）。
+     * 这里补上：一发现授权已给，立刻拉起系统安装器。
+     *
+     * @return true = 手上有"等授权的包"（调用方就不要再弹"更新包已下载好"那条提示，避免叠两层）。
+     */
+    private boolean maybeContinuePendingInstall() {
+        if (pendingInstallApk == null) return false;
+        if (!pendingInstallApk.exists() || pendingInstallApk.length() <= 0) {   // 包被清掉了：作废
+            pendingInstallApk = null;
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            return true;        // 还没授权：安静等，不重复弹
+        }
+        final java.io.File apk = pendingInstallApk;
+        pendingInstallApk = null;
+        pairTraceAdd("更新：已获得「安装未知应用」授权 → 自动续上安装");
+        installDownloadedApk(apk);
+        return true;
     }
 
     private void refreshFeedbackHint() {

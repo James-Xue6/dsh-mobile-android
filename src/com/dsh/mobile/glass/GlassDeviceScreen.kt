@@ -246,7 +246,21 @@ fun GlassDeviceScreen(
         GlassSheetOverlay(
             backdrop = backdrop,
             state = state.sheet,
-            onPick = { host.sheetPick(it) },
+            // ⚠️ [0.87.2 · 真机 bug「点『去设置』直接进了扫码取景页」] 这里原来**无条件**转发给宿主：
+            //   `onPick = { host.sheetPick(it) }` ✗ —— 宿主 `sheetPick` 只认识本页**自己的**菜单
+            //   （tag=`add` 二选一 / `delete:<设备id>`），其余一律按「index 0 = 扫码添加」处理。
+            //   于是**别的流程在本页弹的确认框**（更新链路「还差一步：允许安装应用」⇒ 去设置 /
+            //   「更新包已下载好」⇒ 立即安装 …）按下去都变成「添加设备 → 扫码添加」⇒ 直接跳相机取景页，
+            //   `去设置` 的回调根本没跑（0.87.1 真机实测）。
+            //   ⇒ 与抽屉 / 设置页 / 对话页**同一条纪律**：先收起，再按"这张弹窗是谁写的"分派 ——
+            //     通用确认/列表（`onListPick` 有值，源码见 `MainActivity.glassInScreenConfirm`）
+            //     交还给它自己；只有本页自有菜单才落给宿主。
+            onPick = { idx ->
+                val tag = state.sheet.tag
+                state.sheet.hide()          // 先收起：回调里可能又要开新面板（V3.126 同一条教训）
+                if (tag == "add" || tag.startsWith("delete:")) host.sheetPick(idx)
+                else state.sheet.onListPick?.invoke(idx) ?: host.sheetPick(idx)
+            },
             onDismiss = { state.sheet.hide() },
             settleFrames = 2,   // [V3.118] 等 2 帧：先让取样层记录完再画面板，消除"首次打开材质不对、关掉再开才对"
         )
