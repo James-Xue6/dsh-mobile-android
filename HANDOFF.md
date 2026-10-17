@@ -6,9 +6,14 @@
 > 实测它只走 `javac`、**不编译 Kotlin**，跑出来是 **200 个错误**（`GlassSheetOption`、`kotlin.*` 全找不到）。
 >
 > - **构建一律用 Gradle 9.6**，确切命令见 `AGENTS.md` 的「工程速查」；
-> - **`release.ps1` 的构建步骤仍然调用 `build.ps1`** ⇒ **发版前必须先把那一步切到 Gradle**，
->   否则发版流程跑不通（这是本文件里最需要先处理的一条）；
+> - **`release.ps1` 的构建步骤已切到 Gradle**（脚本内 `V3.109` 起：Gradle 直出 → 复制成 `dist/dsh-mobile.apk`
+>   → `aapt2` 断言 APK 里真实 versionCode 与清单一致）。**2026-10-17 发 0.87.1 全流程实测通过**，
+>   本文件顶部原来那条「发版前必须先把那一步切到 Gradle」**已办完，不再需要处理**；
 > - 下文凡出现 `build.ps1` 的位置，**一律按上面这段理解**（命令换成 Gradle 那一条）。
+>
+> **⚠️ 发版提交会夹带 `.gradle/` 缓存**：这些文件是**被 git 跟踪的**，Gradle 一构建就会被改动，
+> 而 `release.ps1` 用的是 `git add -A` ⇒ 会连 11MB 的 `executionHistory.bin` 一起提交
+> （2026-10-17 实测踩到）。推送前用 `git checkout <上一条提交> -- .gradle` 把它们还原、再提交。
 
 > **这份文件给谁看**：一起维护本项目的共创者、共创者的 AI 助手，以及下一个接手本仓库的会话。
 > **它解决什么问题**：防止上传（push / 发版 / 换包）时把仓库结构、版本号、签名弄坏。
@@ -20,9 +25,9 @@
 |---|---|
 | 仓库 | `F:\AI\程序开发\dsh-mobile-android`（分支 `main`） |
 | 包名 | `com.dsh.mobile` |
-| 当前版本 | `versionName 0.86.9` / `versionCode 26`（2026-10-07 实测） |
+| 当前版本 | `versionName 0.87.1` / `versionCode 28`（2026-10-17 实测） |
 | 构建 | **Gradle 9.6**（`gradle.bat :app:assembleRelease`，命令见 `AGENTS.md`）；~~`build.ps1`~~ 已失效 |
-| 发版 | `release.ps1 -Version X.Y[.Z] -Notes "…"`（⚠️ 其构建步骤需先切到 Gradle，见顶部说明） |
+| 发版 | `release.ps1 -Version X.Y[.Z] -Notes "…"`（构建已走 Gradle，见顶部说明） |
 | 同步 Gitee | `tools/push-gitee.ps1 -GiteeUser <用户名>`（⚠️ 它内部是 `git push --tags`，会把本地残留的对方 33 个 tag 一起推 —— 见 §4.5，推荐改用 `git push gitee v<版本>`） |
 | 发版后核验 | `node tools/verify-live.js` |
 
