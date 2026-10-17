@@ -10273,31 +10273,105 @@ public final class MainActivity extends Activity implements
      * 回前台扫一次 updates 目录，发现"不是当前版本"的包就提示安装 ✓。
      */
     private void maybePromptPendingUpdate() {
+        if (updateDownloading) return;          // 正在下载：**别碰** updates 目录（半截包会被误判）
         try {
-            java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
-            java.io.File[] fs = dir.listFiles();
-            if (fs == null) return;
-            for (java.io.File f : fs) {
-                String n = f.getName();
-                if (!n.startsWith("dsh-mobile-") || !n.endsWith(".apk") || f.length() <= 0) continue;
-                final String ver = n.substring("dsh-mobile-".length(), n.length() - 4);
-                if (ver.equals(myVersionName())) continue;              // 就是当前版本：不必提示
-                if (ver.equals(pendingUpdatePrompted)) continue;        // 同一版本只提示一次
-                pendingUpdatePrompted = ver;
-                final java.io.File apk = f;
-                pairTraceAdd("更新：回前台自检发现已下载包 v" + ver + " → 提示安装（不再重复下载）");
-                // [V3.112 · 迁移] 更新链路统一玻璃确认框
-                if (glassConfirm("updready", "更新包已下载好", "v" + ver + " 的安装包已经在手机里了，不需要重新下载。", "立即安装", false, () -> installDownloadedApk(apk))) return;
-                Ui.dialog(this)
-                        .setTitle("更新包已下载好")
-                        .setMessage("v" + ver + " 的安装包已经在手机里了，不需要重新下载。\n"
-                                + "点「立即安装」打开系统安装界面。")
-                        .setPositiveButton("立即安装", (d, w) -> installDownloadedApk(apk))
-                        .setNegativeButton("以后再说", null)
-                        .show();
-                return;
-            }
+            final java.io.File dir = com.dsh.mobile.net.ApkFileProvider.updateDir(this);
+            final java.io.File apk = pickNewestPendingApk(dir);
+            if (apk == null) return;
+            final String ver = verNameOf(apk);
+            if (ver.equals(pendingUpdatePrompted)) return;        // 同一版本只提示一次
+            pendingUpdatePrompted = ver;
+            pairTraceAdd("更新：发现待安装包 v" + ver + "（当前 v" + myVersionName() + "）→ 提示安装");
+            final String msg = "v" + ver + " 的安装包已经在手机里了（当前 v" + myVersionName()
+                    + "），不需要重新下载。\n装完会自动删掉这个包，以后不会再提示。";
+            // [V3.112 · 迁移] 更新链路统一玻璃确认框
+            if (glassConfirm("updready", "更新包已下载好", msg, "立即安装", false, () -> installDownloadedApk(apk))) return;
+            Ui.dialog(this)
+                    .setTitle("更新包已下载好")
+                    .setMessage(msg + "\n点「立即安装」打开系统安装界面。")
+                    .setPositiveButton("立即安装", (d, w) -> installDownloadedApk(apk))
+                    .setNegativeButton("以后再说", null)
+                    .show();
         } catch (Throwable ignored) { }
+    }
+
+    /**
+     * [0.87.3 · 用户「升到 0.87.2 了，每次开还让我装 0.87.1」] 扫 updates 目录、清理、返回**最新那个待装包**。
+     *
+     * <p>⚠️ 原实现只按**文件名**跟当前版本比：升级成功后上一版的包永远不等于当前版本
+     * ⇒ 每次启动都弹一次（`pendingUpdatePrompted` 只在进程内去重，重启就忘）。
+     *
+     * <p>现在按 **APK 里真实的 versionCode**（`getPackageArchiveInfo`，与文件名无关）分三类：
+     * <ul>
+     *   <li>≤ 当前版本（旧包 / 已经装上那个）⇒ **直接删**，留着只会反复打扰；</li>
+     *   <li>&gt; 当前版本 ⇒ 只留 **最新那个**，其余更新的包也删（用户要求「只显示最新的」）；</li>
+     *   <li>读不出信息（下了一半 / 解析失败）⇒ **不删**，免得误删正在下的包。</li>
+     * </ul>
+     * 安装完成后进程会重启，onStart/onResume 再跑一遍本方法，就把装过的包一并清掉
+     * （Android 没有"安装成功"的可靠回调，`MY_PACKAGE_REPLACED` 又是发给新进程的，
+     *   动态注册的接收器收不到 ⇒ 用"下次启动自检"这条一定成立的路径）。
+     */
+    private java.io.File pickNewestPendingApk(final java.io.File dir) {
+        final java.io.File[] fs = dir == null ? null : dir.listFiles();
+        if (fs == null) return null;
+        final int mine = myVersionCode();
+        java.io.File best = null;
+        int bestCode = 0;
+        for (java.io.File f : fs) {
+            final String n = f.getName();
+            if (!n.startsWith("dsh-mobile-") || !n.endsWith(".apk") || f.length() <= 0) continue;
+            if (f.equals(pendingInstallApk)) continue;      // 正等用户授权、马上要装的那个：别删
+            final android.content.pm.PackageInfo pi = apkInfo(f);
+            if (pi == null) continue;                       // 读不出来：不删，留给下次下载自愈
+            final int code = versionCodeOf(pi);
+            if (code <= mine) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                pairTraceAdd("更新：清掉过期安装包 v" + pi.versionName + "（versionCode " + code
+                        + " ≤ 当前 " + mine + "）");
+                continue;
+            }
+            if (code > bestCode) {
+                if (best != null) {                         // 之前那个不是最新：删
+                    final String oldVer = verNameOf(best);
+                    //noinspection ResultOfMethodCallIgnored
+                    best.delete();
+                    pairTraceAdd("更新：只保留最新安装包，清掉 v" + oldVer);
+                }
+                best = f;
+                bestCode = code;
+            } else {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                pairTraceAdd("更新：清掉多余安装包 v" + pi.versionName + "（不是最新）");
+            }
+        }
+        return best;
+    }
+
+    /** 读一个 APK 文件的包信息（不安装、只看清单）。解析失败返回 null。 */
+    private android.content.pm.PackageInfo apkInfo(final java.io.File apk) {
+        try {
+            return getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** PackageInfo → versionCode（API 28+ 要用 long 版，否则长版本号会被截断）。 */
+    private static int versionCodeOf(final android.content.pm.PackageInfo pi) {
+        if (pi == null) return 0;
+        return android.os.Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+    }
+
+    /** 安装包的可读版本名：优先读包里真实的 versionName，读不到再退回文件名。 */
+    private String verNameOf(final java.io.File apk) {
+        final android.content.pm.PackageInfo pi = apkInfo(apk);
+        final String v = pi == null ? null : pi.versionName;
+        if (v != null && !v.trim().isEmpty()) return v.trim();
+        final String n = apk.getName();
+        return n.startsWith("dsh-mobile-") && n.endsWith(".apk")
+                ? n.substring("dsh-mobile-".length(), n.length() - 4) : "?";
     }
 
     private void startInAppUpdate(final String versionName, final String url, final String mirror,
