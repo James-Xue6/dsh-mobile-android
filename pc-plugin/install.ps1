@@ -1,4 +1,4 @@
-﻿<#
+<#
 安装 DSH 掌上通 的 PC 端插件（dsh-mobile-access）。
 
 用法（在仓库根目录执行）：
@@ -268,7 +268,12 @@ if (Test-Path $gwLib) {
     @{ File = 'patch-gateway-crosssession.ps1';    What = '跨会话提醒（放宽两道 waterfall 门 + 跨会话下发带 global 标记）' },
     @{ File = 'patch-gateway-hello-publicurl.ps1'; What = 'hello 帧带上电脑当前公网(隧道)地址（隧道换域名后自动同步，不用重新扫码）' },
     @{ File = 'patch-gateway-route-broadcast.ps1'; What = '地址变化 / 启动就绪后主动广播' },
-    @{ File = 'patch-gateway-file-upload.ps1';     What = '通用文件附件（message.files[] + hello.capabilities: file-uploads）' }
+    @{ File = 'patch-gateway-file-upload.ps1';     What = '通用文件附件（message.files[] + hello.capabilities: file-uploads）' },
+    # [2026-10-19 补] DSH 内核 0.2.1-rc.2 起 invoke/stream 入口会 assertPeerLive(request.peer)，
+    # 0.9.0 不带 peer 就抛 "Cannot read properties of undefined (reading 'signal')"：
+    # 手机能连上、能鉴权，但 sessions / workspaces 全失败（0 对话 + 弹窗报错）。
+    # 必须放最后：它是「整文件替换」，落的是 0.9.0 + 上面全部补丁 + peer 的已验收完整文件。
+    @{ File = 'restore-gateway-connection-peer.ps1'; What = 'DSH 0.2.1-rc.2 的 Connection Peer（invoke/stream 全部透传 peer）' }
   )
   foreach ($p in $gatewayPatches) {
     $s = Join-Path $PSScriptRoot "patches\$($p.File)"

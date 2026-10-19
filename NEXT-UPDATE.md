@@ -1,7 +1,32 @@
 # 下一步计划（NEXT-UPDATE）
 
 > 状态标记：`[x]` 已完成并验证 / `[~]` 部分完成 / `[ ]` 待办。
-> 最近更新：2026-10-17（**合并朋友 fork `feat/session-tree`**：抽屉工作区折叠 + 思维链一键开关 + `parentId` 层级修复；构建通过、已推 Gitee/GitHub，**未发版**）。
+> 最近更新：2026-10-19（**PC 插件：DSH 内核 0.2.1-rc.2 的 Connection Peer 回填 + 「移动设备」面板改居中弹窗、删掉重复的旧高级设置**；插件版本 1.0.4，未发 APK）。
+
+## 零、2026-10-19：PC 插件适配 DSH 0.2.1-rc.2 + 面板收敛（已推 Gitee/GitHub，未发版）
+
+> 触发：DSH 桌面端被自动升级到 **0.2.1-rc.2**，手机端出现「能连上、能鉴权、hello 正常，但 0 个对话 + 弹窗
+> `Cannot read properties of undefined (reading 'signal')`」。
+
+- [x] **真因**：新内核 `typertGateway.invoke()/stream()` 入口先 `assertPeerLive(request.peer)`；网关 0.9.0
+  按旧协议调用（不带 `peer`）⇒ 读 `undefined.signal` 抛错。asar 内实测存在 `createPeer` / `assertPeerLive`。
+- [x] **不走 0.10.3 的原因**：上游 0.10.3 确实修了这一点，但它是**上游原版**，本仓库叠的 5 套 fork 补丁
+  （跨会话提醒 / hello 带公网地址 / 地址广播 / 文件上传 / 子智能体寻址）它都没有，升上去等于全丢。
+  改为**最小回填**：`createDshHostAdapter(gateway, peer)` + invoke / 首帧 stream / session-follow /
+  session-control / workspace-follow 全部透传 peer；`index.mjs` 里 `ctx.connection.createPeer({principal:{kind:'owner'}, interactions:'none'})`，卸载时 `peer.dispose()`。
+- [x] **遗漏点（第一轮重启后暴露）**：`workspace.list()` 里那个 `firstStreamFrame(..., 'workspace', 'follow', {})`
+  没传 peer ⇒ sessions 活了但 workspaces 仍报同一个错。补上后写了 mock 审计脚本逐个调用 adapter 出口，
+  30+ 内核出口全部带 peer 才算通过。
+- [x] **固化**：`patches/restore-gateway-connection-peer.ps1`（整文件替换两个 `.patched` 基线；版本闸门 0.9.0；
+  自带备份/幂等/`-Revert`/`node --check` 复核），已挂进 `install.ps1` 的补丁清单最后一项。
+- [x] **面板收敛（用户点名）**：①「移动设备」从右侧整栏改为**居中弹窗**（560px、圆角、遮罩、最高 `100vh-48px`）；
+  ②删掉面板底部那张与「手机接入」卡片重复的**旧高级设置**（220 行，`advancedOpen` 已无引用）。
+- [x] 顺手把只存在于 `.patched` 基线的 **Quick Tunnel 未就绪时地址框留空** 的修带进运行时。
+- [x] 插件版本 `1.0.3 → 1.0.4`。
+- ⏳ **未验证**：弹窗实际观感（宽度/圆角/遮罩）尚未在浏览器里看过，只做了语法与结构校验。
+- ⚠️ **已知取舍**：删掉旧高级设置后，面板里没有「设备鉴权开关」和「命名 Tunnel 的域名/Token」输入框了；
+  命名隧道改用 `POST /mgw/cloudflare`（`{mode:'named', hostname, token, enabled:true}`）。需要 GUI 入口时再挪进 设置 → 手机接入。
+- [ ] **未做（用户决定先搁置）**：公网「一直连」方案——地址簿（免费 Workers 上报/查询）+ Quick Tunnel 自动跟随，见对话记录。
 
 ## 零、2026-10-17：合并朋友 fork `feat/session-tree`（7 个提交）
 
