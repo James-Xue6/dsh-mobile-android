@@ -17,7 +17,8 @@
 - [x] `cordis.patch.yml` 收敛成一行（本包），config 随行携带（lanPort 3091 等）。
 - [x] `install.ps1`：不再登记第三方依赖、不再跑 6 个 node_modules 补丁脚本；新增迁移（摘依赖 + 摘 `mobile-gateway` 行）与 **[验收] 六项**（vendor / peer / adapter / 合并版 client / 无旧依赖 / 无旧行）。本机实跑六项全 OK。
 - [x] 文档：README（安装流程去掉「跑第二遍」）、插件 README、`THIRD-PARTY-NOTICES.md`（MIT 声明 + 上游对齐清单）。
-- ⏳ **未验证**：`ctx.plugin` 在真实 DSH 里的挂载结果（本机重启后验证 panel + 探针）；弹窗观感仍未在浏览器里看过。
+- ✅ **重启后已实测（2026-10-20 15:47）**：`GET /mgw/status` 返回 `version: 2.0.0`（子插件已挂载、读的是本包版本）；真配对探针 `hello protocol=3 / dshVersion=0.2.1-rc.2`，`sessions=194`、`workspaces=7`、`errors=[]`；profile 的 bundles / dependencies / cordis 行里都不再有第二个条目。
+- ⏳ **未验证**：合并后的面板在真实浏览器里的观感（宽度/圆角/遮罩）仍未看过。
 - ⚠️ **已知取舍**：上游 0.10.x 不再自动跟随，需要人工按清单对齐 `vendor/gateway/`。
 
 ## 零、2026-10-20：修「别的电脑装完，界面和本机不一样」（已推 Gitee/GitHub，未发版）
