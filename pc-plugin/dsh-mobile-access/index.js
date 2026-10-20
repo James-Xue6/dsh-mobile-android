@@ -15,8 +15,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-// 协议层（第三方 MIT 代码，已 vendor 进本包）：WS 网关 / 配对鉴权 / 隧道 / LAN 监听
-import gatewayPlugin, { Config as GatewayConfig } from './vendor/gateway/index.mjs'
+// 网络层 net/（fork 自 MIT 的 dsh-plugin-mobile-gateway，本仓库自维护）：WS 网关 / 配对鉴权 / 隧道 / LAN 监听
+import gatewayPlugin, { Config as GatewayConfig } from './net/index.mjs'
 
 export const name = 'dsh-mobile-access'
 export const inject = ['webServer']
@@ -158,6 +158,8 @@ const ROUTES = [
   // 公网访问：直接复用网关内置的 Cloudflare 隧道（随机域名 / 自定义域名）
   { method: 'POST', local: '/tunnel', target: '/mgw/cloudflare' },
   { method: 'POST', local: '/tunnel/restart', target: '/mgw/cloudflare/restart' },
+  // 公网入口自检（移植自上游 0.10.x）：隧道 online ≠ 公网可达，这里跑 DNS/TLS/WS 三段检测
+  { method: 'POST', local: '/tunnel/check', target: '/mgw/cloudflare/check' },
 ]
 
 function sendJson(res, status, payload) {
@@ -257,14 +259,14 @@ export function apply(ctx, config) {
   const webServer = ctx.webServer
   const port = webServer && webServer.port ? webServer.port : 0
 
-  // ---------------- 协议层（已随包 vendor 进来，不再依赖第三方插件包）----------------
+  // ---------------- 网络层（已抽取为 net/，不再依赖第三方插件包，也不再跟随上游壳）----------------
   // 原来协议层是独立包 dsh-plugin-mobile-gateway，由本包的 cordis.patch.yml 再插一行挂载，
   // 于是插件列表里会出现两个条目、还要靠 install.ps1 给 node_modules 里的它打 6 个补丁。
-  // 现在把它整个 vendor 到 vendor/gateway/，用 ctx.plugin 作为**本插件的子插件**挂载：
+  // 现在把它抽取成 net/（我们自己的分支线，见 net/UPSTREAM.md），用 ctx.plugin 作为**本插件的子插件**挂载：
   //   · 对外仍然只有一个插件（一个 bundle、一行挂载）；
   //   · 网关自己的 inject / Config 仍由 Cordis 处理（等 typertGateway / connection 就绪）；
   //   · 子插件的生命周期跟着本插件走，卸载时一并 dispose。
-  // 上游更新（0.10.x 等）需要人工把 vendor/gateway 对齐，见 README「协议层来源」。
+  // 上游更新只作参考，按 net/UPSTREAM.md 的流程按需吸收；上游的 UI 壳与 App 专属能力一律不带。
   if (typeof ctx.plugin !== 'function') {
     throw new Error('dsh-mobile-access requires Cordis ctx.plugin to mount the bundled gateway')
   }

@@ -135,7 +135,7 @@ $pkg = Read-Text $pkgPath | ConvertFrom-Json
 # 而且 DSH 还会继续把它当独立插件加载一遍）。
 if ($pkg.dependencies.PSObject.Properties[$gatewayName]) {
   $pkg.dependencies.PSObject.Properties.Remove($gatewayName)
-  Ok "依赖 - $gatewayName（协议层已内置在本插件 vendor/gateway）"
+  Ok "依赖 - $gatewayName（协议层已内置在本插件 net）"
 } else {
   Info "已无 $gatewayName 依赖（已是整合版）"
 }
@@ -224,7 +224,7 @@ if ($leftover.Count -eq 0) {
 }
 
 # ---------------------------------------------------------------- 迁移：摘掉第三方网关包的行与残留
-# [2026-10-20 整合] 协议层已 vendor 进本插件 vendor/gateway。老机器上还留着
+# [2026-10-20 整合] 协议层已 vendor 进本插件 net。老机器上还留着
 # ① profile 的 cordis.patch.yml 里 `- id: mobile-gateway` 配置块；② node_modules 里的
 # dsh-plugin-mobile-gateway 目录。前者会让插件列表继续出现第二个条目（行还在就还会挂载），
 # 所以必须删；后者已经没有任何引用，留着不影响，但要提醒可以清。
@@ -268,12 +268,12 @@ if (Test-Path $gwNodeModules) {
 # ---------------------------------------------------------------- 验收：现在真的只有一个插件
 Write-Host "`n[验收] 单插件整合是否到位" -ForegroundColor Cyan
 $fails = @()
-$vendorIndex = Join-Path $pluginDst 'vendor\gateway\index.mjs'
-$vendorAdapter = Join-Path $pluginDst 'vendor\gateway\dsh-host-adapter.mjs'
+$vendorIndex = Join-Path $pluginDst 'net\index.mjs'
+$vendorAdapter = Join-Path $pluginDst 'net\dsh-host-adapter.mjs'
 $clientFile = Join-Path $pluginDst 'client.js'
 $checks = @(
-  @{ Name = '内置协议层（vendor/gateway/index.mjs）'; Ok = (Test-Path $vendorIndex) },
-  @{ Name = 'Connection Peer 已并入 vendor 基线';      Ok = ((Test-Path $vendorIndex) -and ((Read-Text $vendorIndex) -match 'createPeer')) },
+  @{ Name = '内置协议层（net/index.mjs）'; Ok = (Test-Path $vendorIndex) },
+  @{ Name = 'Connection Peer 已并入 net 基线';      Ok = ((Test-Path $vendorIndex) -and ((Read-Text $vendorIndex) -match 'createPeer')) },
   @{ Name = 'adapter 全部出口透传 peer';               Ok = ((Test-Path $vendorAdapter) -and ((Read-Text $vendorAdapter) -match 'local patch: DSH 0\.2\.1-rc\.2')) },
   @{ Name = 'client 是合并版（含面板 + 手机接入）';     Ok = ((Test-Path $clientFile) -and ((Read-Text $clientFile) -match 'settings\.general\.item') -and ((Read-Text $clientFile) -match 'sidebar\.footer\.action')) },
   @{ Name = 'profile 不再依赖第三方网关包';            Ok = (-not ((Read-Text $pkgPath | ConvertFrom-Json).dependencies.PSObject.Properties['dsh-plugin-mobile-gateway'])) },
@@ -285,7 +285,7 @@ foreach ($c in $checks) {
 if ($fails.Count -gt 0) {
   Write-Host ""
   Write-Host "  !! $($fails.Count) 项没到位：$($fails -join '；')" -ForegroundColor Red
-  Write-Host "  常见原因：插件目录没复制全（vendor/ 被漏掉）或 profile 补丁没写回。重跑一次本脚本再看。" -ForegroundColor Yellow
+  Write-Host "  常见原因：插件目录没复制全（net/ 被漏掉）或 profile 补丁没写回。重跑一次本脚本再看。" -ForegroundColor Yellow
 } else {
   Write-Host "  整合完成：一个插件、一条补丁行、协议层内置。" -ForegroundColor Green
 }

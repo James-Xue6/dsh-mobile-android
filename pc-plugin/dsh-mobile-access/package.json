@@ -1,8 +1,8 @@
 {
   "name": "dsh-mobile-access",
   "displayName": "手机接入",
-  "version": "2.0.0",
-  "description": "中文名：手机接入。一站式手机端接入插件：内置移动网关协议层（WebSocket 服务、设备配对与鉴权、Cloudflare 隧道、局域网监听、会话同步），并提供二维码接入编排、APK 分发与撤销设备界面。协议层源自 MIT 许可的 dsh-plugin-mobile-gateway（已 vendor 进 vendor/gateway，见 THIRD-PARTY-NOTICES.md）。",
+  "version": "2.1.0",
+  "description": "中文名：手机接入。一站式手机端接入插件：内置自维护的网络层 net/（WebSocket 服务、设备配对与鉴权、Cloudflare 隧道与公网自检、局域网监听、会话同步），并提供二维码接入编排、APK 分发与撤销设备界面。网络层 fork 自 MIT 许可的 dsh-plugin-mobile-gateway 0.9.0，此后由本仓库自己维护（见 net/UPSTREAM.md 与 THIRD-PARTY-NOTICES.md）。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -24,7 +24,7 @@
     "cordis.patch.yml",
     "README.md",
     "THIRD-PARTY-NOTICES.md",
-    "vendor/"
+    "net/"
   ],
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

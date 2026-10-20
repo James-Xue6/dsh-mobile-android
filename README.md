@@ -29,7 +29,7 @@ pwsh -File .\pc-plugin\install.ps1
 ```
 
 脚本会：把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、在 DSH profile 里登记依赖与 bundle。
-**只装这一个插件就够了** —— 协议层已**内置**在本插件里（vendor/gateway/，源自 MIT 许可的 dsh-plugin-mobile-gateway），
+**只装这一个插件就够了** —— 协议层已**内置**在本插件里（net/，源自 MIT 许可的 dsh-plugin-mobile-gateway），
 由插件自己挂载，不需要再装第二个插件。
 
 > 用 SSH 的话，第一条命令换成 `git clone git@github.com:James-Xue6/dsh-mobile-android.git`。
@@ -38,7 +38,7 @@ pwsh -File .\pc-plugin\install.ps1
 
 ```powershell
 # 装完重启 DSH 桌面版即可：
-#   · v2.0.0 起协议层已内置在插件里（vendor/gateway），不再依赖第三方包，
+#   · v2.0.0 起协议层已内置在插件里（net），不再依赖第三方包，
 #     也就不存在「补丁要等网关先装好」的问题；
 #   · 装的时候会打印一段 [验收]，六行都要是 OK。
 ```
@@ -47,8 +47,8 @@ pwsh -File .\pc-plugin\install.ps1
 
 ```
 [验收] 单插件整合是否到位
-  OK  内置协议层（vendor/gateway/index.mjs）
-  OK  Connection Peer 已并入 vendor 基线
+  OK  内置协议层（net/index.mjs）
+  OK  Connection Peer 已并入 net 基线
   OK  adapter 全部出口透传 peer
   OK  client 是合并版（含面板 + 手机接入）
   OK  profile 不再依赖第三方网关包
@@ -83,7 +83,7 @@ pwsh -File .\pc-plugin\install.ps1
 在同一张卡片上点 **「生成内网二维码」**（在家用）或 **「生成公网二维码」**（出门用），用 App 扫它。
 **内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
 
-> 电脑端的协议层是**随插件内置**的（vendor/gateway/，MIT，见 THIRD-PARTY-NOTICES.md）：
+> 电脑端的协议层是**随插件内置**的（net/，MIT，见 THIRD-PARTY-NOTICES.md）：
 > 宿主侧的 ctx.plugin 把它作为子插件挂载 —— 插件列表里只有 dsh-mobile-access 一个。
 
 ### ⑤ 更新（已经装过的怎么升）
@@ -133,7 +133,7 @@ pwsh -File .\pc-plugin\install.ps1
 
 **重启 DSH 后找不到「移动设备」按钮**
 - 插件装完必须**重启一次 DSH 桌面版**才生效。
-- 还不行就确认本插件目录里带着协议层：~/.dsh/local-plugins/dsh-mobile-access/vendor/gateway/index.mjs 存在。
+- 还不行就确认本插件目录里带着协议层：~/.dsh/local-plugins/dsh-mobile-access/net/index.mjs 存在。
 
 **覆盖安装报「应用未安装」**
 - 说明签名和旧版不一致。只能用原来的签名密钥库（`%USERPROFILE%\.dsh-mobile-keys\dshmobile.jks`）重新打包；
@@ -185,11 +185,11 @@ dsh-mobile-android/
 ### 架构
 
 App 只实现 `dsh-mobile-v1` 协议（WebSocket + JSON），不碰 DSH 内部；
-协议层**内置**在本仓库的 `pc-plugin/dsh-mobile-access/vendor/gateway/`（源自 MIT 的 dsh-plugin-mobile-gateway 0.9.0 + fork 补丁），`pc-plugin/` 另含接入编排与界面。
+协议层**内置**在本仓库的 `pc-plugin/dsh-mobile-access/net/`（源自 MIT 的 dsh-plugin-mobile-gateway 0.9.0 + fork 补丁），`pc-plugin/` 另含接入编排与界面。
 安装面只有 `dsh-mobile-access` 一个包：它声明依赖网关，并在自己的 `cordis.patch.yml` 里挂载网关的行。
 
 ```
-Android App ──ws/wss──> dsh-mobile-access（内置协议层 vendor/gateway）──> DSH Host (desktop profile)
+Android App ──ws/wss──> dsh-mobile-access（内置协议层 net）──> DSH Host (desktop profile)
 ```
 
 ---

@@ -340,6 +340,16 @@ window.__ModuleLoader__.load({
           .then(function () { setBusy('') })
       }
 
+      // 公网入口自检（移植自上游 0.10.x）：隧道显示 online ≠ 公网真能回连。
+      // 检测 DNS 解析、TLS 证书、WebSocket 路由三段；401 会回显探针 nonce 以确认是本网关。
+      function checkEndpoint() {
+        setBusy('check'); setError(''); setMessage('')
+        request('POST', '/tunnel/check')
+          .then(function () { return loadStatus(false) })
+          .catch(function (e) { setError(e.message) })
+          .then(function () { setBusy('') })
+      }
+
       /** 生成配对码并弹出二维码弹窗；url 为空则由服务端按当前环境挑一条 */
       function pairWith(url, label) {
         setBusy('pair'); setError(''); setMessage('')
@@ -607,6 +617,27 @@ window.__ModuleLoader__.load({
               '尚未取得公网地址。开启后若长时间停在「准备中」，多半是在下载 cloudflared。'))
           }
           if (cf.error) tz.push(React.createElement('div', { className: 'dsma-error', key: 'e' }, String(cf.error)))
+          // 公网入口自检结果：隧道 online 只代表 cloudflared 连上了 Cloudflare，
+          // 不代表外部真能解析/握手/路由到你。这里把 0.10.x 的三段自检结果显示出来。
+          var eh = cf.endpointHealth
+          if (cf.enabled && eh && eh.state && eh.state !== 'unchecked') {
+            var ehOk = eh.state === 'reachable'
+            var ehText = { checking: '检测中…', reachable: '公网入口可达', 'invalid-url': '公网地址不合法', 'dns-error': '域名解析失败', 'route-error': '路由不对', 'auth-warning': '鉴权未生效', 'network-error': '网络/TLS 不通' }[eh.state] || ('自检 ' + eh.state)
+            tz.push(React.createElement('div', { className: 'dsma-row', key: 'eh' },
+              React.createElement('span', { className: 'dsma-chip' },
+                React.createElement('span', { className: 'dsma-dot', style: { background: ehOk ? '#2fb344' : '#e8a33d' } }),
+                ehText),
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn', disabled: busy !== '',
+                onClick: checkEndpoint,
+              }, busy === 'check' ? '检测中…' : '检测公网入口')))
+            if (eh.message) tz.push(React.createElement('div', { className: 'dsma-line', key: 'ehm' }, String(eh.message)))
+          } else if (cf.enabled) {
+            tz.push(React.createElement('div', { className: 'dsma-row', key: 'eh0' },
+              React.createElement('button', {
+                type: 'button', className: 'dsma-btn', disabled: busy !== '', onClick: checkEndpoint,
+              }, busy === 'check' ? '检测中…' : '检测公网入口')))
+          }
           tz.push(React.createElement('div', { className: 'dsma-row', key: 'b' },
             React.createElement('button', {
               type: 'button',

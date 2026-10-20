@@ -136,6 +136,9 @@ import { handlePluginQuery, PLUGIN_REQUEST_TYPES } from './plugin-management.mjs
 import { createSessionFollower } from './session-follower.mjs'
 import { createGatewayState, GATEWAY_MODES } from './gateway-state.mjs'
 import { createCloudflareTunnel } from './cloudflare-tunnel.mjs'
+// [vendor 移植 0.10.x] 公网端点自检：隧道 online 不代表公网真能回连。
+// 401 拒绝时回显探针 nonce，探测器据此区分「我们的网关在」与「某个中间层回 401」。
+import { gatewayProbeHeader } from './gateway-probe.mjs'
 import { webRestartAvailable, prepareWebRestart } from './gateway-tools.mjs'
 import QRCode from 'qrcode'
 
@@ -146,7 +149,7 @@ const PLUGIN_VERSION = (() => {
     // [vendor 改动] 本文件位于 <包>/vendor/gateway/，插件版本在 <包>/package.json：
     // 原来的 '../package.json' 在 vendor 布局里会指向 vendor/package.json（不存在），
     // 导致 /mgw/status 的 version 变成 unknown。这里上跳两级。
-    return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version
+    return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
   } catch {
     return 'unknown'
   }
@@ -1996,9 +1999,9 @@ function extractClientDeviceId(req) {
   return /^[A-Za-z0-9._:-]{8,128}$/.test(normalized) ? normalized : undefined
 }
 
-function rejectUpgrade(socket, status, message) {
+function rejectUpgrade(socket, status, message, probe) {
   const reason = status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : status === 503 ? 'Service Unavailable' : 'Bad Request'
-  socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`)
+  socket.write(`HTTP/1.1 ${status} ${reason}\r\n${gatewayProbeHeader(probe)}Connection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`)
   socket.destroy()
 }
 
@@ -2828,6 +2831,10 @@ const disposeMgmt = webServer.register({
             if (body.enabled && gatewayMode !== 'persistent') setGatewayMode('persistent', 'Cloudflare Tunnel enabled from management UI')
             await tunnel.reconcile()
             sendJson(res, 200, { ...tunnel.snapshot(), gatewayEnabled, gatewayMode })
+          } else if (req.method === 'POST' && p === '/mgw/cloudflare/check') {
+            // [vendor 移植 0.10.x] 主动检测公网入口：DNS / TLS / WebSocket 路由三段。
+            await tunnel.checkEndpoint()
+            sendJson(res, 200, { ...tunnel.snapshot(), gatewayEnabled, gatewayMode })
           } else if (req.method === 'POST' && p === '/mgw/cloudflare/restart') {
             await tunnel.restart()
             sendJson(res, 200, { ...tunnel.snapshot(), gatewayEnabled, gatewayMode })
@@ -2938,7 +2945,8 @@ const disposeMgmt = webServer.register({
         // plane.
         if ((requireAuth || transport.lan === true) && !device) {
           logAuthRejected(req)
-          rejectUpgrade(socket, 401, 'missing or invalid device credential')
+          // [vendor 移植 0.10.x] 把探针 nonce 原样回显，公网自检据此确认「回 401 的确实是本网关」。
+          rejectUpgrade(socket, 401, 'missing or invalid device credential', req.headers['x-dsh-gateway-probe'])
           return
         }
 

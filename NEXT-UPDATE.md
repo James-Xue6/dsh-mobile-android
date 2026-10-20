@@ -1,17 +1,31 @@
 # 下一步计划（NEXT-UPDATE）
 
 > 状态标记：`[x]` 已完成并验证 / `[~]` 部分完成 / `[ ]` 待办。
-> 最近更新：2026-10-20（**协议层 vendor 进本插件，插件数量 2 → 1**：dsh-mobile-access v2.0.0，内置 vendor/gateway，不再依赖第三方包、不再给 node_modules 打补丁）。
+> 最近更新：2026-10-20（**协议层 vendor 进本插件，插件数量 2 → 1**：dsh-mobile-access v2.0.0，内置 net，不再依赖第三方包、不再给 node_modules 打补丁）。
 
+> 最近更新：2026-10-20（下）（**网络层抽成 net/ 自维护分支线**：只留网络部分、丢掉上游 UI 壳与 App 专属能力；从 0.10.3 吸收公网入口自检。插件 v2.1.0）。
+
+## 零、2026-10-20（下）：网络层抽成 net/ + 吸收 0.10.3 公网自检（已实测）
+
+> 用户定调：「用他的网络部分提取出来，弄到咱们插件里，后期咱们自己维护，不用他的壳子和 app」。
+
+- [x] `vendor/gateway/` → **`net/`**（git 历史保留）；删除上游 `client.js`（面板壳/UI，改由本插件自己的合并版承担）与 `speech`/文件卡片等 App 专属能力（从未引入）。
+- [x] 新增 **`net/UPSTREAM.md`**：保留/丢弃清单、fork 后叠加的改动、以后跟上游的流程（npm pack → 只比 `lib/` → 按网络/UI/App 三类判定 → 两道验收）、边界约束（`net/` 里不许出现 UI 与 App 渲染逻辑）。
+- [x] 从 **0.10.3 吸收公网入口自检**：`cloudflare-tunnel.mjs`（online 后自动体检 + 暴露 `endpointHealth`/`publicReady`）、`public-endpoint-check.mjs`（DNS→TLS→WebSocket 三段）、`gateway-probe.mjs`（401 回显随机 nonce）；`index.mjs` 新增 `POST /mgw/cloudflare/check`。
+- [x] 宿主代理新增 `POST /dsh-mobile-access/tunnel/check`；面板「公网隧道」新增 **「检测公网入口」** 按钮与状态行（可达 / 域名解析失败 / 路由不对 / 鉴权未生效 / 网络·TLS 不通）。
+- [x] 版本 `2.0.0 → 2.1.0`；install.ps1 的六项验收路径同步改成 `net/`；本机实跑六项全 OK，部署目录已是 `net/`（16 个文件）、无 `vendor/` 残留。
+- ✅ **重启后实测（2026-10-20 16:15）**：`/mgw/status` 已带 `endpointHealth`；`POST /mgw/cloudflare/check` 第一次返回 `dns-error / ENOTFOUND`（新隧道域名刚分配、本机 DNS 未就绪 —— 自检如实抓到了这个真实状态），系统 `Resolve-DnsName` 能解析后再跑即 `state: reachable`；探针 `sessions` / `workspaces=7` / `errors=[]` 正常。`net` 重构没有破坏协议层。
+- ✅ **顺手修掉一个重构副作用**：`net/index.mjs` 读版本号的相对路径变成 `../package.json`（`net/` 比原 `vendor/gateway/` 少一层）。之前 `/mgw/status` 的 `version` 显示 `unknown`，已在仓库修正并重新部署；**这个只影响面板上那枚版本号，不影响功能**，下次重启即可显示 `2.1.0`。
+- ⏳ **仍未验证**：面板上「检测公网入口」按钮的实际观感（接口与状态已验，UI 没看过）。
 ## 零、2026-10-20：合并成一个插件（dsh-mobile-access v2.0.0）
 
 > 用户诉求：「现在好像是 2 个插件，能不能整合成一个？只用它这个公网的协议逻辑」。
 > 结论：能。做法是把 `dsh-plugin-mobile-gateway@0.9.0`（MIT）**整包 vendor 进本插件**，
 > 由本插件的 `apply()` 用 `ctx.plugin()` 作为子插件挂载 —— 对外一个插件、一条补丁行。
 
-- [x] `vendor/gateway/`：网关 lib 全量（index.mjs / adapter / 隧道 / 设备 / 插件管理 / session-follower / wire-json / web-restart）+ LICENSE + PROTOCOL.md。
+- [x] `net/`：网关 lib 全量（index.mjs / adapter / 隧道 / 设备 / 插件管理 / session-follower / wire-json / web-restart）+ LICENSE + PROTOCOL.md。
   三处 vendor 改动：① `../package.json` → `../../package.json`（版本号读取）；② `devices.js` → `devices.cjs`（本包 type=module，否则 CJS 被当 ESM 解析）；③ 头部注释。
-- [x] 宿主：`index.js` 增加 `import gatewayPlugin, { Config } from './vendor/gateway/index.mjs'`，`Config` 直接复用网关 schema；`apply(ctx, config)` 末尾 `ctx.plugin(gatewayPlugin, config)`。冒烟测试确认 `ctx.plugin` 收到 `mobile-gateway` 与配置。
+- [x] 宿主：`index.js` 增加 `import gatewayPlugin, { Config } from './net/index.mjs'`，`Config` 直接复用网关 schema；`apply(ctx, config)` 末尾 `ctx.plugin(gatewayPlugin, config)`。冒烟测试确认 `ctx.plugin` 收到 `mobile-gateway` 与配置。
 - [x] 依赖：`link:` 依赖不会安装自身依赖（实测 ERR_MODULE_NOT_FOUND），故把 `ws / qrcode(+pngjs,dijkstrajs) / @deepseek-ai/schemastery(+@standard-schema/spec,+cosmokit)` **随包 vendor 到 `node_modules/`**（约 1.5MB，含各自 package.json/LICENSE），保证 local-plugins 目录内可直接解析。
 - [x] 客户端：两份 client bundle 机械合并成一份（A 段包 IIFE、B 段原位），删掉 `window.__DSH_MOBILE_ACCESS__` 跨 bundle 握手与轮询，改为同作用域直接渲染；`apply` 一次注册 3 个槽位（设置跳转行 + 侧边栏按钮 + 浮层面板）。合并脚本做过字节级保真与假 React 冒烟测试。
 - [x] `cordis.patch.yml` 收敛成一行（本包），config 随行携带（lanPort 3091 等）。
@@ -19,7 +33,7 @@
 - [x] 文档：README（安装流程去掉「跑第二遍」）、插件 README、`THIRD-PARTY-NOTICES.md`（MIT 声明 + 上游对齐清单）。
 - ✅ **重启后已实测（2026-10-20 15:47）**：`GET /mgw/status` 返回 `version: 2.0.0`（子插件已挂载、读的是本包版本）；真配对探针 `hello protocol=3 / dshVersion=0.2.1-rc.2`，`sessions=194`、`workspaces=7`、`errors=[]`；profile 的 bundles / dependencies / cordis 行里都不再有第二个条目。
 - ⏳ **未验证**：合并后的面板在真实浏览器里的观感（宽度/圆角/遮罩）仍未看过。
-- ⚠️ **已知取舍**：上游 0.10.x 不再自动跟随，需要人工按清单对齐 `vendor/gateway/`。
+- ⚠️ **已知取舍**：上游 0.10.x 不再自动跟随，需要人工按清单对齐 `net/`。
 
 ## 零、2026-10-20：修「别的电脑装完，界面和本机不一样」（已推 Gitee/GitHub，未发版）
 
