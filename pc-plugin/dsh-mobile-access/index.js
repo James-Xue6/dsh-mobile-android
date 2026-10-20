@@ -15,9 +15,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+// 协议层（第三方 MIT 代码，已 vendor 进本包）：WS 网关 / 配对鉴权 / 隧道 / LAN 监听
+import gatewayPlugin, { Config as GatewayConfig } from './vendor/gateway/index.mjs'
 
 export const name = 'dsh-mobile-access'
 export const inject = ['webServer']
+// 本行 config 直接沿用网关的 schema（lanPort / requireAuth / gatewayMode ...），
+// 这样 profile 里的 config 与原来那份逐键兼容，不需要额外迁移。
+export const Config = GatewayConfig
 
 const PREFIX = '/dsh-mobile-access'
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -248,9 +253,22 @@ function callGateway(port, method, targetPath, body) {
   })
 }
 
-export function apply(ctx) {
+export function apply(ctx, config) {
   const webServer = ctx.webServer
   const port = webServer && webServer.port ? webServer.port : 0
+
+  // ---------------- 协议层（已随包 vendor 进来，不再依赖第三方插件包）----------------
+  // 原来协议层是独立包 dsh-plugin-mobile-gateway，由本包的 cordis.patch.yml 再插一行挂载，
+  // 于是插件列表里会出现两个条目、还要靠 install.ps1 给 node_modules 里的它打 6 个补丁。
+  // 现在把它整个 vendor 到 vendor/gateway/，用 ctx.plugin 作为**本插件的子插件**挂载：
+  //   · 对外仍然只有一个插件（一个 bundle、一行挂载）；
+  //   · 网关自己的 inject / Config 仍由 Cordis 处理（等 typertGateway / connection 就绪）；
+  //   · 子插件的生命周期跟着本插件走，卸载时一并 dispose。
+  // 上游更新（0.10.x 等）需要人工把 vendor/gateway 对齐，见 README「协议层来源」。
+  if (typeof ctx.plugin !== 'function') {
+    throw new Error('dsh-mobile-access requires Cordis ctx.plugin to mount the bundled gateway')
+  }
+  ctx.plugin(gatewayPlugin, config && typeof config === 'object' ? config : {})
 
   // ---------------- 局域网发安装包：手机扫码即下载 ----------------
   // 跑在 DSH 宿主进程内，防火墙是按程序放行的，所以局域网可达；
@@ -468,6 +486,6 @@ export function apply(ctx) {
   }, 'mobile-access.routes')
 }
 
-export default { name, inject, apply }
+export default { name, inject, apply, Config }
 // 导出内部判据供自测用（tools/test-lan-filter.mjs 直接跑真源码，不另抄一份规则）
 export { lanIPv4, isUsableLanAddress, lanAddressRank, publicUrls, appVersion, PUBLIC_REF }

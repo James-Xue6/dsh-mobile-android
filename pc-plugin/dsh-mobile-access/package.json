@@ -1,8 +1,8 @@
 {
   "name": "dsh-mobile-access",
   "displayName": "手机接入",
-  "version": "1.0.5",
-  "description": "中文名：手机接入。在 DSH 设置里直接管理手机端接入——一键开关移动网关、生成配对二维码与访问令牌、查看并撤销已配对设备。协议层复用 dsh-plugin-mobile-gateway（已声明为本包依赖，装本包即自动装上），本插件只提供接入编排与界面。",
+  "version": "2.0.0",
+  "description": "中文名：手机接入。一站式手机端接入插件：内置移动网关协议层（WebSocket 服务、设备配对与鉴权、Cloudflare 隧道、局域网监听、会话同步），并提供二维码接入编排、APK 分发与撤销设备界面。协议层源自 MIT 许可的 dsh-plugin-mobile-gateway（已 vendor 进 vendor/gateway，见 THIRD-PARTY-NOTICES.md）。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -22,10 +22,14 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "THIRD-PARTY-NOTICES.md",
+    "vendor/"
   ],
   "dependencies": {
-    "dsh-plugin-mobile-gateway": "0.9.0"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "ws": "^8.18.0",
+    "qrcode": "^1.5.4"
   },
   "dsh": {
     "bundle": {
@@ -36,7 +40,9 @@
       "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ]
     }
   },

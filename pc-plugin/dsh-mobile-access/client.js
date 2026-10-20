@@ -1,15 +1,34 @@
 // 手机接入（dsh-mobile-access）—— 浏览器端面板。
 //
-// 入口：设置 → 通用 → 「手机接入」
-// 只做界面与编排，真正的协议层是 dsh-plugin-mobile-gateway；本插件通过宿主侧的
-// /api/dsh-mobile-access/* 代理访问它的 /mgw/* 管理接口。
+// 本文件由两个 bundle 机械合并而成：
+//   · pc-plugin/dsh-mobile-access/client.js                  自有「手机接入」UI（下文 A 段）
+//   · pc-plugin/dsh-mobile-access/vendor/gateway/client.js   第三方「移动设备」面板（下文 B 段，MIT）
+// 业务逻辑两边一字未改，只做了接缝：
+//   1) A 段工厂体整块包进 IIFE，与 B 段同名标识符（React / request / styles / apply …）互不冲突；
+//   2) 两段共用一个 factory 作用域、一份 React；
+//   3) B 段的「手机接入」宿主直接渲染 A 段的 Row，跨 bundle 握手（window 全局 / 自定义事件 / 轮询）已删；
+//   4) 合并后的 apply 一次完成：A 的样式 +「设置 → 通用 → 手机接入」跳转行 + B 的侧边栏按钮与浮层面板。
+//
+// 入口：设置 → 通用 →「手机接入」（跳转行）/ 侧边栏底部「移动设备」按钮（面板本体）
+// 协议层已 vendor 到本包的 vendor/gateway（MIT，见 THIRD-PARTY-NOTICES.md），由宿主侧
+// index.js 用 ctx.plugin 作为子插件挂载；本界面通过宿主侧的 /api/dsh-mobile-access/*
+// 代理访问它自己的 /mgw/* 管理接口。
+
 window.__ModuleLoader__.load({
   id: 'dsh-mobile-access',
   factory: (require) => {
-    var module = { exports: {} }
-    var exports = module.exports
+    const React = require('react')
+    const module = { exports: {} }
+    const exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
+    // ============================================================ A 段：手机接入 UI
+    // 原 client.js 的工厂体，整块包进 IIFE：内部 var/function 不外泄，
+    // 与 B 段同名但语义不同的标识符（最典型 request）不会互相覆盖。
+    // 闭包桥：A 的「打开移动设备面板」用它，B 段定义完 setOpen 后回填。
+    var gatewayPanelBridge = { open: null }
+
+    var MobileAccessUI = (function () {
     var React = require('react')
 
     var NAME = 'dsh-mobile-access'
@@ -881,7 +900,9 @@ window.__ModuleLoader__.load({
       var setTip = tipState[1]
 
       function openPanel() {
-        var bridge = (typeof window === 'undefined') ? null : window.__DSH_MOBILE_GATEWAY__
+        // 接缝（合并后）：与「移动设备」面板同处一个 factory 作用域，
+        // 直接走闭包桥打开抽屉，不再经过 window 全局。
+        var bridge = gatewayPanelBridge
         if (bridge && typeof bridge.open === 'function') {
           setTip('')
           bridge.open()
@@ -903,53 +924,638 @@ window.__ModuleLoader__.load({
         tip ? React.createElement('div', { className: 'dsma-error' }, tip) : null,
       )
     }
+      return {
+        Row: MobileAccessRow,
+        Redirect: MobileAccessRedirect,
+        adoptStyles: adoptStyles,
+        NAME: NAME,
+        SETTINGS_ID: SETTINGS_ID,
+      }
+    })()
+
+    // ============================================================ B 段：移动设备面板
+    // 原 vendor/gateway/client.js 的工厂体，保持原位，业务逻辑未改。
+    let open = false
+    const listeners = new Set()
+    const setOpen = (value) => {
+      open = value
+      for (const listener of listeners) listener()
+    }
+    const subscribe = (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    }
+    const getOpen = () => open
+
+    const colors = {
+      panel: 'var(--color-bg, #111318)',
+      card: 'var(--color-bg-elevated, rgba(127,127,127,.08))',
+      text: 'var(--color-text, #f4f4f5)',
+      muted: 'var(--color-text-muted, #9297a2)',
+      border: 'var(--color-border, rgba(127,127,127,.24))',
+      accent: 'var(--color-primary, #4f7cff)',
+      danger: '#dc4c64',
+      success: '#2fb171',
+    }
+    const styles = {
+      backdrop: {
+        position: 'fixed', inset: 0, zIndex: 1200, pointerEvents: 'auto',
+        background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+      },
+      panel: {
+        width: 560, maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto',
+        display: 'flex', flexDirection: 'column',
+        background: colors.panel, color: colors.text, border: `1px solid ${colors.border}`,
+        borderRadius: 18, boxShadow: '0 24px 64px rgba(0,0,0,.35)', padding: 22,
+        fontFamily: 'system-ui, sans-serif', fontSize: 13, boxSizing: 'border-box',
+      },
+      header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, flexShrink: 0 },
+      title: { margin: 0, fontSize: 18, fontWeight: 650 },
+      card: { background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 14, marginBottom: 12, flexShrink: 0 },
+      label: { display: 'block', color: colors.muted, fontSize: 12, marginBottom: 6 },
+      input: { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', marginBottom: 10, background: 'transparent', color: 'inherit', outline: 'none' },
+        // 下拉必须给「实底」：input 是 transparent，会让原生弹出层没有底色、下方文字穿透上来。
+        // colorScheme 是 Chromium 命名下拉底色的正解；option 再显式给一次，防止个别平台忽略。
+        select: { width: '100%', boxSizing: 'border-box', border: '1px solid ' + colors.border, borderRadius: 8, padding: '8px 10px', marginBottom: 10, background: colors.panel, color: colors.text, colorScheme: 'dark', cursor: 'pointer', outline: 'none' },
+        option: { background: colors.panel, color: colors.text },
+      pairingText: { width: '100%', minHeight: 86, boxSizing: 'border-box', resize: 'vertical', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '9px 10px', margin: '10px 0', background: 'transparent', color: 'inherit', outline: 'none', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11, lineHeight: 1.45, overflowWrap: 'anywhere' },
+      button: { cursor: 'pointer', border: `1px solid ${colors.border}`, background: 'transparent', borderRadius: 8, padding: '7px 11px', color: 'inherit', font: 'inherit' },
+      headerButton: { width: 34, height: 34, boxSizing: 'border-box', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+      primary: { background: colors.accent, color: '#fff', borderColor: colors.accent, width: '100%' },
+      muted: { color: colors.muted, fontSize: 12, lineHeight: 1.55 },
+      row: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', columnGap: 12, alignItems: 'center', padding: '12px 0', borderBottom: `1px solid ${colors.border}` },
+      badge: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, marginLeft: 8, color: colors.muted },
+      dot: { width: 7, height: 7, borderRadius: 99, display: 'inline-block' },
+      error: { color: '#ff8092', background: 'rgba(220,76,100,.12)', borderRadius: 8, padding: 10, marginBottom: 12 },
+      qr: { display: 'block', width: 220, height: 220, margin: '12px auto', background: '#fff', borderRadius: 10, padding: 8 },
+      helpButton: { width: 20, height: 20, boxSizing: 'border-box', padding: 0, borderRadius: '50%', border: `1px solid ${colors.muted}`, background: 'transparent', color: colors.muted, cursor: 'help', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 12, fontWeight: 600, lineHeight: 1 },
+      helpBubble: { position: 'absolute', top: '100%', left: 0, zIndex: 20, width: 'min(300px, calc(100vw - 88px))', maxHeight: 'min(440px, calc(100vh - 160px))', overflowY: 'auto', boxSizing: 'border-box', padding: 12, borderRadius: 10, border: '1px solid rgba(255,255,255,.18)', background: '#20242c', color: '#f4f4f5', boxShadow: '0 12px 28px rgba(0,0,0,.35)', fontSize: 12, lineHeight: 1.5 },
+      toolsMenu: { position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30, width: 250, maxWidth: 'calc(100vw - 48px)', border: `1px solid ${colors.border}`, borderRadius: 10, padding: 5, background: '#20242c', boxShadow: '0 12px 28px rgba(0,0,0,.35)' },
+      toolsItem: { display: 'block', width: '100%', padding: '9px 10px', textAlign: 'left', border: 0, borderRadius: 7, background: 'transparent', color: colors.text, font: 'inherit', cursor: 'pointer' },
+      switch: { position: 'relative', display: 'inline-flex', width: 42, height: 24, flexShrink: 0 },
+      switchInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
+      switchTrack: { position: 'absolute', inset: 0, borderRadius: 99, transition: 'background .18s ease', cursor: 'pointer' },
+      switchKnob: { position: 'absolute', top: 3, width: 18, height: 18, borderRadius: 99, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,.35)', transition: 'left .18s ease', pointerEvents: 'none' },
+      version: { flexShrink: 0, marginTop: 'auto', padding: '18px 2px 0', color: colors.muted, fontSize: 11, lineHeight: 1.4, textAlign: 'right', letterSpacing: '.02em' },
+    }
+
+    async function request(path, options) {
+      const response = await fetch(path, { credentials: 'same-origin', ...options })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`)
+      return body
+    }
+
+    function inferredUrl(wsPath) {
+      const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${scheme}//${window.location.host}${wsPath || '/ws/mobile'}`
+    }
+
+    function lanPairingUrl(status) {
+      const urls = status?.lan?.listening && Array.isArray(status.lan.urls) ? status.lan.urls : []
+      return urls.find((url) => !/^ws:\/\/169\.254\./.test(url)) || urls[0] || ''
+    }
+
+    function pairingUrlFor(route, status) {
+      const lanUrl = lanPairingUrl(status)
+      const tunnelUrl = status.cloudflare?.enabled ? status.cloudflare.publicUrl || '' : ''
+      if (route === 'lan') return lanUrl
+      if (route === 'cloudflare') return tunnelUrl
+      // Quick Tunnel 开着、但地址还没拿到（首次要下载 cloudflared，国内常失败）时**不能就此返回空串**：
+      // 原来这里直接 return tunnelUrl，于是「自动选择」把地址框留空、按钮永远卡在
+      // 「等待连接地址」——局域网明明可用却生成不了二维码。加上 tunnelUrl 判据后，
+      // 隧道没就绪就继续往下走，落到局域网地址上，至少在家能用。
+      if (status.cloudflare?.enabled && status.cloudflare.mode === 'quick' && tunnelUrl) return tunnelUrl
+      return tunnelUrl || status.publicUrl || lanUrl || inferredUrl(status.wsPath)
+    }
+
+    function connectionAdvice(status, publicSetup) {
+      if (!status) return { detected: '正在读取网关环境…', local: '', remote: '' }
+      const system = status.platform === 'darwin' ? 'macOS 电脑' : status.platform === 'win32' ? 'Windows 电脑' : status.platform === 'linux' ? 'Linux 服务器' : '当前设备'
+      const lanReady = !!lanPairingUrl(status)
+      const tunnel = status.cloudflare
+      const tunnelReady = !!(tunnel?.enabled && tunnel.state === 'online' && tunnel.publicUrl)
+      const serverReady = status.platform === 'linux' && !!(
+        (publicSetup?.configured && publicSetup.publicUrl) || /^wss:\/\//.test(status.publicUrl || ''))
+      const detected = `当前检测：${system}；局域网入口${lanReady ? '已就绪' : '未就绪'}；${serverReady ? '公网服务器入口已配置' : tunnelReady ? `${tunnel.mode === 'quick' ? 'Quick' : '命名'} Tunnel 已连接` : tunnel?.enabled ? 'Cloudflare Tunnel 连接中' : '外网入口未连接'}。`
+      const local = lanReady
+        ? '手机与 DSH 处于可互访的同一局域网时，建议选“局域网直连”。'
+        : '如果手机和 DSH 在同一局域网，先确认局域网入口已开启并监听成功。'
+      let remote
+      if (serverReady) remote = '手机在外网时，建议使用已配置的公网服务器地址（“自动选择”）。'
+      else if (tunnelReady && tunnel.mode === 'named') remote = '手机在外网时，建议选“Cloudflare 外网”；当前命名 Tunnel 有固定域名。'
+      else if (tunnelReady) remote = '手机在外网临时使用时，建议选“Cloudflare 外网”；Quick 地址变化后需要重新确认。'
+      else if (status.platform === 'darwin' || status.platform === 'win32') remote = '手机在外网时，无自有域名可开启 Quick Tunnel；有域名且需要固定地址可配置命名 Tunnel。'
+      else if (status.platform === 'linux') remote = '手机在外网时，若使用受支持的 Ubuntu/Debian 服务器且有固定公网 IPv4，可先配置“公网接入”，再选“自动选择”。'
+      else remote = '手机在外网时，需要一个可访问的 wss:// 地址；可在“手动输入地址”中填写。'
+      return { detected, local, remote }
+    }
+
+    /**
+     * 「手机接入」主面板（组件由 A 段 dsh-mobile-access 提供）。
+     *
+     * 合并前这里是跨 bundle 宿主：等另一个 bundle 把组件挂到 window 全局上，
+     * 靠自定义事件 + 短轮询兜底。合并后两段在同一个 factory 作用域里，
+     * MobileAccessUI 必然已定义，直接渲染即可。
+     */
+    function MobileAccessHost() {
+      return React.createElement(MobileAccessUI.Row)
+    }
+
+    function DeviceRow({ device, onRevoke, revoking }) {      const triggerRevoke = (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!revoking) onRevoke(device)
+      }
+      return React.createElement('div', { style: styles.row },
+        React.createElement('div', { style: { minWidth: 0, overflow: 'hidden' } },
+          React.createElement('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            device.name,
+            React.createElement('span', { style: styles.badge },
+              React.createElement('span', { style: { ...styles.dot, background: device.online ? colors.success : colors.muted } }),
+              device.online ? `在线${device.connections > 1 ? ` · ${device.connections} 个连接` : ''}` : '离线')),
+          React.createElement('div', { style: { ...styles.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 3 } },
+            device.lastSeenAt ? `最近连接：${new Date(device.lastSeenAt).toLocaleString()}` : '尚未连接')),
+        React.createElement('button', {
+          type: 'button',
+          disabled: revoking,
+          style: {
+            ...styles.button,
+            color: colors.danger,
+            background: 'transparent',
+            borderColor: 'rgba(220,76,100,.55)',
+            flexShrink: 0,
+            minWidth: 54,
+            opacity: revoking ? .6 : 1,
+          },
+          title: `吊销 ${device.name}`,
+          // Pointer-up is more reliable than click inside the shell overlay on
+          // touch devices. The click handler remains for keyboard activation.
+          onPointerUp: triggerRevoke,
+          onClick: (event) => {
+            if (event.detail === 0) triggerRevoke(event)
+          },
+        }, revoking ? '吊销中…' : '吊销'))
+    }
+
+    function DevicePanel() {
+      const [devices, setDevices] = React.useState(null)
+      const [status, setStatus] = React.useState(null)
+      const [publicUrl, setPublicUrl] = React.useState('')
+      const [pairingRoute, setPairingRoute] = React.useState('auto')
+      const [connectionHelpOpen, setConnectionHelpOpen] = React.useState(false)
+      const [toolsOpen, setToolsOpen] = React.useState(false)
+      const [toolBusy, setToolBusy] = React.useState(false)
+      const [toolNotice, setToolNotice] = React.useState('')
+      const stoppedRef = React.useRef(false)
+      const [publicIp, setPublicIp] = React.useState('')
+      const [publicSetup, setPublicSetup] = React.useState(null)
+      const [publicSetupBusy, setPublicSetupBusy] = React.useState(false)
+      const [cloudflareHost, setCloudflareHost] = React.useState('')
+      const [cloudflareToken, setCloudflareToken] = React.useState('')
+      const [cloudflareMode, setCloudflareMode] = React.useState('quick')
+      const [cloudflareBusy, setCloudflareBusy] = React.useState(false)
+      const [deviceName, setDeviceName] = React.useState('iPhone')
+      const [qr, setQr] = React.useState(null)
+      const [error, setError] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [refreshing, setRefreshing] = React.useState(false)
+      const [refreshNotice, setRefreshNotice] = React.useState(null)
+      const [pairingTokenCopied, setPairingTokenCopied] = React.useState(false)
+      const [deviceNotice, setDeviceNotice] = React.useState(null)
+      const [deviceNoticeError, setDeviceNoticeError] = React.useState(false)
+      const [revokingIds, setRevokingIds] = React.useState(() => new Set())
+      const revokingIdsRef = React.useRef(new Set())
+      const automaticUrlRef = React.useRef('')
+      const pairingRouteRef = React.useRef('auto')
+      const cloudflareModeLoadedRef = React.useRef(false)
+
+      const refresh = React.useCallback(async () => {
+        try {
+          const [deviceData, statusData] = await Promise.all([
+            request('/mgw/devices'),
+            request('/mgw/status'),
+          ])
+          const nextDevices = deviceData.devices || []
+          // Keep existing DOM rows alive when polling returns identical data.
+          // Replacing them every three seconds can swallow a pointer/click that
+          // started on the old button and ended after React replaced the row.
+          if (revokingIdsRef.current.size === 0) {
+            setDevices((current) => JSON.stringify(current) === JSON.stringify(nextDevices) ? current : nextDevices)
+          }
+          setStatus((current) => JSON.stringify(current) === JSON.stringify(statusData) ? current : statusData)
+          if (statusData.cloudflare && statusData.cloudflare.hostname) {
+            setCloudflareHost((current) => current || statusData.cloudflare.hostname)
+          }
+          if (statusData.cloudflare && !cloudflareModeLoadedRef.current) {
+            cloudflareModeLoadedRef.current = true
+            setCloudflareMode(statusData.cloudflare.mode || 'quick')
+          }
+          if (pairingRouteRef.current === 'cloudflare' && !statusData.cloudflare?.enabled) {
+            pairingRouteRef.current = 'auto'
+            setPairingRoute('auto')
+          }
+          if (pairingRouteRef.current !== 'custom') {
+            const preferredUrl = pairingUrlFor(pairingRouteRef.current, statusData)
+            if (automaticUrlRef.current && preferredUrl !== automaticUrlRef.current) setQr(null)
+            automaticUrlRef.current = preferredUrl
+            setPublicUrl(preferredUrl)
+          }
+          return true
+        } catch (cause) {
+          setError(cause.message)
+          return false
+        }
+      }, [])
+
+      const manualRefresh = async () => {
+        if (refreshing) return
+        setRefreshing(true)
+        setRefreshNotice(null)
+        const succeeded = await refresh()
+        setRefreshing(false)
+        if (succeeded) {
+          setError(null)
+          setRefreshNotice(`已刷新 · ${new Date().toLocaleTimeString()}`)
+          window.setTimeout(() => setRefreshNotice(null), 2200)
+        }
+      }
+
+      const runTool = async (tool) => {
+        if (toolBusy) return
+        setToolsOpen(false)
+        setToolBusy(true)
+        setToolNotice('')
+        setError(null)
+        try {
+          const oldPid = status?.webPid
+          await request(`/mgw/tools/${tool}`, { method: 'POST' })
+          if (tool === 'stop-web') {
+            stoppedRef.current = true
+            setToolNotice('DSH Web 已收到停止指令。需要时可在 Terminal 运行 dsh web 重新启动。')
+            return
+          }
+          if (tool === 'restart-web') {
+            setToolNotice('正在重启 DSH Web，当前连接会短暂中断…')
+            const deadline = Date.now() + 60_000
+            while (Date.now() < deadline) {
+              await new Promise((resolve) => window.setTimeout(resolve, 700))
+              try {
+                const next = await request('/mgw/status')
+                if (next.webPid && next.webPid !== oldPid) {
+                  window.location.reload()
+                  return
+                }
+              } catch { /* old process is shutting down */ }
+            }
+            throw new Error('DSH Web 重启超时，请检查 /tmp/mobile-gateway.log')
+          }
+        } catch (cause) {
+          setError(cause.message)
+          setToolNotice('')
+        } finally {
+          setToolBusy(false)
+        }
+      }
+
+      React.useEffect(() => {
+        let active = true
+        refresh()
+        request('/mgw/public-setup').then((data) => {
+          if (!active) return
+          setPublicSetup(data)
+          if (data.publicUrl) {
+            const match = /^wss:\/\/([^/]+)\/ws\/mobile$/.exec(data.publicUrl)
+            if (match) setPublicIp(match[1])
+          }
+        }).catch((cause) => active && setPublicSetup({ installed: false, configured: false, error: cause.message }))
+        const timer = window.setInterval(() => { if (!stoppedRef.current) refresh() }, 3000)
+        return () => { active = false; window.clearInterval(timer) }
+      }, [refresh])
+
+      const choosePairingRoute = (route) => {
+        pairingRouteRef.current = route
+        setPairingRoute(route)
+        setQr(null)
+        if (route === 'custom') {
+          automaticUrlRef.current = ''
+          return
+        }
+        if (status) {
+          const nextUrl = pairingUrlFor(route, status)
+          automaticUrlRef.current = nextUrl
+          setPublicUrl(nextUrl)
+        }
+      }
+
+      const configurePublicAccess = async () => {
+        if (publicSetupBusy) return
+        setPublicSetupBusy(true)
+        setError(null)
+        try {
+          const data = await request('/mgw/public-setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ publicIp }),
+          })
+          setPublicSetup(data)
+          if (data.publicUrl && pairingRouteRef.current === 'auto') {
+            automaticUrlRef.current = data.publicUrl
+            setPublicUrl(data.publicUrl)
+          }
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setPublicSetupBusy(false)
+        }
+      }
+
+      const configureCloudflare = async (enabled) => {
+        if (cloudflareBusy) return
+        setCloudflareBusy(true)
+        setError(null)
+        try {
+          const data = await request('/mgw/cloudflare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled, ...(enabled ? {
+              mode: cloudflareMode,
+              ...(cloudflareMode === 'named' ? { hostname: cloudflareHost, token: cloudflareToken } : {}),
+            } : {}) }),
+          })
+          setCloudflareToken('')
+          setStatus((current) => ({ ...(current || {}), cloudflare: data, gatewayEnabled: data.gatewayEnabled, gatewayMode: data.gatewayMode, publicUrl: data.publicUrl || null }))
+          if (!enabled && pairingRouteRef.current === 'cloudflare') {
+            pairingRouteRef.current = 'auto'
+            setPairingRoute('auto')
+          }
+          await refresh()
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setCloudflareBusy(false)
+        }
+      }
+
+      const restartCloudflare = async () => {
+        if (cloudflareBusy) return
+        setCloudflareBusy(true)
+        setError(null)
+        try {
+          const data = await request('/mgw/cloudflare/restart', { method: 'POST' })
+          if (data.mode === 'quick') setQr(null)
+          setStatus((current) => ({ ...(current || {}), cloudflare: data }))
+          await refresh()
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setCloudflareBusy(false)
+        }
+      }
+
+      const createPairing = async (endpoint) => request('/mgw/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: deviceName, publicUrl: endpoint }),
+      })
+
+      const pair = async () => {
+        setBusy(true)
+        setError(null)
+        setPairingTokenCopied(false)
+        try {
+          const data = await createPairing(publicUrl)
+          setQr(data)
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const copyPairingText = async () => {
+        if (!qr || !qr.qrPayload) return
+        try {
+          if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            throw new Error('当前浏览器不允许直接写入剪贴板，请选中文本后手动复制')
+          }
+          await navigator.clipboard.writeText(qr.qrPayload)
+          setError(null)
+          setPairingTokenCopied(true)
+          window.setTimeout(() => setPairingTokenCopied(false), 2200)
+        } catch (cause) {
+          setPairingTokenCopied(false)
+          setError(cause.message)
+        }
+      }
+
+      const changeGatewayMode = async (mode) => {
+        setBusy(true)
+        setError(null)
+        try {
+          const data = await request('/mgw/gateway', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+          })
+          setStatus((current) => ({ ...(current || {}), ...data }))
+          if (mode === 'disabled') setQr(null)
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const toggleAuth = async () => {
+        const enabled = !(status && status.requireAuth)
+        if (!enabled && !window.confirm('关闭设备鉴权后，任何能访问移动网关的人都可以控制 DSH。此选项仅限 Debug 阶段使用，确定继续吗？')) return
+        setBusy(true)
+        setError(null)
+        try {
+          const data = await request('/mgw/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+          })
+          setStatus((current) => ({ ...(current || {}), requireAuth: data.requireAuth }))
+        } catch (cause) {
+          setError(cause.message)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const revoke = async (device) => {
+        if (revokingIdsRef.current.has(device.id)) return
+        setDeviceNotice(null)
+        setDeviceNoticeError(false)
+        setError(null)
+        revokingIdsRef.current.add(device.id)
+        setRevokingIds((current) => new Set(current).add(device.id))
+        try {
+          await request(`/mgw/devices/${encodeURIComponent(device.id)}/revoke`, { method: 'POST' })
+          setDevices((current) => Array.isArray(current) ? current.filter((item) => item.id !== device.id) : current)
+          setDeviceNotice(`已吊销 ${device.name}`)
+          window.setTimeout(() => setDeviceNotice(null), 2200)
+        } catch (cause) {
+          setDeviceNoticeError(true)
+          setDeviceNotice(`吊销失败：${cause.message}`)
+          setError(cause.message)
+        } finally {
+          revokingIdsRef.current.delete(device.id)
+          setRevokingIds((current) => {
+            const next = new Set(current)
+            next.delete(device.id)
+            return next
+          })
+          await refresh()
+        }
+      }
+
+      const advice = connectionAdvice(status, publicSetup)
+      const helpLine = (name, description) => React.createElement('div', { style: { marginTop: 7 } },
+        React.createElement('strong', null, name), '：', description)
+
+      return React.createElement('div', { style: styles.backdrop, onMouseDown: () => setOpen(false) },
+        React.createElement('aside', { style: styles.panel, onMouseDown: (event) => { event.stopPropagation(); setToolsOpen(false) }, role: 'dialog', 'aria-modal': true, 'aria-label': '移动设备管理' },
+          React.createElement('div', { style: styles.header },
+            React.createElement('div', null,
+              React.createElement('h2', { style: styles.title }, '移动设备'),
+              React.createElement('div', { style: styles.muted }, status && status.gatewayEnabled ? '移动网关已开启 · 设备鉴权生效中' : '移动网关已关闭 · 普通 WebUI 模式')),
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              React.createElement('div', { style: { position: 'relative' }, onMouseDown: (event) => event.stopPropagation() },
+                React.createElement('button', {
+                  type: 'button', style: { ...styles.button, ...styles.headerButton, borderRadius: '50%' }, title: '工具', 'aria-label': '工具',
+                  'aria-haspopup': 'menu', 'aria-expanded': toolsOpen,
+                  onClick: () => setToolsOpen((value) => !value),
+                }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+                  React.createElement('path', { d: 'M10.3 2.8h3.4l.5 2.2a7.6 7.6 0 0 1 1.7.7l1.9-1.2 2.4 2.4L19 8.8c.3.5.5 1.1.7 1.7l2.2.5v3.4l-2.2.5a7.6 7.6 0 0 1-.7 1.7l1.2 1.9-2.4 2.4-1.9-1.2a7.6 7.6 0 0 1-1.7.7l-.5 2.2h-3.4l-.5-2.2a7.6 7.6 0 0 1-1.7-.7l-1.9 1.2-2.4-2.4L5 16.6a7.6 7.6 0 0 1-.7-1.7l-2.2-.5V11l2.2-.5A7.6 7.6 0 0 1 5 8.8L3.8 6.9l2.4-2.4 1.9 1.2a7.6 7.6 0 0 1 1.7-.7l.5-2.2Z' }),
+                  React.createElement('circle', { cx: 12, cy: 12.7, r: 3.1 }))),
+                toolsOpen ? React.createElement('div', { style: styles.toolsMenu, role: 'menu', 'aria-label': '网关工具' },
+                  React.createElement('button', {
+                    type: 'button', role: 'menuitem', disabled: toolBusy || stoppedRef.current || !status?.tools?.restartWeb,
+                    style: { ...styles.toolsItem, opacity: status?.tools?.restartWeb ? 1 : .5 },
+                    onClick: () => runTool('restart-web'),
+                  }, '重启当前网关',
+                  React.createElement('span', { style: { ...styles.muted, display: 'block', marginTop: 2 } }, '结束当前进程并重新启动 DSH Web')),
+                  React.createElement('button', {
+                    type: 'button', role: 'menuitem', disabled: toolBusy || stoppedRef.current || !status?.tools?.stopWeb,
+                    style: { ...styles.toolsItem, color: colors.danger, opacity: status?.tools?.stopWeb ? 1 : .5 },
+                    onClick: () => runTool('stop-web'),
+                  }, '停止 DSH Web',
+                  React.createElement('span', { style: { ...styles.muted, display: 'block', marginTop: 2 } }, '结束后台进程，所有连接将断开')))
+                  : null),
+              React.createElement('button', { style: { ...styles.button, ...styles.headerButton }, onClick: () => setOpen(false), 'aria-label': '关闭' }, '✕'))),
+          toolNotice ? React.createElement('div', { style: { ...styles.muted, marginBottom: 10 } }, toolNotice) : null,
+          error ? React.createElement('div', { style: styles.error }, error) : null,
+          // ---- 主面板：打开抽屉第一眼就是这三件事（下载 App / 公网 / 内网）
+          React.createElement('section', { style: styles.card },
+            React.createElement('strong', null, '手机接入'),
+            React.createElement('div', { style: { ...styles.muted, marginTop: 4 } },
+              '三个按钮：先下载 App，再扫码连接。网关开关、隧道细节之类都在下面「高级设置」里。'),
+            React.createElement('div', { style: { marginTop: 10 } }, React.createElement(MobileAccessHost))),
+          status && status.version
+            ? React.createElement('div', { style: styles.version, 'aria-label': `插件版本 ${status.version}` }, `v${status.version}`)
+            : null))
+    }
+
+    function FooterButton(props) {
+      const isOpen = React.useSyncExternalStore(subscribe, getOpen)
+      const wide = !!props.wide
+      const iconSize = wide ? 16 : 18
+      const icon = React.createElement('svg', {
+        width: iconSize,
+        height: iconSize,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.8,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+      },
+      React.createElement('rect', { x: 6, y: 2, width: 12, height: 20, rx: 2.5 }),
+      React.createElement('path', { d: 'M10 18h4' }))
+      return React.createElement('button', {
+        title: '移动设备管理',
+        'aria-label': '移动设备管理',
+        'aria-pressed': isOpen,
+        onClick: () => setOpen(!isOpen),
+        style: {
+          cursor: 'pointer',
+          background: 'transparent',
+          border: 'none',
+          color: 'inherit',
+          font: 'inherit',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: wide ? 8 : 0,
+          boxSizing: 'border-box',
+          // 与同一槽位（sidebar.footer.action）里的其它插件按钮对齐：
+          // talk-map / session-cleaner / desktop-restart 都是 36×36 纯图标、
+          // 外边距 3px 0。原来这里的 width: calc(100% + 4px) 与 margin 左右 -2px
+          // 是按「竖排占满整行」写的，而该槽位实际是横排，
+          // 结果这个按钮比同伴宽出一截、左边也对不齐。
+          width: wide ? 'auto' : 36,
+          minWidth: 36,
+          height: 36,
+          margin: '3px 0',
+          padding: wide ? '0 8px' : 0,
+          lineHeight: 'normal',
+        },
+      }, icon, wide ? React.createElement('span', null, '移动设备') : null)
+    }
+
+    function OverlayEntry() {
+      const isOpen = React.useSyncExternalStore(subscribe, getOpen)
+      return isOpen ? React.createElement(DevicePanel) : null
+    }
+
+    // 接缝：把 A 段「设置 → 通用 → 手机接入」的跳转行接到 B 段的抽屉开关上。
+    gatewayPanelBridge.open = function () { return setOpen(true) }
 
     // ------------------------------------------------------------------ 插件体
     function apply(ctx) {
       try {
-        var styles = adoptStyles()
+        // ① A 的样式：adoptStyles 注入 <style>，ctx.effect 负责卸载。
+        var accessStyles = MobileAccessUI.adoptStyles()
         ctx.effect(function () {
-          return function () { styles.remove() }
-        }, NAME + ': styles')
+          return function () { accessStyles.remove() }
+        }, MobileAccessUI.NAME + ': styles')
 
-        // 跨 bundle 桥：「移动设备」面板（第三方网关插件，由补丁脚本叠加）会渲染
-        // 本插件的主面板组件，于是两个入口合成一个。
-        // 两个 bundle 都 require('react')，拿到同一个 React 实例，组件可以直接传。
-        // 网关面板是用户点击后才挂载的，那时本插件早已 apply；这里再补一个事件广播，
-        // 覆盖「面板先挂载、插件后 apply」的极端顺序（对方还会做兜底轮询）。
-        try {
-          window.__DSH_MOBILE_ACCESS__ = {
-            version: 1,
-            Row: MobileAccessRow,
-            Redirect: MobileAccessRedirect,
-          }
-          window.dispatchEvent(new Event('dsh-mobile-access-ready'))
-        } catch (e) { /* 非浏览器环境：忽略 */ }
-
-        // 设置里的入口改成「跳转」，真正的面板在「移动设备」里。
+        // ② 设置里的入口改成「跳转」，真正的面板在「移动设备」里。
         ctx.slots.inject('settings.general.item', function () {
           return ctx.slots.register(
             {
               name: 'settings.general.item',
-              id: SETTINGS_ID,
+              id: MobileAccessUI.SETTINGS_ID,
               order: 14,
               label: '手机接入',
               inject: function () { return {} },
             },
-            MobileAccessRedirect,
+            MobileAccessUI.Redirect,
           )
         })
+
+        // ③ B 的两处注入：侧边栏底部按钮 + 面板浮层（id 沿用原网关插件）。
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
+          { name: 'sidebar.footer.action', id: 'mobile-gateway-devices', order: 80, label: '移动设备' },
+          (props) => React.createElement(FooterButton, props),
+        ))
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+          { name: 'shell.overlay', id: 'mobile-gateway-devices-panel', order: 100, label: '移动设备' },
+          () => React.createElement(OverlayEntry),
+        ))
       } catch (error) {
-        console.error('[' + NAME + '] client apply failed:', error)
+        console.error('[dsh-mobile-access] client apply failed:', error)
       }
     }
 
-    exports.name = NAME
+    exports.name = 'dsh-mobile-access'
     exports.inject = ['slots']
     exports.apply = apply
-    exports.MobileAccessRow = MobileAccessRow
-    exports.MobileAccessRedirect = MobileAccessRedirect
-    exports.__test = { API: API, SETTINGS_ID: SETTINGS_ID, fmtTime: fmtTime }
     return module.exports
   },
 })

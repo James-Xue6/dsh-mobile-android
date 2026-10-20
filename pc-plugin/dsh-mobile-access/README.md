@@ -1,7 +1,13 @@
 # dsh-mobile-access（DSH 掌上通 · PC 接入插件）
 
-给 **DSH 掌上通** App 用的 PC 端接入面板。协议层**一行不重写** —— 全部复用
-[`dsh-plugin-mobile-gateway`](https://www.npmjs.com/package/dsh-plugin-mobile-gateway)（MIT）。
+给 **DSH 掌上通** App 用的 PC 端接入插件。**一个插件搞定**：协议层（WebSocket 网关、设备配对与鉴权、
+Cloudflare 隧道、局域网监听、会话同步）已 **vendor 进本包的 `vendor/gateway/`**（源自 MIT 许可的
+[`dsh-plugin-mobile-gateway`](https://www.npmjs.com/package/dsh-plugin-mobile-gateway) 0.9.0），
+由宿主侧 `ctx.plugin()` 作为子插件挂载 —— 所以插件列表里只有本包一个条目。
+
+> 许可证与上游对齐说明见 `THIRD-PARTY-NOTICES.md`：`vendor/gateway/` 里的改动（Connection Peer、
+> 跨会话提醒、hello 带公网地址、地址广播、文件上传、子智能体寻址、居中弹窗面板）都在那里逐条列着，
+> 上游出新版时按那份清单人工对齐。
 
 ## 一键安装
 
@@ -11,14 +17,14 @@
 pwsh -File .\pc-plugin\install.ps1
 ```
 
-脚本会：复制插件到 `~/.dsh/local-plugins/`、把 `dist/dsh-mobile.apk` 放进插件目录
-（并把 `app/version.txt` 写成该 APK 的 `versionName`，面板显示的就是这个包的真实版本）、
-在 profile 的 `package.json` 登记依赖与 bundles、补一段 `mobile-gateway` 配置（lanPort 3091）。
-
-**装这一个包就够了**：协议层 `dsh-plugin-mobile-gateway` 已写进本包 `dependencies`，
-本包的 `cordis.patch.yml` 也把它的宿主行（以及手机 `search` 通道需要的
-`session-query-sqlite → openAt: first-search`）一并挂载，安装方不需要再单独装第二个插件。
+脚本会：复制插件到 `~/.dsh/local-plugins/`（含 `vendor/` 与随包依赖 `node_modules/`）、
+把 `dist/dsh-mobile.apk` 放进插件目录（并把 `app/version.txt` 写成该 APK 的 `versionName`，
+面板显示的就是这个包的真实版本）、在 profile 的 `package.json` 登记本包、并在
+`cordis.patch.yml` 里挂载 `session-query-sqlite → openAt: first-search`（手机 `search` 通道需要）。
 **改完重启一次 DSH 生效。**
+
+> 从 v1.x 升级：脚本会自动摘掉 `dsh-plugin-mobile-gateway` 依赖与 `cordis.patch.yml` 里的
+> `mobile-gateway` 行（否则插件列表里仍会有第二个条目）。
 
 ## 二维码里编的到底是什么（别改错）
 

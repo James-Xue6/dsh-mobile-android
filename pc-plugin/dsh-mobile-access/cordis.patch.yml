@@ -1,37 +1,30 @@
-# dsh-mobile-access 组合包 patch：在组合树里挂载本插件的宿主行。
-# 行名就是本包名；client-modules 的 node 侧扫描到该行后读取本包的 dsh.client
-# 声明，并对外提供 /plugins/dsh-mobile-access/client.js。
+# dsh-mobile-access 组合包 patch：只挂一行——本插件自己。
+#
+# [2026-10-20 整合] 以前这里还有第二行 `id: mobile-gateway`（第三方包
+# dsh-plugin-mobile-gateway），插件列表里会看到两个条目，而且协议层的 6 个 fork 补丁
+# 只能靠 install.ps1 去 node_modules 里硬改。现在协议层已经 vendor 到
+# vendor/gateway/，由本插件的 apply() 用 ctx.plugin 作为子插件挂载：
+#   · 对外只有一个插件；
+#   · 不再需要改 node_modules（补丁逻辑随之废弃）。
+# 下面 config 的键与网关自己的 schema 完全一致（本包 Config 直接复用它）。
 - insert:
     - id: mobile-access
       name: dsh-mobile-access
-
-# ── 依赖包 dsh-plugin-mobile-gateway 的组合声明 ──────────────────────────
-# 本包已把网关声明为 dependencies，因此安装本包即自动安装网关；这里再把
-# 网关原本由它自己 bundle patch 提供的两条声明搬过来，安装方就只需要装
-# 本包一个，网关作为依赖自动装好并挂载（协议层，无独立界面）。
-#
-# 维护点：下面 config 是照抄 dsh-plugin-mobile-gateway@0.9.0 的默认值。
-# 网关升级若改了这些默认值，这里要跟着改一次（否则会以上游为准变成本包为准）。
-# 例：上游默认 lanPort 3081；安装脚本会在 profile 的 cordis.patch.yml 里
-# 覆盖成 3091（避开 dsh-pocket 曾占用的 3081），该覆盖仍按层序生效。
-- insert:
-    - id: mobile-gateway
-      name: 'dsh-plugin-mobile-gateway'
       config:
         # Secure by default: every mobile WebSocket must authenticate with a
         # paired device credential. Pair/revoke APIs remain local-machine only.
-        gatewayEnabled: false
+        gatewayEnabled: true
+        gatewayMode: persistent
         gatewayWaitTimeoutMs: 300000
         requireAuth: true
         adminLoopbackOnly: true
         pairingTtlMs: 300000
-        # DSH WebUI remains loopback-only on 3080. This row owns the
-        # authenticated, WebSocket-only LAN listener for phones.
+        # DSH WebUI remains loopback-only. This row owns the authenticated,
+        # WebSocket-only LAN listener for phones.
         lanEnabled: true
         lanHost: 0.0.0.0
-        lanPort: 3081
-        # Written automatically by `sudo npx dsh-plugin-mobile-gateway setup`.
-        publicUrlFile: /etc/dsh-mobile-gateway/public-url
+        # 3091：避开 dsh-pocket 曾占用的 3081。
+        lanPort: 3091
 
 # 网关的 `search` 查询通道需要全量会话索引，而 dsh-web-app 默认把它关成
 # `openAt: never`。这条把部署打开为按需加载：node:sqlite 与内存索引都推迟到

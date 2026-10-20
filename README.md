@@ -29,34 +29,36 @@ pwsh -File .\pc-plugin\install.ps1
 ```
 
 脚本会：把插件复制到 `~/.dsh/local-plugins/`、把 APK 放进插件目录、在 DSH profile 里登记依赖与 bundle。
-**只装这一个插件就够了** —— 协议层 `dsh-plugin-mobile-gateway` 已声明为本插件的依赖，
-由脚本一并登记；它的行也由本插件自己的组合声明挂载，不用你另外装第二个插件。
+**只装这一个插件就够了** —— 协议层已**内置**在本插件里（vendor/gateway/，源自 MIT 许可的 dsh-plugin-mobile-gateway），
+由插件自己挂载，不需要再装第二个插件。
 
 > 用 SSH 的话，第一条命令换成 `git clone git@github.com:James-Xue6/dsh-mobile-android.git`。
 
-### ①′ 装完**重启一次 DSH**，然后**再跑一次** `install.ps1`
+### ①′ 装完重启一次 DSH 就好（不再需要跑第二遍）
 
 ```powershell
-# 先重启 DSH 桌面版（让它把 dsh-plugin-mobile-gateway 装上），然后回到仓库目录：
-pwsh -File .\pc-plugin\install.ps1
+# 装完重启 DSH 桌面版即可：
+#   · v2.0.0 起协议层已内置在插件里（vendor/gateway），不再依赖第三方包，
+#     也就不存在「补丁要等网关先装好」的问题；
+#   · 装的时候会打印一段 [验收]，六行都要是 OK。
 ```
 
-为什么要跑第二次：面板样式、手机接入卡片、新内核的 Connection Peer 这些**都在补丁里**，
-而补丁只能打给「已经装好的」`dsh-plugin-mobile-gateway`；全新机器上它是 DSH 下次启动才装的。
-第二次跑完会打印一段 **[验收]**，四行都要是 `OK`：
+`[验收]` 长这样（任何一行是「缺失」都说明插件目录没复制全，重跑一次 `install.ps1` 即可）：
 
 ```
-[验收] 网关补丁是否真的落到盘上
-  OK  面板 v2（居中弹窗）  →  client.js
-  OK  Connection Peer  →  index.mjs
-  OK  Connection Peer  →  dsh-host-adapter.mjs
-  OK  cloudflared 镜像回退  →  cloudflared-binary.mjs
-  全部补丁已就位。
+[验收] 单插件整合是否到位
+  OK  内置协议层（vendor/gateway/index.mjs）
+  OK  Connection Peer 已并入 vendor 基线
+  OK  adapter 全部出口透传 peer
+  OK  client 是合并版（含面板 + 手机接入）
+  OK  profile 不再依赖第三方网关包
+  OK  cordis.patch.yml 里没有 mobile-gateway 行
+  整合完成：一个插件、一条补丁行、协议层内置。
 ```
 
-只要出现红色 `!! 还有 N 项补丁没落盘`，就说明补丁没打上 —— 界面会停在上游原版，
-新版 DSH 内核上手机还会报 `Cannot read properties of undefined (reading 'signal')`。
-按提示「重启 → 再跑一次 → 再刷新」即可。
+> 从 v1.x 升级过来的人：脚本会自动摘掉旧的 `dsh-plugin-mobile-gateway` 依赖与
+> `cordis.patch.yml` 里的 `mobile-gateway` 行，插件列表随之从两个变成一个。
+> `node_modules` 里遗留的旧网关目录已无引用，可以手动挪走。
 
 ### ② 重启一次 DSH 桌面版
 
@@ -81,8 +83,8 @@ pwsh -File .\pc-plugin\install.ps1
 在同一张卡片上点 **「生成内网二维码」**（在家用）或 **「生成公网二维码」**（出门用），用 App 扫它。
 **内网地址与公网地址会一次填好**，之后在家用内网、出门自动切公网，都不用手输。
 
-> 电脑端的协议层是第三方 MIT 插件 `dsh-plugin-mobile-gateway`，它**已声明为本插件的依赖**：
-> 安装脚本会一并登记，挂载也由本插件的组合声明负责 —— 不需要你单独装第二个插件。
+> 电脑端的协议层是**随插件内置**的（vendor/gateway/，MIT，见 THIRD-PARTY-NOTICES.md）：
+> 宿主侧的 ctx.plugin 把它作为子插件挂载 —— 插件列表里只有 dsh-mobile-access 一个。
 
 ### ⑤ 更新（已经装过的怎么升）
 
@@ -131,7 +133,7 @@ pwsh -File .\pc-plugin\install.ps1
 
 **重启 DSH 后找不到「移动设备」按钮**
 - 插件装完必须**重启一次 DSH 桌面版**才生效。
-- 还不行就确认协议层依赖 `dsh-plugin-mobile-gateway` 已随本插件装好（profile 的 `package.json` 依赖里应有它）。
+- 还不行就确认本插件目录里带着协议层：~/.dsh/local-plugins/dsh-mobile-access/vendor/gateway/index.mjs 存在。
 
 **覆盖安装报「应用未安装」**
 - 说明签名和旧版不一致。只能用原来的签名密钥库（`%USERPROFILE%\.dsh-mobile-keys\dshmobile.jks`）重新打包；
@@ -183,11 +185,11 @@ dsh-mobile-android/
 ### 架构
 
 App 只实现 `dsh-mobile-v1` 协议（WebSocket + JSON），不碰 DSH 内部；
-协议层由第三方 MIT 插件 `dsh-plugin-mobile-gateway` 承担，本仓库的 `pc-plugin/` 只做接入编排与界面。
+协议层**内置**在本仓库的 `pc-plugin/dsh-mobile-access/vendor/gateway/`（源自 MIT 的 dsh-plugin-mobile-gateway 0.9.0 + fork 补丁），`pc-plugin/` 另含接入编排与界面。
 安装面只有 `dsh-mobile-access` 一个包：它声明依赖网关，并在自己的 `cordis.patch.yml` 里挂载网关的行。
 
 ```
-Android App ──ws/wss──> dsh-plugin-mobile-gateway ──> DSH Host (desktop profile)
+Android App ──ws/wss──> dsh-mobile-access（内置协议层 vendor/gateway）──> DSH Host (desktop profile)
 ```
 
 ---

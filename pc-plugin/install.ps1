@@ -130,11 +130,14 @@ $pkgPath = Join-Path $profileDir 'package.json'
 Copy-Item $pkgPath "$pkgPath.bak-install" -Force
 $pkg = Read-Text $pkgPath | ConvertFrom-Json
 
-if (-not $pkg.dependencies.PSObject.Properties[$gatewayName]) {
-  $pkg.dependencies | Add-Member -NotePropertyName $gatewayName -NotePropertyValue $gatewayVersion
-  Ok "依赖 + $gatewayName = $gatewayVersion"
+# [2026-10-20 整合] 协议层已 vendor 进本插件，不再需要第三方包 dsh-plugin-mobile-gateway。
+# 老机器上还残留着这条依赖 + 它的 node_modules，这里顺手摘掉（否则插件列表里仍会有第二个条目，
+# 而且 DSH 还会继续把它当独立插件加载一遍）。
+if ($pkg.dependencies.PSObject.Properties[$gatewayName]) {
+  $pkg.dependencies.PSObject.Properties.Remove($gatewayName)
+  Ok "依赖 - $gatewayName（协议层已内置在本插件 vendor/gateway）"
 } else {
-  Info "依赖已有 $gatewayName"
+  Info "已无 $gatewayName 依赖（已是整合版）"
 }
 $linkTarget = 'link:' + ($pluginDst -replace '\\', '/')
 if (-not $pkg.dependencies.PSObject.Properties[$pluginName]) {
@@ -220,114 +223,87 @@ if ($leftover.Count -eq 0) {
   }
 }
 
+# ---------------------------------------------------------------- 迁移：摘掉第三方网关包的行与残留
+# [2026-10-20 整合] 协议层已 vendor 进本插件 vendor/gateway。老机器上还留着
+# ① profile 的 cordis.patch.yml 里 `- id: mobile-gateway` 配置块；② node_modules 里的
+# dsh-plugin-mobile-gateway 目录。前者会让插件列表继续出现第二个条目（行还在就还会挂载），
+# 所以必须删；后者已经没有任何引用，留着不影响，但要提醒可以清。
+Write-Host "`n[迁移] 摘掉旧的 mobile-gateway 组合行" -ForegroundColor Cyan
+$patchPath = Join-Path $profileDir 'cordis.patch.yml'
+if (Test-Path $patchPath) {
+  $patchText = Read-Text $patchPath
+  if ($patchText -match '(?m)^\s*-\s*id:\s*mobile-gateway\s*$') {
+    Copy-Item $patchPath "$patchPath.bak-merge" -Force
+    $lines = $patchText -split "`n"
+    $start = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($lines[$i] -match '^\s*-\s*id:\s*mobile-gateway\s*$') { $start = $i; break }
+    }
+    if ($start -ge 0) {
+      # 往前吞掉本脚本当年追加的注释头（# == DSH 掌上通… / # lanPort 用 3091…）
+      $s = $start
+      while ($s - 1 -ge 0 -and $lines[$s - 1] -match '^\s*#') { $s-- }
+      # 往后吞掉该 list item 的所有缩进行与空行
+      $e = $start
+      while ($e + 1 -lt $lines.Count -and ($lines[$e + 1] -match '^\s+\S' -or $lines[$e + 1].Trim() -eq '')) { $e++ }
+      $kept = @()
+      for ($i = 0; $i -lt $lines.Count; $i++) { if ($i -lt $s -or $i -gt $e) { $kept += $lines[$i] } }
+      $newText = ($kept -join "`n")
+      Write-Text $patchPath $newText
+      $after = Read-Text $patchPath
+      if ($after -match '(?m)^\s*-\s*id:\s*mobile-gateway\s*$') { throw "迁移失败：cordis.patch.yml 里仍有 mobile-gateway 行" }
+      Ok "cordis.patch.yml 已移除 mobile-gateway 行（备份：cordis.patch.yml.bak-merge）"
+    }
+  } else {
+    Info "cordis.patch.yml 里没有 mobile-gateway 行（已是整合版）"
+  }
+}
+
+$gwNodeModules = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway'
+if (Test-Path $gwNodeModules) {
+  Warn "node_modules 里还留着旧的 dsh-plugin-mobile-gateway 目录（已无引用，留着不影响）"
+  Warn "  想清理可以：Move-Item '$gwNodeModules' '$backupDir\dsh-plugin-mobile-gateway.merged'"
+}
+
+# ---------------------------------------------------------------- 验收：现在真的只有一个插件
+Write-Host "`n[验收] 单插件整合是否到位" -ForegroundColor Cyan
+$fails = @()
+$vendorIndex = Join-Path $pluginDst 'vendor\gateway\index.mjs'
+$vendorAdapter = Join-Path $pluginDst 'vendor\gateway\dsh-host-adapter.mjs'
+$clientFile = Join-Path $pluginDst 'client.js'
+$checks = @(
+  @{ Name = '内置协议层（vendor/gateway/index.mjs）'; Ok = (Test-Path $vendorIndex) },
+  @{ Name = 'Connection Peer 已并入 vendor 基线';      Ok = ((Test-Path $vendorIndex) -and ((Read-Text $vendorIndex) -match 'createPeer')) },
+  @{ Name = 'adapter 全部出口透传 peer';               Ok = ((Test-Path $vendorAdapter) -and ((Read-Text $vendorAdapter) -match 'local patch: DSH 0\.2\.1-rc\.2')) },
+  @{ Name = 'client 是合并版（含面板 + 手机接入）';     Ok = ((Test-Path $clientFile) -and ((Read-Text $clientFile) -match 'settings\.general\.item') -and ((Read-Text $clientFile) -match 'sidebar\.footer\.action')) },
+  @{ Name = 'profile 不再依赖第三方网关包';            Ok = (-not ((Read-Text $pkgPath | ConvertFrom-Json).dependencies.PSObject.Properties['dsh-plugin-mobile-gateway'])) },
+  @{ Name = 'cordis.patch.yml 里没有 mobile-gateway 行'; Ok = (-not ((Read-Text $patchPath) -match '(?m)^\s*-\s*id:\s*mobile-gateway\s*$')) }
+)
+foreach ($c in $checks) {
+  if ($c.Ok) { Write-Host "  OK  $($c.Name)" } else { Write-Host "  缺失  $($c.Name)" -ForegroundColor Yellow; $fails += $c.Name }
+}
+if ($fails.Count -gt 0) {
+  Write-Host ""
+  Write-Host "  !! $($fails.Count) 项没到位：$($fails -join '；')" -ForegroundColor Red
+  Write-Host "  常见原因：插件目录没复制全（vendor/ 被漏掉）或 profile 补丁没写回。重跑一次本脚本再看。" -ForegroundColor Yellow
+} else {
+  Write-Host "  整合完成：一个插件、一条补丁行、协议层内置。" -ForegroundColor Green
+}
+
 # ---------------------------------------------------------------- 完成
 Write-Host "`n=== 安装完成 ===" -ForegroundColor Cyan
 Write-Host @"
 下一步：
   1. 重启 DSH 桌面版（panel/宿主代码都是启动时加载的）
   2. 点左侧边栏底部的「移动设备」按钮 —— PC 端只有这一个入口
-       抽屉第一屏就是「手机接入」卡片，只有三个按钮：
+       弹窗第一屏就是「手机接入」卡片：
          · 下载 App        —— 手机连同一 WiFi 扫码即可下载安装 APK
-         · 生成公网二维码   —— 出门在外用（临时域名，电脑重启后会变，需重新扫码）
+         · 生成公网二维码   —— 出门在外用（临时域名，电脑重启后会变）
          · 生成内网二维码   —— 在家用
-       网关开关、公网隧道、已配对设备与吊销都在下面的「高级设置」里（默认收起）
-       · 设置 → 通用 →「手机接入」现在只做跳转，不再重复一份功能
-  3. 若面板提示网关不可用，确认 dsh-plugin-mobile-gateway 已装且已重启
+       网关开关 / 公网隧道 / 已配对设备在卡片里的「高级设置」中
+  3. 插件列表里现在**只有一个** dsh-mobile-access（协议层已内置，不再是第二个插件）
   4. 若曾经看到"两个插件 / 老界面"：那是 local-plugins 里留了 .bak-install-* 残留。
-     本脚本 [1/4] 已自动挪到 $backupDir；想手动再清一遍就照 [附] 那段打印的命令做
-     （把 <残留目录名> 换成实际名字，挪走而不是删除）：
-       Move-Item "$pluginRoot\<残留目录名>" "$backupDir\<残留目录名>.manual"
+     本脚本 [1/4] 已自动挪到 $backupDir；想手动再清一遍就照上面打印的命令做
+     （把 <残留目录名> 换成实际名字，挪走而不是删除）
 "@
 
-# ---------------------------------------------------------------- 附：网关面板补丁
-# 「手机接入」并入「移动设备」这一步要改第三方网关包的 lib/client.js（升级会被覆盖），
-# 所以走 pc-plugin\patches\ 下的「打补丁 + 可重放脚本」。脚本自带版本校验（0.9.0），
-# 版本不符会报错退出而不是把插件降级 —— 这里只在文件已就位时顺手跑一次。
-#
-# [2026-10-20 修] 这里原来只在网关已落盘时才跑补丁，而且缺失时只 Warn 一句。
-# 结果：**全新机器第一次装必然错过补丁** —— install.ps1 只登记依赖，网关是 DSH 下次启动时
-# 才由 pnpm 装上的；等用户重启完 DSH，补丁那一步早就跑过了 ⇒ 看到的是上游原版面板
-# （右侧整栏、没有「手机接入」卡片），而且新内核上还会缺 peer → 手机报 reading 'signal'。
-# 现在改成：缺网关时把后果说清楚，并在全部步骤结束后统一做一次「补丁是否真的落到盘上」的验收。
-$gwClient = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib\client.js'
-$patchScript = Join-Path $PSScriptRoot 'patches\restore-gateway-panel-fix.ps1'
-if (Test-Path $gwClient) {
-  Write-Host "`n[附] 叠加网关面板补丁（居中弹窗 + 手机接入三个按钮置顶 + 去掉重复的旧高级设置）" -ForegroundColor Cyan
-  if (Test-Path $patchScript) {
-    try { & $patchScript } catch { Warn "补丁未应用：$($_.Exception.Message)" }
-  } else { Warn "找不到 $patchScript" }
-} else {
-  Write-Host ""
-  Warn "网关插件还没落盘：$gwClient"
-  Warn "  这不是错误 —— 全新机器上 DSH 会在**下次启动**时才把 dsh-plugin-mobile-gateway 装上。"
-  Warn "  但本脚本的补丁步骤只在网关已存在时才会执行，所以现在这几步会被跳过。"
-  Warn "  ⇒ **重启一次 DSH 之后，必须再跑一次本脚本**（第二次会把补丁全部补上）。"
-  Warn "     命令：pwsh -File .\pc-plugin\install.ps1"
-  Warn "  不补的后果：面板是上游原版（右侧整栏、没有「手机接入」卡片），"
-  Warn "  且新版 DSH 内核上缺 Connection Peer ⇒ 手机端报 reading 'signal'、0 个对话。"
-}
-
-# ---------------------------------------------------------------- 附：网关协议补丁（幂等、可重放）
-#
-# [2026-10-05 补] 以前这里**只跑面板补丁**，其余几个网关补丁（跨会话提醒 / hello 带公网地址 /
-# 地址变化广播 / 通用文件附件）都是**手工**打的 —— 结果它们只活在 node_modules 里，
-# 网关一升级/重装就静默失效（手机表现为：收不到跨会话提醒、出门连不上、发不了文件）。
-# 现在装完统一重放一遍：每个脚本都自带「锚点唯一性预检 + 幂等标记 + -Revert」，
-# 版本不符会报错退出而不是把插件降级，所以**重复跑是安全的**。
-$gwLib = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib'
-if (Test-Path $gwLib) {
-  Write-Host "`n[附] 叠加网关协议补丁（幂等、可重放；网关升级/重装后重跑本脚本即可）" -ForegroundColor Cyan
-  $gatewayPatches = @(
-    @{ File = 'patch-gateway-crosssession.ps1';    What = '跨会话提醒（放宽两道 waterfall 门 + 跨会话下发带 global 标记）' },
-    @{ File = 'patch-gateway-hello-publicurl.ps1'; What = 'hello 帧带上电脑当前公网(隧道)地址（隧道换域名后自动同步，不用重新扫码）' },
-    @{ File = 'patch-gateway-route-broadcast.ps1'; What = '地址变化 / 启动就绪后主动广播' },
-    @{ File = 'patch-gateway-file-upload.ps1';     What = '通用文件附件（message.files[] + hello.capabilities: file-uploads）' },
-    # [2026-10-19 补] DSH 内核 0.2.1-rc.2 起 invoke/stream 入口会 assertPeerLive(request.peer)，
-    # 0.9.0 不带 peer 就抛 "Cannot read properties of undefined (reading 'signal')"：
-    # 手机能连上、能鉴权，但 sessions / workspaces 全失败（0 对话 + 弹窗报错）。
-    # 必须放最后：它是「整文件替换」，落的是 0.9.0 + 上面全部补丁 + peer 的已验收完整文件。
-    @{ File = 'restore-gateway-connection-peer.ps1'; What = 'DSH 0.2.1-rc.2 的 Connection Peer（invoke/stream 全部透传 peer）' }
-  )
-  foreach ($p in $gatewayPatches) {
-    $s = Join-Path $PSScriptRoot "patches\$($p.File)"
-    if (-not (Test-Path $s)) { Warn "找不到 $s"; continue }
-    Write-Host "  · $($p.What)"
-    try { & $s } catch { Warn "    $($p.File) 未应用：$($_.Exception.Message)" }
-  }
-  Write-Host "  提示：这些补丁改的是 node_modules 里的网关文件，**网关升级/重装后请重跑** pwsh -File .\pc-plugin\install.ps1" -ForegroundColor Yellow
-} else {
-  Warn "网关插件还没落盘（$gwLib 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动重跑一次本脚本"
-}
-
-# ---------------------------------------------------------------- 落盘验收（别只看「没报错」）
-# 这是 2026-10-19 另一台电脑「装完界面和这边不一样」的直接教训：
-# 补丁没落盘时，上面的补丁步骤只是 Warn，用户看到的是「安装完成」→ 却拿到别的界面。
-Write-Host "`n[验收] 网关补丁是否真的落到盘上" -ForegroundColor Cyan
-$checks = @(
-  @{ Name = '面板 v2（居中弹窗）'; File = 'client.js';             Marker = '\[pc-plugin patch\] dsh-mobile-access panel v2' },
-  @{ Name = 'Connection Peer';     File = 'index.mjs';             Marker = 'local patch: DSH 0\.2\.1-rc\.2' },
-  @{ Name = 'Connection Peer';     File = 'dsh-host-adapter.mjs';  Marker = 'local patch: DSH 0\.2\.1-rc\.2' },
-  @{ Name = 'cloudflared 镜像回退'; File = 'cloudflared-binary.mjs'; Marker = 'MIRROR_PREFIXES' }
-)
-$missingPatches = @()
-foreach ($c in $checks) {
-  $f = Join-Path $gwLib $c.File
-  if (-not (Test-Path $f)) { $missingPatches += "$($c.Name)（文件不存在：$($c.File)）"; continue }
-  $text = Read-Text $f
-  if ($text -match $c.Marker) {
-    Write-Host "  OK  $($c.Name)  →  $($c.File)"
-  } else {
-    Write-Host "  缺失  $($c.Name)  →  $($c.File)" -ForegroundColor Yellow
-    $missingPatches += "$($c.Name)（$($c.File)）"
-  }
-}
-if ($missingPatches.Count -eq 0) {
-  Write-Host "  全部补丁已就位。" -ForegroundColor Green
-} else {
-  Write-Host ""
-  Write-Host "  !! 还有 $($missingPatches.Count) 项补丁没落盘：$($missingPatches -join '；')" -ForegroundColor Red
-  Write-Host "  多数情况是「网关还没装好就来跑本脚本」。处理顺序：" -ForegroundColor Yellow
-  Write-Host "    1) 重启 DSH 桌面版（让它把 dsh-plugin-mobile-gateway 装上）" -ForegroundColor Yellow
-  Write-Host "    2) 再跑一次：pwsh -File .\pc-plugin\install.ps1" -ForegroundColor Yellow
-  Write-Host "    3) 再刷新/重启一次 DSH" -ForegroundColor Yellow
-}

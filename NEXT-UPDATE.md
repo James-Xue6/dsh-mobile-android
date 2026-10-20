@@ -1,7 +1,24 @@
 # 下一步计划（NEXT-UPDATE）
 
 > 状态标记：`[x]` 已完成并验证 / `[~]` 部分完成 / `[ ]` 待办。
-> 最近更新：2026-10-20（**修「别的电脑装完界面不一样」**：面板补丁幂等判据失效 + 全新机器错过补丁步骤；install.ps1 增加落盘验收，插件版本 1.0.5）。
+> 最近更新：2026-10-20（**协议层 vendor 进本插件，插件数量 2 → 1**：dsh-mobile-access v2.0.0，内置 vendor/gateway，不再依赖第三方包、不再给 node_modules 打补丁）。
+
+## 零、2026-10-20：合并成一个插件（dsh-mobile-access v2.0.0）
+
+> 用户诉求：「现在好像是 2 个插件，能不能整合成一个？只用它这个公网的协议逻辑」。
+> 结论：能。做法是把 `dsh-plugin-mobile-gateway@0.9.0`（MIT）**整包 vendor 进本插件**，
+> 由本插件的 `apply()` 用 `ctx.plugin()` 作为子插件挂载 —— 对外一个插件、一条补丁行。
+
+- [x] `vendor/gateway/`：网关 lib 全量（index.mjs / adapter / 隧道 / 设备 / 插件管理 / session-follower / wire-json / web-restart）+ LICENSE + PROTOCOL.md。
+  三处 vendor 改动：① `../package.json` → `../../package.json`（版本号读取）；② `devices.js` → `devices.cjs`（本包 type=module，否则 CJS 被当 ESM 解析）；③ 头部注释。
+- [x] 宿主：`index.js` 增加 `import gatewayPlugin, { Config } from './vendor/gateway/index.mjs'`，`Config` 直接复用网关 schema；`apply(ctx, config)` 末尾 `ctx.plugin(gatewayPlugin, config)`。冒烟测试确认 `ctx.plugin` 收到 `mobile-gateway` 与配置。
+- [x] 依赖：`link:` 依赖不会安装自身依赖（实测 ERR_MODULE_NOT_FOUND），故把 `ws / qrcode(+pngjs,dijkstrajs) / @deepseek-ai/schemastery(+@standard-schema/spec,+cosmokit)` **随包 vendor 到 `node_modules/`**（约 1.5MB，含各自 package.json/LICENSE），保证 local-plugins 目录内可直接解析。
+- [x] 客户端：两份 client bundle 机械合并成一份（A 段包 IIFE、B 段原位），删掉 `window.__DSH_MOBILE_ACCESS__` 跨 bundle 握手与轮询，改为同作用域直接渲染；`apply` 一次注册 3 个槽位（设置跳转行 + 侧边栏按钮 + 浮层面板）。合并脚本做过字节级保真与假 React 冒烟测试。
+- [x] `cordis.patch.yml` 收敛成一行（本包），config 随行携带（lanPort 3091 等）。
+- [x] `install.ps1`：不再登记第三方依赖、不再跑 6 个 node_modules 补丁脚本；新增迁移（摘依赖 + 摘 `mobile-gateway` 行）与 **[验收] 六项**（vendor / peer / adapter / 合并版 client / 无旧依赖 / 无旧行）。本机实跑六项全 OK。
+- [x] 文档：README（安装流程去掉「跑第二遍」）、插件 README、`THIRD-PARTY-NOTICES.md`（MIT 声明 + 上游对齐清单）。
+- ⏳ **未验证**：`ctx.plugin` 在真实 DSH 里的挂载结果（本机重启后验证 panel + 探针）；弹窗观感仍未在浏览器里看过。
+- ⚠️ **已知取舍**：上游 0.10.x 不再自动跟随，需要人工按清单对齐 `vendor/gateway/`。
 
 ## 零、2026-10-20：修「别的电脑装完，界面和本机不一样」（已推 Gitee/GitHub，未发版）
 
