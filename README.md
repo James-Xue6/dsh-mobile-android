@@ -34,6 +34,30 @@ pwsh -File .\pc-plugin\install.ps1
 
 > 用 SSH 的话，第一条命令换成 `git clone git@github.com:James-Xue6/dsh-mobile-android.git`。
 
+### ①′ 装完**重启一次 DSH**，然后**再跑一次** `install.ps1`
+
+```powershell
+# 先重启 DSH 桌面版（让它把 dsh-plugin-mobile-gateway 装上），然后回到仓库目录：
+pwsh -File .\pc-plugin\install.ps1
+```
+
+为什么要跑第二次：面板样式、手机接入卡片、新内核的 Connection Peer 这些**都在补丁里**，
+而补丁只能打给「已经装好的」`dsh-plugin-mobile-gateway`；全新机器上它是 DSH 下次启动才装的。
+第二次跑完会打印一段 **[验收]**，四行都要是 `OK`：
+
+```
+[验收] 网关补丁是否真的落到盘上
+  OK  面板 v2（居中弹窗）  →  client.js
+  OK  Connection Peer  →  index.mjs
+  OK  Connection Peer  →  dsh-host-adapter.mjs
+  OK  cloudflared 镜像回退  →  cloudflared-binary.mjs
+  全部补丁已就位。
+```
+
+只要出现红色 `!! 还有 N 项补丁没落盘`，就说明补丁没打上 —— 界面会停在上游原版，
+新版 DSH 内核上手机还会报 `Cannot read properties of undefined (reading 'signal')`。
+按提示「重启 → 再跑一次 → 再刷新」即可。
+
 ### ② 重启一次 DSH 桌面版
 
 然后点左侧边栏底部的 **「移动设备」** 按钮 —— PC 端只有这一个入口。

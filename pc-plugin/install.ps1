@@ -243,15 +243,28 @@ Write-Host @"
 # 「手机接入」并入「移动设备」这一步要改第三方网关包的 lib/client.js（升级会被覆盖），
 # 所以走 pc-plugin\patches\ 下的「打补丁 + 可重放脚本」。脚本自带版本校验（0.9.0），
 # 版本不符会报错退出而不是把插件降级 —— 这里只在文件已就位时顺手跑一次。
+#
+# [2026-10-20 修] 这里原来只在网关已落盘时才跑补丁，而且缺失时只 Warn 一句。
+# 结果：**全新机器第一次装必然错过补丁** —— install.ps1 只登记依赖，网关是 DSH 下次启动时
+# 才由 pnpm 装上的；等用户重启完 DSH，补丁那一步早就跑过了 ⇒ 看到的是上游原版面板
+# （右侧整栏、没有「手机接入」卡片），而且新内核上还会缺 peer → 手机报 reading 'signal'。
+# 现在改成：缺网关时把后果说清楚，并在全部步骤结束后统一做一次「补丁是否真的落到盘上」的验收。
 $gwClient = Join-Path $profileDir 'node_modules\dsh-plugin-mobile-gateway\lib\client.js'
 $patchScript = Join-Path $PSScriptRoot 'patches\restore-gateway-panel-fix.ps1'
 if (Test-Path $gwClient) {
-  Write-Host "`n[附] 叠加网关面板补丁（下拉实底 + 手机接入三个按钮置顶 + 其余收进高级设置）" -ForegroundColor Cyan
+  Write-Host "`n[附] 叠加网关面板补丁（居中弹窗 + 手机接入三个按钮置顶 + 去掉重复的旧高级设置）" -ForegroundColor Cyan
   if (Test-Path $patchScript) {
     try { & $patchScript } catch { Warn "补丁未应用：$($_.Exception.Message)" }
   } else { Warn "找不到 $patchScript" }
 } else {
-  Warn "网关插件还没落盘（$gwClient 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动跑一次 pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1"
+  Write-Host ""
+  Warn "网关插件还没落盘：$gwClient"
+  Warn "  这不是错误 —— 全新机器上 DSH 会在**下次启动**时才把 dsh-plugin-mobile-gateway 装上。"
+  Warn "  但本脚本的补丁步骤只在网关已存在时才会执行，所以现在这几步会被跳过。"
+  Warn "  ⇒ **重启一次 DSH 之后，必须再跑一次本脚本**（第二次会把补丁全部补上）。"
+  Warn "     命令：pwsh -File .\pc-plugin\install.ps1"
+  Warn "  不补的后果：面板是上游原版（右侧整栏、没有「手机接入」卡片），"
+  Warn "  且新版 DSH 内核上缺 Connection Peer ⇒ 手机端报 reading 'signal'、0 个对话。"
 }
 
 # ---------------------------------------------------------------- 附：网关协议补丁（幂等、可重放）
@@ -284,4 +297,37 @@ if (Test-Path $gwLib) {
   Write-Host "  提示：这些补丁改的是 node_modules 里的网关文件，**网关升级/重装后请重跑** pwsh -File .\pc-plugin\install.ps1" -ForegroundColor Yellow
 } else {
   Warn "网关插件还没落盘（$gwLib 不存在）：先让 DSH 装好 dsh-plugin-mobile-gateway，再手动重跑一次本脚本"
+}
+
+# ---------------------------------------------------------------- 落盘验收（别只看「没报错」）
+# 这是 2026-10-19 另一台电脑「装完界面和这边不一样」的直接教训：
+# 补丁没落盘时，上面的补丁步骤只是 Warn，用户看到的是「安装完成」→ 却拿到别的界面。
+Write-Host "`n[验收] 网关补丁是否真的落到盘上" -ForegroundColor Cyan
+$checks = @(
+  @{ Name = '面板 v2（居中弹窗）'; File = 'client.js';             Marker = '\[pc-plugin patch\] dsh-mobile-access panel v2' },
+  @{ Name = 'Connection Peer';     File = 'index.mjs';             Marker = 'local patch: DSH 0\.2\.1-rc\.2' },
+  @{ Name = 'Connection Peer';     File = 'dsh-host-adapter.mjs';  Marker = 'local patch: DSH 0\.2\.1-rc\.2' },
+  @{ Name = 'cloudflared 镜像回退'; File = 'cloudflared-binary.mjs'; Marker = 'MIRROR_PREFIXES' }
+)
+$missingPatches = @()
+foreach ($c in $checks) {
+  $f = Join-Path $gwLib $c.File
+  if (-not (Test-Path $f)) { $missingPatches += "$($c.Name)（文件不存在：$($c.File)）"; continue }
+  $text = Read-Text $f
+  if ($text -match $c.Marker) {
+    Write-Host "  OK  $($c.Name)  →  $($c.File)"
+  } else {
+    Write-Host "  缺失  $($c.Name)  →  $($c.File)" -ForegroundColor Yellow
+    $missingPatches += "$($c.Name)（$($c.File)）"
+  }
+}
+if ($missingPatches.Count -eq 0) {
+  Write-Host "  全部补丁已就位。" -ForegroundColor Green
+} else {
+  Write-Host ""
+  Write-Host "  !! 还有 $($missingPatches.Count) 项补丁没落盘：$($missingPatches -join '；')" -ForegroundColor Red
+  Write-Host "  多数情况是「网关还没装好就来跑本脚本」。处理顺序：" -ForegroundColor Yellow
+  Write-Host "    1) 重启 DSH 桌面版（让它把 dsh-plugin-mobile-gateway 装上）" -ForegroundColor Yellow
+  Write-Host "    2) 再跑一次：pwsh -File .\pc-plugin\install.ps1" -ForegroundColor Yellow
+  Write-Host "    3) 再刷新/重启一次 DSH" -ForegroundColor Yellow
 }

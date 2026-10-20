@@ -1,6 +1,9 @@
 // Browser half of dsh-plugin-mobile-gateway. The package manifest makes this
 // bundle part of DSH's client-module graph; it contributes one sidebar footer
 // action and one shell overlay without replacing shipped UI seats.
+// [pc-plugin patch] dsh-mobile-access panel v2: 居中弹窗 + 删掉与「手机接入」重复的旧高级设置
+// 判据说明：restore-gateway-panel-fix.ps1 用上面这行标记判断「是否已是本版补丁」，
+// 改面板时请同步改这行版本号（v2 → v3），否则老机器会被判成「已打过」而停在旧面板。
 window.__ModuleLoader__.load({
   id: 'dsh-plugin-mobile-gateway',
   factory: (require) => {

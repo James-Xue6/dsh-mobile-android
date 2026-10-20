@@ -1,4 +1,4 @@
-﻿# 给第三方网关插件 dsh-plugin-mobile-gateway@0.9.0 叠加本仓库的补丁。
+# 给第三方网关插件 dsh-plugin-mobile-gateway@0.9.0 叠加本仓库的补丁。
 #
 # 用法（PowerShell 7 / pwsh 或 Windows PowerShell 5.1 均可）：
 #     pwsh -File .\pc-plugin\patches\restore-gateway-panel-fix.ps1
@@ -10,19 +10,28 @@
 #   · 已经是补丁版就跳过，重复执行不会反复覆盖。
 #
 # 两处补丁：
-#  1) lib/client.js —— 面板修复
-#     · 下拉弹出层透明穿透 → 新增 styles.select / styles.option 实底样式
-#     · 「手机接入」（dsh-mobile-access）主面板置顶，网关设置收进「高级设置」
+#  1) lib/client.js —— 面板（当前基线 = v2）
+#     · 下拉弹出层透明穿透 → styles.select / styles.option 实底样式
+#     · 「手机接入」（dsh-mobile-access）主面板置顶
+#     · v2：面板由「右侧整栏抽屉」改为「居中弹窗」；删掉与手机接入卡片重复的旧高级设置
 #     · 配对地址「自动选择」不再死等公网：Quick Tunnel 没就绪时回退局域网地址
+#     · 幂等判据是 .patched 头部那行 `[pc-plugin patch] ... panel v2` 标记：
+#       改面板必须一起改这行版本号，否则老机器会被误判成「已打过」而停在旧界面
 #  2) lib/cloudflared-binary.mjs —— cloudflared 下载源加国内镜像回退
 #     · 镜像在前、官方在后；每个候选都按官方 sha256 摘要校验，校验不过换下一个
 [CmdletBinding()]
-param()
+param(
+  # 仅用于自测：直接指定网关包目录（默认取 profile 的 node_modules）
+  [string]$GatewayDir = ''
+)
 
 $ErrorActionPreference = 'Stop'
 
 $expectedVersion = '0.9.0'
-$gatewayDir = Join-Path $env:USERPROFILE '.dsh\profiles\desktop\node_modules\dsh-plugin-mobile-gateway'
+if (-not $GatewayDir) {
+  $GatewayDir = Join-Path $env:USERPROFILE '.dsh\profiles\desktop\node_modules\dsh-plugin-mobile-gateway'
+}
+$gatewayDir = $GatewayDir
 $pkgPath = Join-Path $gatewayDir 'package.json'
 
 # 文本一律按 UTF-8（无 BOM）读写。
@@ -34,21 +43,25 @@ function Read-Text([string]$path) { return [System.IO.File]::ReadAllText($path, 
 
 $patches = @(
   @{
-    title   = '面板：下拉实底 + 手机接入置顶 + 高级设置折叠 + 配对回退局域网'
+    title   = '面板：居中弹窗 + 手机接入置顶 + 删掉重复的旧高级设置 + 配对回退局域网'
     srcName = 'dsh-plugin-mobile-gateway.client.js.patched'
     relPath = 'lib\client.js'
+    # 幂等判据 = 补丁版本标记行。改面板时必须同步改 .patched 头部那行版本号，
+    # 否则老机器会被判成「已打过」而永远停在旧面板（2026-10-20 踩过：删掉高级设置后
+    # 判据里还留着 '高级设置（一般用不到）'/'setAdvancedOpen'，别的电脑装完还是旧界面）。
     must    = @(
-      'styles\.select',
-      '__DSH_MOBILE_ACCESS__',
+      '\[pc-plugin patch\] dsh-mobile-access panel v2',
       '__DSH_MOBILE_GATEWAY__',
+      '__DSH_MOBILE_ACCESS__',
       '三个按钮：先下载 App',
+      'tunnelUrl\) return tunnelUrl',
+      "maxHeight: 'calc\(100vh - 48px\)'"
+    )
+    # 旧版（或上游原版）里才有的特征：命中任意一条 ⇒ 说明还是旧面板，必须覆盖
+    mustNot = @(
       '高级设置（一般用不到）',
       'setAdvancedOpen',
-      'tunnelUrl\) return tunnelUrl'
-    )
-    mustNot = @(
-      '第一次使用 · 按两步走',
-      'accessOpen'
+      "justifyContent: 'flex-end'"
     )
   },
   @{
