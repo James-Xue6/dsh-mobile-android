@@ -202,6 +202,14 @@ internal fun DeviceCard(
     d: Store.Device,
     isActive: Boolean,
     online: Boolean,
+    /**
+     * [2026-10-20] 非当前设备"电脑在不在"的探测结果：
+     * `true` = 开着（只是当前没连它）、`false` = 真连不上、`null` = 还没探到/不适用。
+     *
+     * 为什么加这个：同一时刻只能连一台电脑，旧版把"没连它"写成「离线」，
+     * 用户两台都开着却看到两张卡都写离线。现在非当前设备可达 → 徽标仍是「在线」。
+     */
+    reachable: Boolean? = null,
     onEnter: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -209,6 +217,15 @@ internal fun DeviceCard(
 ) {
     val ink = Color(Ui.INK)
     val inkSub = Color(Ui.INK_SUB)
+    // 三态：已连接 / 电脑开着但没连它 / 连不上（或未知）
+    val reachableOnly = !online && !isActive && reachable == true
+    val badgeText = when {
+        online -> "在线"
+        reachableOnly -> "在线"
+        isActive -> "离线"
+        reachable == false -> "离线"
+        else -> "未连接"
+    }
 
     GlassSurface(
         backdrop = backdrop,
@@ -233,10 +250,17 @@ internal fun DeviceCard(
                             fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                         Badge(
-                            text = if (online) "在线" else "离线",
-                            bg = Color(if (online) Ui.BADGE_OK_BG else 0x1C000000),
-                            fg = Color(if (online) Ui.BADGE_OK_FG else Ui.INK),
-                            dot = Color(if (online) Ui.BADGE_OK_FG else Ui.INK),
+                            text = badgeText,
+                            // 「在线但没连它」用淡一档的绿：既说清"电脑开着"，又不冒充"已连接"
+                            bg = Color(
+                                when {
+                                    online -> Ui.BADGE_OK_BG
+                                    reachableOnly -> Ui.alpha(Ui.BADGE_OK_BG, 0.55f)
+                                    else -> 0x1C000000
+                                }
+                            ),
+                            fg = Color(if (online || reachableOnly) Ui.BADGE_OK_FG else Ui.INK),
+                            dot = Color(if (online || reachableOnly) Ui.BADGE_OK_FG else Ui.INK),
                         )
                         if (isActive) Badge(text = "当前", bg = Color(0x3D5444C8), fg = ink)
                     }
@@ -259,7 +283,17 @@ internal fun DeviceCard(
             val addrLine = when {
                 route == null || route.url.isNullOrEmpty() ->
                     "还没有可用地址 · 重新扫码或手动添加"
-                else -> (if (online) "已连接 · " else "离线 · ") + route.line + " · " + route.source
+                // [2026-10-20] 前缀必须和徽标同义：没连它 ≠ 它离线
+                else -> (
+                    when {
+                        online && isActive -> "已连接 · "
+                        // [P1] 后台也连着：说清楚它在线、只是界面没停在它这儿
+                        online -> "已连接（后台）· "
+                        reachableOnly -> "可连接 · "
+                        isActive || reachable == false -> "离线 · "
+                        else -> "未连接 · "
+                    }
+                    ) + route.line + " · " + route.source
             }
             GlassSurface(
                 backdrop = backdrop,

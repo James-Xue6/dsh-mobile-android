@@ -578,6 +578,8 @@ public final class GlassChatView implements GlassChatHost {
     @Override public void togglePlan() { host.onOpenPlan(); }
     @Override public void approve(ChatItem item, String outcome) { host.onApprove(item, outcome); }
     @Override public void questionSubmit(ChatItem item, JSONArray answers) { host.onQuestionSubmit(item, answers); }
+    // [2026-10-20] 提问卡「跳过」：转发到真实 question-cancel 流程
+    @Override public void questionCancel(ChatItem item) { host.onQuestionCancel(item); }
     @Override public void downloadFile(ChatItem item, String path) { host.onDownloadFile(item, path); }
     // [V3.76] 交付物：点击 = 先打开预览（宿主落私有缓存 + 打开 `ArtifactActivity`，页内有「保存」）
     @Override public void previewFile(ChatItem item, String path) { host.onPreviewFile(item, path); }

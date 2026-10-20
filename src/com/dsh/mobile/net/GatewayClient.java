@@ -228,6 +228,34 @@ public final class GatewayClient {
     public static volatile java.util.function.Consumer<org.json.JSONObject> bgInteractionHook;
 
     /**
+     * [P1 · 多设备] 这条连接**属于哪台设备**（Store.Device.id）。
+     *
+     * <p>多设备并存后，后台那几条连接的提问/审批也要弹通知，而通知必须知道
+     * "是哪台电脑的" —— 点通知得切到对应设备再打开会话，否则会去错的设备上找会话。
+     * 这个标记由 MainActivity / KeepAliveService 在建连时写入，dispatch 时附进帧里。
+     */
+    public volatile String deviceTag = "";
+
+    /**
+     * [P1 · 多设备] **本条连接自己的**后台交互钩子（优先级高于静态
+     * {@link #bgInteractionHook}）。这样每台设备的通知都能带上自己的 deviceTag。
+     */
+    public volatile java.util.function.Consumer<org.json.JSONObject> bgHook;
+
+    /** 没有监听者时，把提问/审批交给"这条连接自己的"钩子（没有就退回进程级钩子）。 */
+    private void deliverInteraction(org.json.JSONObject f) {
+        java.util.function.Consumer<org.json.JSONObject> hook = this.bgHook != null ? this.bgHook : bgInteractionHook;
+        if (hook == null) return;
+        try {
+            String tag = deviceTag;
+            if (tag != null && !tag.isEmpty() && f.optString("dshDeviceId", "").isEmpty()) {
+                f.put("dshDeviceId", tag);      // 让通知知道是哪台电脑
+            }
+        } catch (Throwable ignored) { }
+        try { hook.accept(f); } catch (Throwable ignored) { }
+    }
+
+    /**
      * [P1 修复] 应用级 Context：**只**用于"没有监听者时"把连接状态转给
      * {@link com.dsh.mobile.notify.Notifier#onGatewayState}（常驻通知的文案与前台服务开关）。
      *
@@ -985,9 +1013,24 @@ public final class GatewayClient {
         }
     };
 
+    /**
+     * [P1 · 多设备] 后台连接的**状态回调**（`(deviceTag, state)`）。
+     *
+     * <p>为什么需要：后台那些连接故意不挂 UI 监听者（帧不能进界面），但它们的
+     * 上线/掉线必须让设备页重画 —— 否则用户会看到"明明连上了却一直显示离线/可连接"。
+     * 只传状态、不传业务帧，开销可忽略。MainActivity 收到后只做一次 refreshDevices()。
+     */
+    public static volatile java.util.function.BiConsumer<String, State> bgStateHook;
+
     private void setState(State s, String detail) {
         state = s;
         final Listener l = listener;
+        final java.util.function.BiConsumer<String, State> hook = bgStateHook;
+        if (hook != null) {
+            final String tag = deviceTag;
+            try { main.post(() -> { try { hook.accept(tag, s); } catch (Throwable ignored) { } }); }
+            catch (Throwable ignored) { }
+        }
         if (l == null) {
             // [P1 修复] 没有监听者（只有后台服务 / M1-only 路径）时，也必须把状态送给
             // Notifier，否则常驻通知的文案永远停在"已连接"、前台服务该起也起不来。
@@ -1598,10 +1641,17 @@ public final class GatewayClient {
             checkHello(f);   // 协议版本 / 能力校验：先算清楚再决定 READY 挂什么文案（评审 P1-16）
         }
         // [M1] Activity 已销毁（进程由 KeepAliveService 保活）时，帧不再被静默丢弃：
-        // 提问/审批交给进程级通知钩子，保证"后台/划掉界面"也能弹提醒。
+        // 提问/审批交给**这条连接自己的**通知钩子（多设备时各带各的 deviceTag）。
         if (l == null) {
-            if (bgInteractionHook != null && ("question-requested".equals(kind) || "approval-requested".equals(kind))) {
-                try { bgInteractionHook.accept(f); } catch (Throwable ignored) { }
+            // [P1 · 多设备 · 2026-10-20 真机取证] 后台连接的**状态机必须照常推进**。
+            // 旧写法在这里直接 return ⇒ `hello` 永远走不到下面的 setState(READY)
+            // ⇒ 状态卡在 AUTHENTICATING（现场：DESKTOP-9N62QTS state=AUTHENTICATING、lastAgo=4ms，
+            // 连接其实是好的），卡片于是永远显示「未连接」。
+            if ("hello".equals(kind)) {
+                setState(State.READY, helloWarning.isEmpty() ? "已连接" : helloWarning);
+            }
+            if ("question-requested".equals(kind) || "approval-requested".equals(kind)) {
+                deliverInteraction(f);
             }
             return;
         }
@@ -1953,10 +2003,17 @@ public final class GatewayClient {
         if (kind.isEmpty()) return;
         Listener l = listener;
         // [M1] Activity 已销毁（进程由 KeepAliveService 保活）时，帧不再被静默丢弃：
-        // 提问/审批交给进程级通知钩子，保证"后台/划掉界面"也能弹提醒。
+        // 提问/审批交给**这条连接自己的**通知钩子（多设备时各带各的 deviceTag）。
         if (l == null) {
-            if (bgInteractionHook != null && ("question-requested".equals(kind) || "approval-requested".equals(kind))) {
-                try { bgInteractionHook.accept(f); } catch (Throwable ignored) { }
+            // [P1 · 多设备 · 2026-10-20 真机取证] 后台连接的**状态机必须照常推进**。
+            // 旧写法在这里直接 return ⇒ `hello` 永远走不到下面的 setState(READY)
+            // ⇒ 状态卡在 AUTHENTICATING（现场：DESKTOP-9N62QTS state=AUTHENTICATING、lastAgo=4ms，
+            // 连接其实是好的），卡片于是永远显示「未连接」。
+            if ("hello".equals(kind)) {
+                setState(State.READY, helloWarning.isEmpty() ? "已连接" : helloWarning);
+            }
+            if ("question-requested".equals(kind) || "approval-requested".equals(kind)) {
+                deliverInteraction(f);
             }
             return;
         }

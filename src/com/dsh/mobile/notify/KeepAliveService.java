@@ -123,7 +123,8 @@ public final class KeepAliveService extends Service {
      * <p>刻意做成 **static + application context**：监听者被装进进程级 GatewayClient，
      * 一旦捕获 Service 实例就会把它钉在进程里（Service 明明已经销毁）。
      */
-    private static GatewayClient.Listener BG_LISTENER;
+    /** [P1 · 多设备] 每台设备一个后台监听者（各自闭包记住自己的 deviceId）。 */
+    private static final java.util.Map<String, GatewayClient.Listener> BG_LISTENERS = new java.util.HashMap<>();
 
     /**
      * 后台监听者：只做两件事 ——
@@ -136,15 +137,17 @@ public final class KeepAliveService extends Service {
      * </ol>
      * 其余帧（会话列表 / 历史 / 流式）一律丢弃：没有界面，没人消费它们。
      */
-    private static GatewayClient.Listener bgListener(final Context appCtx) {
-        if (BG_LISTENER != null) return BG_LISTENER;
-        BG_LISTENER = new GatewayClient.Listener() {
+    private static GatewayClient.Listener bgListener(final Context appCtx, final String deviceId) {
+        String key = deviceId == null ? "" : deviceId;
+        GatewayClient.Listener cached = BG_LISTENERS.get(key);
+        if (cached != null) return cached;
+        GatewayClient.Listener l = new GatewayClient.Listener() {
             @Override public void onState(GatewayClient.State state, String detail) {
                 // connected 标志 + 常驻通知文案都跟着走（sync 内部是幂等的）
                 Notifier.onGatewayState(appCtx, state == GatewayClient.State.READY);
             }
-            @Override public void onApprovalRequested(JSONObject frame) { pending(appCtx, frame, false); }
-            @Override public void onQuestionRequested(JSONObject frame) { pending(appCtx, frame, true); }
+            @Override public void onApprovalRequested(JSONObject frame) { pending(appCtx, frame, false, deviceId); }
+            @Override public void onQuestionRequested(JSONObject frame) { pending(appCtx, frame, true, deviceId); }
 
             // ---- 以下都与"没有界面"无关：安静丢弃
             @Override public void onHello(JSONObject hello) { }
@@ -161,11 +164,12 @@ public final class KeepAliveService extends Service {
             @Override public void onAttachment(String sessionId, String attachmentId, String mediaType, String base64) { }
             @Override public void onDownload(String kind, JSONObject frame) { }
         };
-        return BG_LISTENER;
+        BG_LISTENERS.put(key, l);
+        return l;
     }
 
     /** 后台收到提问/审批 → 弹「需要处理」通知。key 的算法与界面侧完全一致，点进去才滚得到那张卡。 */
-    private static void pending(Context appCtx, JSONObject frame, boolean question) {
+    private static void pending(Context appCtx, JSONObject frame, boolean question, String deviceId) {
         try {
             if (frame == null) return;
             String sid = frame.optString("sessionId", "");
@@ -174,7 +178,7 @@ public final class KeepAliveService extends Service {
             //（旧写法 approvalId="" 时会算出与界面不同的 key）。
             String key = question ? Notifier.questionKey(frame) : Notifier.approvalKey(frame);
             // 会话名取不到（没有界面就没有会话列表）：交给 Notifier 用中性文案，正文绝不猜。
-            Notifier.pending(appCtx, new Store(appCtx), sid, key, "", question);
+            Notifier.pending(appCtx, new Store(appCtx), sid, key, "", question, deviceId);
         } catch (Throwable ignored) { }
     }
 
@@ -197,9 +201,23 @@ public final class KeepAliveService extends Service {
             // 连接状态转给 Notifier（常驻通知文案 / 前台服务开关）。
             GatewayClient.setAppContext(getApplicationContext());
             if (MainActivity.hasLiveActivity()) return;
-            GatewayClient g = MainActivity.sharedGateway(bgListener(getApplicationContext()), false);
-            if (g.wantConnected()) return;
-            MainActivity.connectFromStore(getApplicationContext(), g);
+            // [P1 · 多设备] 后台保活要照顾**每一台**已配对设备：
+            // 每台各一条连接（listener=null ⇒ 帧只走通知钩子），不是只连当前选中那台。
+            com.dsh.mobile.Store s = new com.dsh.mobile.Store(getApplicationContext());
+            java.util.List<com.dsh.mobile.Store.Device> devices = s.devices();
+            for (com.dsh.mobile.Store.Device d : devices) {
+                if (d == null || !d.pairedReady()) continue;
+                GatewayClient g = MainActivity.clientFor(d.id, bgListener(getApplicationContext(), d.id), false);
+                g.deviceTag = d.id;      // [P1] 多设备：每条连接记住自己属于哪台电脑
+                if (g.wantConnected()) continue;          // 正在连/已连/退避中：不打断
+                com.dsh.mobile.net.RoutePolicy.Pick p = com.dsh.mobile.Store.pickOf(d, false);
+                String url = p == null || p.url == null ? "" : p.url;
+                if (url.isEmpty()) continue;
+                if (GatewayClient.cleartextProblem(url) != null) continue;
+                g.setTrustAllCerts(s.insecureTls());
+                g.connect(url, d.token, s.deviceId(), s.deviceName());
+            }
+            // 一台都没配上时保持旧行为（安静放弃）
         } catch (Throwable ignored) { }
     }
 

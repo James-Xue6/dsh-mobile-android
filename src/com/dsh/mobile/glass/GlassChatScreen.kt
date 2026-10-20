@@ -213,6 +213,8 @@ interface GlassChatHost {
     /** 审批：outcome 与正式版一致（"allowOnce" / "deny"）。 */
     fun approve(item: ChatItem, outcome: String)
     fun questionSubmit(item: ChatItem, answers: org.json.JSONArray)
+    /** [2026-10-20] 提问卡「跳过」：走真实 question-cancel 帧。 */
+    fun questionCancel(item: ChatItem) { }
     fun downloadFile(item: ChatItem, path: String)
     /**
      * [V3.76 · 用户「交付物能不能**不是点击下载**？能不能**先以打开为主**，打开后增加一个**保存**的按钮」]
@@ -465,38 +467,41 @@ fun GlassChatScreen(
                                     fontSize = Ui.S_CAP1.sp)
                             }
                             if (planOpen && state.planTodos.isNotEmpty()) {
-                                Spacer(Modifier.height(8.dp))
+                                Spacer(Modifier.height(3.dp))
                                 state.planTodos.forEachIndexed { i, pair ->
                                     val (text, status) = pair
-                                    Box(
+                                    // 宿主传英文状态：completed / in_progress / pending（旧代码只认中文 ⇒ 永远判不中）
+                                    val done = status == "completed" || status.contains("完成")
+                                    val doing = status == "in_progress" || status.contains("进行")
+                                            || status.contains("运行")
+                                    Row(
                                         Modifier.fillMaxWidth()
-                                            .padding(top = if (i == 0) 0.dp else 5.dp)
-                                            .glassButtonShadow(RoundedCornerShape(999.dp))
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(Brush.linearGradient(listOf(
-                                                Color.White.copy(alpha = 0.34f),
-                                                Color.White.copy(alpha = 0.12f))))
-                                            .border(0.5.dp, Color.White.copy(alpha = 0.35f),
-                                                RoundedCornerShape(999.dp)),
+                                            .padding(horizontal = 2.dp, vertical = 1.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        Row(
-                                            Modifier.fillMaxWidth()
-                                                .padding(horizontal = 12.dp, vertical = 7.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Box(
-                                                Modifier.size(7.dp).clip(RoundedCornerShape(999.dp))
-                                                    .background(
-                                                        if (status.contains("完成")) Color(Ui.BADGE_OK_FG)
-                                                        else Color(Ui.BRAND_FILL)),
-                                            )
-                                            Spacer(Modifier.width(9.dp))
-                                            Text(text, color = ink, fontSize = Ui.S_FOOT.sp,
-                                                modifier = Modifier.weight(1f))
-                                            if (status.isNotEmpty()) {
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(status, color = inkFaint, fontSize = Ui.S_CAP1.sp)
-                                            }
+                                        Text(
+                                            when { done -> "✓"; doing -> "◐"; else -> "○" },
+                                            color = when {
+                                                done -> Color(Ui.BADGE_OK_FG)
+                                                doing -> Color(Ui.BRAND_FILL)
+                                                else -> inkFaint
+                                            },
+                                            fontSize = Ui.S_CAP1.sp, fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.width(18.dp),
+                                        )
+                                        Text(
+                                            text,
+                                            color = if (done) inkFaint else ink,
+                                            fontSize = Ui.S_FOOT.sp,
+                                            fontWeight = if (doing) FontWeight.Bold else FontWeight.Normal,
+                                            textDecoration = if (done)
+                                                androidx.compose.ui.text.style.TextDecoration.LineThrough
+                                            else null,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        if (doing) {
+                                            Text("进行中", color = Color(Ui.BRAND_FILL),
+                                                fontSize = Ui.S_CAP1.sp)
                                         }
                                     }
                                 }
@@ -752,11 +757,31 @@ fun GlassChatScreen(
         // ② 悬浮玻璃层（层外）：输入三件 + 入口胶囊 + 顶部三件
         Box(Modifier.fillMaxSize()) {
             if (state.readOnly) {
-                Text(
-                    state.readOnlyReason.ifBlank { "只读会话" },
-                    color = Color.White, fontSize = Ui.S_CAP1.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 120.dp),
-                )
+                // [2026-10-20 · 用户口径] 子智能体页 = 主智能体界面；输入栏当**显示栏**：
+                // 复用同一个 ChatInputRow（同一玻璃胶囊/尺寸），只禁用编辑并把提示当 hint；
+                // 左右两粒圆钮（＋ / ↑）在只读时不渲染。
+                Column(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = bottomInsetDp + 10.dp),
+                ) {
+                    // [2026-10-23 · 用户「把点击子智能体那个按钮加回来，方便切回主智能体或其他子智能体」]
+                    if (state.subagentCount > 0) {
+                        SubagentChip(backdrop, Color(Ui.BRAND_FILL), state.subagentCount) {
+                            host.openSubagents()
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    ChatInputRow(
+                        backdrop = backdrop,
+                        state = state,
+                        host = host,
+                        ink = ink,
+                        inkFaint = inkFaint,
+                        readOnlyHint = state.readOnlyReason.ifBlank {
+                            "只读会话：内容由主智能体驱动，这里只用来查看"
+                        },
+                    )
+                }
             } else {
                 Column(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -1325,9 +1350,9 @@ private fun ApprovalCard(item: ChatItem, ink: Color, sub: Color) {
 @Composable
 private fun QuestionCard(item: ChatItem, ink: Color, sub: Color) {
     val qs = item.questions
-    // 选择状态存在 ChatItem.picked 里（原地改），所以用一个本地版本号把它"推"成可观察的
     var rev by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0) }
     @Suppress("UNUSED_EXPRESSION") rev
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     MsgCard(28.dp, Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(Modifier.padding(14.dp)) {
             Text(item.text.ifBlank { "需要你回答" }, color = ink, fontSize = Ui.S_FOOT.sp,
@@ -1336,6 +1361,7 @@ private fun QuestionCard(item: ChatItem, ink: Color, sub: Color) {
                 for (i in 0 until qs.length()) {
                     val q = qs.optJSONObject(i) ?: continue
                     val qid = q.optString("id", "q$i")
+                    val multi = q.optBoolean("multiSelect", false)
                     val header = q.optString("header", "")
                     if (header.isNotEmpty()) {
                         Text(header, color = Color(Ui.INK_FAINT), fontSize = Ui.S_CAP1.sp,
@@ -1356,16 +1382,14 @@ private fun QuestionCard(item: ChatItem, ink: Color, sub: Color) {
                             val selected = item.picked[qid]?.contains(label) == true
                             Box(
                                 Modifier.fillMaxWidth().padding(top = 8.dp)
-                                    // [V3.33 · 待办 E] `glassTap` 必须在 `clip/background` 之前（外侧先画，
-                                    //   否则按下只缩内容层、底色不动 ⇒ 双影）
                                     .glassTap(corner = 12.dp) {
                                         val set = item.picked.getOrPut(qid) { LinkedHashSet() }
-                                        if (q.optBoolean("multiSelect", false)) {
+                                        if (multi) {
                                             if (!set.add(label)) set.remove(label)
                                         } else {
                                             set.clear(); set.add(label)
+                                            item.typed[qid] = ""
                                         }
-                                        item.typed[qid] = label
                                         rev++
                                     }
                                     .clip(RoundedCornerShape(12.dp))
@@ -1379,6 +1403,82 @@ private fun QuestionCard(item: ChatItem, ink: Color, sub: Color) {
                                 }
                             }
                         }
+                    }
+                    if (!item.resolved && !item.pendingConfirm) {
+                        var draft by androidx.compose.runtime.remember(qid) {
+                            androidx.compose.runtime.mutableStateOf(item.typed[qid] ?: "")
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = draft,
+                            onValueChange = { v ->
+                                draft = v
+                                item.typed[qid] = v
+                                if (!multi && v.isNotBlank()) { item.picked[qid]?.clear(); rev++ }
+                            },
+                            textStyle = androidx.compose.ui.text.TextStyle(color = ink, fontSize = Ui.S_FOOT.sp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(Ui.FIELD_BG))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            decorationBox = { inner ->
+                                Box {
+                                    if (draft.isEmpty()) {
+                                        Text(if (multi) "也可补充输入…" else "或直接输入回答…",
+                                            color = Color(Ui.INK_FAINT), fontSize = Ui.S_FOOT.sp)
+                                    }
+                                    inner()
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+            when {
+                item.resolved -> Text(
+                    if ("answered" == item.resolvedOutcome) "✓ 已回答" else "已取消 / 已由其他端处理",
+                    color = sub, fontSize = Ui.S_FOOT.sp, modifier = Modifier.padding(top = 10.dp))
+                item.pendingConfirm -> Text(
+                    "已发送，等待电脑确认…", color = sub, fontSize = Ui.S_FOOT.sp,
+                    modifier = Modifier.padding(top = 10.dp))
+                else -> Row(Modifier.fillMaxWidth().padding(top = 11.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        SmallPill("提交", ink) {
+                            val answers = org.json.JSONArray()
+                            var ok = true
+                            val n = qs?.length() ?: 0
+                            for (k in 0 until n) {
+                                val q = qs?.optJSONObject(k) ?: continue
+                                val qid = q.optString("id", "q$k")
+                                val sel = item.picked[qid]
+                                val custom = (item.typed[qid] ?: "").trim()
+                                if ((sel == null || sel.isEmpty()) && custom.isEmpty()) {
+                                    ok = false
+                                    android.widget.Toast.makeText(ctx, "请先回答第 ${k + 1} 个问题",
+                                        android.widget.Toast.LENGTH_SHORT).show()
+                                    break
+                                }
+                                val a = org.json.JSONObject()
+                                val arr = org.json.JSONArray()
+                                val multiSel = q.optBoolean("multiSelect", false)
+                                try {
+                                    a.put("id", qid)
+                                    if (!multiSel && custom.isNotEmpty()) {
+                                        a.put("selected", arr)
+                                        a.put("custom", custom)
+                                    } else {
+                                        sel?.forEach { arr.put(it) }
+                                        a.put("selected", arr)
+                                        if (custom.isNotEmpty()) a.put("custom", custom)
+                                    }
+                                } catch (ignored: Throwable) { }
+                                answers.put(a)
+                            }
+                            if (ok) HostHolder.host?.questionSubmit(item, answers)
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.weight(1f)) {
+                        SmallPill("跳过", sub) { HostHolder.host?.questionCancel(item) }
                     }
                 }
             }
@@ -1480,16 +1580,24 @@ private fun ChatInputRow(
     host: GlassChatHost,
     ink: Color,
     inkFaint: Color,
+    /** [2026-10-20 · 用户「输入框直接当显示栏提示、不能输入」] 非空 = 只读展示（复用同一个输入栏）。 */
+    readOnlyHint: String = "",
 ) {
+    val ro = readOnlyHint.isNotEmpty()
     Row(verticalAlignment = Alignment.CenterVertically) {
         // [V3.19 用户报"左下角加号键玻璃质感消失"] 去掉平色底，直接用玻璃本体
-        GlassRoundButton(backdrop, 38.dp, R.drawable.ic_plus, Color(Ui.INK_SUB), Color.Transparent) {
-            host.attachPick()
+        if (!ro) {
+            GlassRoundButton(backdrop, 38.dp, R.drawable.ic_plus, Color(Ui.INK_SUB), Color.Transparent) {
+                host.attachPick()
+            }
+            Spacer(Modifier.width(8.dp))
         }
-        Spacer(Modifier.width(8.dp))
         RefractionWindow(
             backdrop = backdrop, radius = 22.dp,
-            modifier = Modifier.weight(1f).height(46.dp),
+            // [2026-10-23] ⚠️ 上一版把只读高度改成"自适应"（heightIn）后，外层 Column 被撑高、
+            //   输入栏**跑到屏幕中间**去了（真机截图 44-chat.png）。这里改回**固定高度**：
+            //   三行提示 + 上下各 9dp ≈ 68dp，比之前 96dp 紧，也不会再错位。
+            modifier = Modifier.weight(1f).height(if (ro) 68.dp else 46.dp),
         ) {
             // [V3.139 · 用户定调：「**在这个输入框换成平台的，但是效果不能变**」]
             //   ⇒ 用平台的 `EditText`（长按/粘贴/全选/选择手柄走**系统官方**那套 ✓），
@@ -1500,12 +1608,29 @@ private fun ChatInputRow(
             //       ④ 无背景（去掉 EditText 自带下划线）✓、内边距 0（外层的 16dp 仍在）✓
             //       ⑤ 光标颜色 = 项目品牌色（API 29+ 支持 `textCursorDrawable`；低版本保持系统默认）✓
             //       ⑥ 单行 + 文本键盘（与 `singleLine = true` 行为一致）✓
+            // [2026-10-23 · 用户「那么大的胶囊只显示一行字？」] 只读时**不用 EditText**：
+            //   EditText 无论怎么设 maxLines/ellipsize，实测仍会退化成一行（它内部还有单行/滚动标志）。
+            //   只读场景本来就不需要光标与输入法 ⇒ 直接用 Compose `Text`，行数由容器决定 ⇒ 一定显示全。
+            if (ro) {
+                androidx.compose.foundation.layout.Box(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(
+                        readOnlyHint,
+                        color = ink,
+                        fontSize = Ui.S_FOOT.sp,
+                        lineHeight = (Ui.S_FOOT + 4).sp,
+                    )
+                }
+            } else {
             androidx.compose.ui.viewinterop.AndroidView(
                 factory = { ctx ->
                     val dens = ctx.resources.displayMetrics.density
                     android.widget.EditText(ctx).apply {
                         background = null
-                        setSingleLine(true)
+                        setSingleLine(!ro)
+                        if (ro) { maxLines = 3; isEnabled = false }
                         gravity = android.view.Gravity.CENTER_VERTICAL
                         setPadding(0, 0, 0, 0)
                         textSize = Ui.S_BODY
@@ -1515,7 +1640,20 @@ private fun ChatInputRow(
                         setHintTextColor(android.graphics.Color.argb(
                             (inkFaint.alpha * 255f).toInt(), (inkFaint.red * 255f).toInt(),
                             (inkFaint.green * 255f).toInt(), (inkFaint.blue * 255f).toInt()))
-                        hint = "给 Agent 派个任务…"
+                        if (ro) {
+                            // [2026-10-23 · 用户「胶囊变大了但文字还是不全」]
+                            // 根因：只读提示塞在 `hint` 里 —— EditText 对 hint 默认带 ellipsize，
+                            // 再长也就一行省略号；高度再大也不会多显示。
+                            // ⇒ 改成**正文**（setText + ellipsize=null + 多行），文字才完整。
+                            ellipsize = null
+                            setSingleLine(false)
+                            maxLines = 3
+                            setText(readOnlyHint)
+                            hint = null
+                            gravity = android.view.Gravity.CENTER_VERTICAL
+                        } else {
+                            hint = "给 Agent 派个任务…"
+                        }
                         inputType = android.text.InputType.TYPE_CLASS_TEXT
                         // [V3.140 · 用户「**还是没有复制粘贴全选呢**」+ 早先那句「长按**只有自动填充**」]
                         //   ⚠️ 病根：系统 **Autofill（自动填充）把长按抢走了** ⇒ `EditText` 自己的
@@ -1536,6 +1674,7 @@ private fun ChatInputRow(
                             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
                             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
                             override fun afterTextChanged(s: android.text.Editable?) {
+                                if (ro) return   // 只读展示：提示文字不进草稿
                                 val t = s?.toString() ?: ""
                                 if (t != state.draft) { state.draft = t; host.draftChanged(t) }
                             }
@@ -1545,25 +1684,29 @@ private fun ChatInputRow(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 update = { et ->
                     // 外部改草稿（粘贴 / 语音 / `setDraft`）时回灌，并把光标放到末尾
-                    if (et.text.toString() != state.draft) {
+                    if (!ro && et.text.toString() != state.draft) {   // 只读时不回灌，否则提示被清空
                         et.setText(state.draft)
                         et.setSelection(et.text.length)
                     }
                 },
             )
+            }
         }
-        Spacer(Modifier.width(8.dp))
-        GlassRoundButton(
-            backdrop, 38.dp,
-            if (state.running && state.draft.isBlank()) R.drawable.ic_stop else R.drawable.ic_arrow_up,
-            Color.White, Color(Ui.BRAND_FILL).copy(alpha = 224f / 255f),
-        ) {
-            if (state.running && state.draft.isBlank()) {
-                host.stopTurn()
-            } else if (state.draft.isNotBlank()) {
-                val t = state.draft
-                state.draft = ""
-                host.send(t)
+        // [2026-10-20 · 用户「左右的加号和发送也去掉」] 只读展示时发送/停止钮不渲染
+        if (!ro) {
+            Spacer(Modifier.width(8.dp))
+            GlassRoundButton(
+                backdrop, 38.dp,
+                if (state.running && state.draft.isBlank()) R.drawable.ic_stop else R.drawable.ic_arrow_up,
+                Color.White, Color(Ui.BRAND_FILL).copy(alpha = 224f / 255f),
+            ) {
+                if (state.running && state.draft.isBlank()) {
+                    host.stopTurn()
+                } else if (state.draft.isNotBlank()) {
+                    val t = state.draft
+                    state.draft = ""
+                    host.send(t)
+                }
             }
         }
     }

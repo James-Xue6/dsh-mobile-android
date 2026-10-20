@@ -74,6 +74,8 @@ public final class Notifier {
      */
     public static final String EXTRA_SESSION = "dsh_notify_session";
     public static final String EXTRA_KEY = "dsh_notify_item_key";
+    /** [P1 · 多设备] 这条通知属于哪台电脑（Store.Device.id）；点它要先切到那台再开会话。 */
+    public static final String EXTRA_DEVICE = "dsh_notify_device";
 
     // ---------------------------------------------------------------- 状态（进程级、不落盘）
     private static boolean channelsReady = false;
@@ -196,7 +198,7 @@ public final class Notifier {
      * @param sessionName 通知里显示的会话名（null/空 用中性文案）
      */
     public static void pending(Context ctx, Store store, String sessionId,
-                               String itemKey, String sessionName, boolean question) {
+                               String itemKey, String sessionName, boolean question, String deviceId) {
         if (!canPost(ctx, store, sessionId, true)) return;
         init(ctx);
         int id = idOf(ID_PENDING_BASE, sessionId);
@@ -207,7 +209,7 @@ public final class Notifier {
         String alertKey = sessionId + "|" + itemKey;
         boolean alreadyAlerted = !alertedPending.add(alertKey);
         post(ctx, id, CH_PENDING, title, text, PUBLIC_LINE,
-                tap(ctx, sessionId, itemKey, id), false, true, alreadyAlerted);
+                tap(ctx, sessionId, itemKey, id, deviceId), false, true, alreadyAlerted);
     }
 
     /**
@@ -215,14 +217,14 @@ public final class Notifier {
      *
      * @param sessionId 哪条会话跑完了
      */
-    public static void done(Context ctx, Store store, String sessionId, String sessionName) {
+    public static void done(Context ctx, Store store, String sessionId, String sessionName, String deviceId) {
         if (!canPost(ctx, store, sessionId, false)) return;
         init(ctx);
         int id = idOf(ID_DONE_BASE, sessionId);
         String text = textOf(store, sessionName, "点开查看结果");
         // 完成通知不设 onlyAlertOnce：同一个会话再跑完一次是**新的一次完成**，该响就响
         post(ctx, id, CH_DONE, "任务完成", text, PUBLIC_LINE,
-                tap(ctx, sessionId, "", id), false, true, false);
+                tap(ctx, sessionId, "", id, deviceId), false, true, false);
     }
 
     /**
@@ -231,7 +233,7 @@ public final class Notifier {
      * 只有 App **不在前台**时才发（否则用户正刷着手机，通知栏一直挂一条没意义的状态）。
      * 同一会话反复发只是更新同一条（id 固定），不会刷屏。
      */
-    public static void running(Context ctx, Store store, String sessionId, String sessionName) {
+    public static void running(Context ctx, Store store, String sessionId, String sessionName, String deviceId) {
         if (foreground) return;                      // 人在 App 里：不打扰
         if (!canPost(ctx, store, sessionId, false)) return;
         init(ctx);
@@ -239,7 +241,7 @@ public final class Notifier {
         String text = textOf(store, sessionName, "正在执行");
         runningPosted.add(sessionId);
         post(ctx, id, CH_RUNNING, "正在执行", text, null,
-                tap(ctx, sessionId, "", id), true, false, true);
+                tap(ctx, sessionId, "", id, deviceId), true, false, true);
     }
 
     /** 撤掉某条会话的「进行中」通知（回合结束 / 回前台 / 断线时）。 */
@@ -273,7 +275,7 @@ public final class Notifier {
         int id = ID_PENDING_BASE + 999;
         post(ctx, id, CH_PENDING, "测试通知",
                 "能看到这条、点一下能进 App，就说明通知是通的",
-                null, tap(ctx, "", "", id), false, true, false);
+                null, tap(ctx, "", "", id, ""), false, true, false);
     }
 
     /** 常驻通知（前台服务用，见 KeepAliveService）：低优先级、不可划掉。 */
@@ -287,7 +289,7 @@ public final class Notifier {
                 .setSmallIcon(R.drawable.ic_notify_dsh)
                 .setContentTitle("DSH 掌上通")
                 .setContentText(text)
-                .setContentIntent(tap(ctx, viewedSession, "", ID_SERVICE))
+                .setContentIntent(tap(ctx, viewedSession, "", ID_SERVICE, ""))
                 .setOngoing(true)
                 .setShowWhen(false)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -407,7 +409,7 @@ public final class Notifier {
      * 结构，**不看 extra**；不同通知共用 0 号 requestCode 会让后一条静默复用前一条的
      * extra（点进去跑到别的会话），所以必须按通知 id 分开。
      */
-    private static PendingIntent tap(Context ctx, String sessionId, String itemKey, int id) {
+    private static PendingIntent tap(Context ctx, String sessionId, String itemKey, int id, String deviceId) {
         Intent i = new Intent(ctx, com.dsh.mobile.MainActivity.class);
         i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (sessionId != null && !sessionId.isEmpty()) i.putExtra(EXTRA_SESSION, sessionId);

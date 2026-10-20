@@ -1,11 +1,11 @@
 {
-  "versionCode": 30,
-  "versionName": "0.87.3",
-  "notes": "0.87.3：① 修复升级后每次启动还提示安装旧包（现在按安装包里的真实 versionCode 与当前版本对比）② 只提示最新的那一个安装包 ③ 安装包装完或已过期会自动删掉，不再反复打扰、不占空间",
-  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.3/dist/dsh-mobile.apk",
-  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.3/dist/dsh-mobile.apk",
-  "sha256": "aa1f44a3369c1a60f28ca1ef5ef9f379f36a81a5f399cfddb79358ad343d4af9",
-  "size": 9628786,
+  "versionCode": 32,
+  "versionName": "0.87.5",
+  "notes": "0.87.5：多设备改造（每台电脑独立配置与连接、会话与通知按设备隔离、两台可同时在线）；提问卡可选项可手打可提交可跳过；规划卡紧凑三态（完成/进行中/待办）；子智能体页改为只读显示栏并可一键切回主子智能体；修复正文行内代码看不清。",
+  "url": "https://gitee.com/yuan-junqian/dsh-mobile-android/raw/v0.87.5/dist/dsh-mobile.apk",
+  "mirror": "https://cdn.jsdelivr.net/gh/James-Xue6/dsh-mobile-android@v0.87.5/dist/dsh-mobile.apk",
+  "sha256": "01d9f40661a34a9bfedac8cfc037d5af844fedee6693ceaa9907880b71a487d3",
+  "size": 9645170,
   "feedback": {
     "issues": "https://github.com/James-Xue6/dsh-mobile-android/issues/new",
     "labels": "feedback",

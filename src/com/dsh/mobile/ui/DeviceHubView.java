@@ -394,13 +394,23 @@ public final class DeviceHubView extends LinearLayout {
      * @param online   当前生效的那台**是否真的在线**（WebSocket READY）
      */
     public void setDevices(List<Store.Device> list, String activeId, boolean online) {
+        setDevices(list, activeId, online, null);
+    }
+
+    /**
+     * @param reachable [2026-10-20] 非当前设备的可达性（deviceId -&gt; 电脑开着没有）；
+     *                  null / 缺项 = 还没探到。用来区分"没连它"和"它真离线"。
+     */
+    public void setDevices(List<Store.Device> list, String activeId, boolean online,
+                           java.util.Map<String, Boolean> reachable) {
         cards.removeAllViews();
         boolean has = list != null && !list.isEmpty();
         emptyView.setVisibility(has ? GONE : VISIBLE);
         if (has) {
             for (Store.Device d : list) {
                 boolean isActive = d.id != null && d.id.equals(activeId);
-                cards.addView(deviceCard(d, isActive, isActive && online));
+                Boolean reach = isActive ? null : (reachable == null ? null : reachable.get(d.id));
+                cards.addView(deviceCard(d, isActive, isActive && online, reach));
             }
         }
     }
@@ -677,6 +687,17 @@ public final class DeviceHubView extends LinearLayout {
     }
 
     private View deviceCard(final Store.Device d, boolean isActive, boolean online) {
+        return deviceCard(d, isActive, online, null);
+    }
+
+    /**
+     * @param reachable [2026-10-20] 非当前设备的可达性：true=电脑开着（只是没连它）、
+     *                  false=真连不上、null=不知道。用来把"没连它"和"它离线"分开说。
+     */
+    private View deviceCard(final Store.Device d, boolean isActive, boolean online, Boolean reachable) {
+        // [2026-10-20] 三态：已连接 / 电脑开着但当前没连它 / 真连不上（或未知）
+        final boolean reachableOnly = !online && !isActive && Boolean.TRUE.equals(reachable);
+        final boolean knownDown = Boolean.FALSE.equals(reachable);
         // [毛玻璃 v3 · 同步 demo ②] 设备卡从「饱和渐变卡」改为**玻璃卡**（demo `.glass.dev-card`）：
         // 卡体是半透明玻璃、浮在彩色环境背景上，棱光/斜射高光/内发光由 Ui.CardBg 叠。
         // 语义不再靠"卡面染色"，改回 App 既有的语义色（绿点=在线 / 灰点=离线 / 品牌淡底=当前），
@@ -714,7 +735,7 @@ public final class DeviceHubView extends LinearLayout {
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         nameRow.addView(name);
-        nameRow.addView(onlineBadge(online));
+        nameRow.addView(statusBadge(online, reachableOnly, knownDown));
         if (isActive) nameRow.addView(nowBadge());
         names.addView(nameRow);
 
@@ -737,12 +758,16 @@ public final class DeviceHubView extends LinearLayout {
         // 呈一个内嵌的「线路行」（demo `.line-row`：14dp 圆角 + 半透明白 + 白棱发丝线）。
         RoutePolicy.Pick route = host.routeOf(d);
         String url = route == null ? "" : route.url;
+        // [2026-10-20] 三态：没连它 ≠ 它离线。非当前设备可达就写「可连接」。
         String addrLine;
         if (url.isEmpty()) {
             addrLine = "还没有可用地址 · 重新扫码或手动添加";
         } else {
             String kind = route.line + " · " + route.source;
-            addrLine = (online ? "已连接 · " : "离线 · ") + kind;
+            String prefix = online ? "已连接 · "
+                    : reachableOnly ? "可连接 · "
+                    : (isActive || Boolean.FALSE.equals(reachable)) ? "离线 · " : "未连接 · ";
+            addrLine = prefix + kind;
             if (!online && isActive && d.lastSeenAt > 0) {
                 addrLine += " · 上次在线 " + Ui.ago(d.lastSeenAt);
             }
@@ -869,6 +894,27 @@ public final class DeviceHubView extends LinearLayout {
                 online ? "在线" : "离线", Ui.S_CAP1, online ? Ui.BADGE_OK_FG : Ui.INK);
         b.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 3), Ui.dp(ctx, 9), Ui.dp(ctx, 3));
         b.setBackground(Ui.pill(online ? Ui.BADGE_OK_BG : 0x1C000000));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = Ui.dp(ctx, 8);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    /**
+     * [2026-10-20] 三态徽标：已连接「在线」/ 电脑开着但没连它「在线」(淡一档) / 真连不上或未知。
+     *
+     * <p>旧版只有两态，把"我没连它"写成「离线」—— 用户两台电脑都开着，看到两张卡都写离线。
+     */
+    private View statusBadge(boolean online, boolean reachableOnly, boolean knownDown) {
+        boolean green = online || reachableOnly;
+        String text = green ? "在线" : (knownDown ? "离线" : "未连接");
+        LinearLayout b = Ui.dotLabel(ctx, 6f, green ? Ui.BADGE_OK_FG : Ui.INK,
+                text, Ui.S_CAP1, green ? Ui.BADGE_OK_FG : Ui.INK);
+        b.setPadding(Ui.dp(ctx, 9), Ui.dp(ctx, 3), Ui.dp(ctx, 9), Ui.dp(ctx, 3));
+        b.setBackground(Ui.pill(online ? Ui.BADGE_OK_BG
+                : reachableOnly ? (Ui.BADGE_OK_BG & 0x8CFFFFFF)
+                : 0x1C000000));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.leftMargin = Ui.dp(ctx, 8);

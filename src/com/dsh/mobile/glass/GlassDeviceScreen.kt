@@ -57,6 +57,25 @@ class GlassDeviceState {
     var devices by mutableStateOf<List<Store.Device>>(emptyList())
     var activeId by mutableStateOf("")
     var online by mutableStateOf(false)
+    /**
+     * [P1 · 多设备] `deviceId -> 这条连接是否 READY`：每台设备一条 WebSocket，
+     * 所以两张卡可以**同时**显示「在线」。旧字段 [online] 只代表"当前选中那台"。
+     */
+    var onlineById by mutableStateOf<Map<String, Boolean>>(emptyMap())
+    /**
+     * [2026-10-20] 非当前设备的可达性：`deviceId -> 是否 TCP 连得上`（值缺失 = 还不知道）。
+     *
+     * 为什么要它：同一时刻只能连一台电脑，旧版把"没连它"画成「离线」，
+     * 用户两台电脑都开着却看到两张卡都写离线。有了这张表，非当前设备能老实显示
+     * 「在线」（电脑开着，但当前没连它）或「离线」（真连不上）。
+     */
+    var reachable by mutableStateOf<Map<String, Boolean>>(emptyMap())
+    /**
+     * [2026-10-20] `deviceId -> 与它共用同一份地址的另一台设备名`。
+     * 非空说明这条记录很可能被"跨设备地址同步"写串了：卡片上直说"请重新扫码配对"，
+     * 而不是让用户对着「配对信息失效」猜。**只标出来，绝不自动删用户的地址**。
+     */
+    var addressConflict by mutableStateOf<Map<String, String>>(emptyMap())
     var connecting by mutableStateOf(false)
     /** 状态行文案（正式版 `refreshDevices()` 算好的那句）+ 是否报警色。 */
     var statusText by mutableStateOf("")
@@ -141,13 +160,16 @@ fun GlassDeviceScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 76.dp),
         ) {
-            // ---- 顶栏（正式版定版：平铺背景、无玻璃底板；只有齿轮是玻璃圆）
+            // ---- 顶栏（正式版定版：平铺背景、无玻璃底板）
+            //
+            // [2026-10-20 · 用户「设备选择界面右上角不应该显示设置」] 这里原来有个齿轮按钮。
+            // 设备页是"选设备 / 连设备"的地方，右上角再放设置入口既抢焦点、又让人误以为
+            // 已经进了设置页 ⇒ 去掉（设置页仍可从左侧抽屉进）。
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "我的设备", color = ink, fontSize = Ui.S_LARGE.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                GearButton(backdrop, ink) { host.openSettings() }
             }
             Text(
                 "管理你的电脑 · 连接后进入对话",
@@ -194,10 +216,16 @@ fun GlassDeviceScreen(
                     backdrop = backdrop,
                     d = d,
                     isActive = isActive,
-                    online = state.online && isActive,
+                    online = state.onlineById[d.id] ?: (state.online && isActive),
+                    // 非当前设备：电脑到底在不在（null = 还没探到）；当前设备不用它（online 已经说明）
+                    reachable = state.reachable[d.id],
                     onEnter = { host.open(d) },
                     onRename = { host.rename(d) },
                     onDelete = { host.delete(d) },
+                    // [2026-10-20] 线路判据必须走宿主（MainActivity.routeOf）：
+                    // 默认那条 `Store.pickOf(it)` **带上了全局的"内网刚失败"退避**，
+                    // 于是从没连过的设备也会写「内网刚连不上，暂用公网」——跨设备串味。
+                    routeOf = { host.routeOf(it) },
                 )
             }
 

@@ -148,7 +148,10 @@ private fun inlineMarkdown(
             src.startsWith("`", i) -> {
                 val e = src.indexOf('`', i + 1)
                 if (e > i) {
-                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = codeFg, background = codeBg)) {
+                    // [2026-10-20 · 用户「一堆白字看不清」] 行内代码原来用 `codeFg`（= brand 紫），
+                    // 压在 SELECT_BG 这种很浅的底上几乎看不见。代码用**正文墨色**（深浅主题都够对比），
+                    // 链接仍用 brand（那是"可点"的语义，两者不该共用同一个颜色）。
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = ink, background = codeBg)) {
                         append(src.substring(i + 1, e))
                     }
                     i = e + 1

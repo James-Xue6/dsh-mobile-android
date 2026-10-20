@@ -124,15 +124,29 @@ public final class MainActivity extends Activity implements
     private enum Screen { DEVICE, CHAT, SETTINGS }
     private Screen screen = Screen.DEVICE;
 
-    /** 进程级共享的网关客户端：Activity 重建不应打断连接。 */
-    private static GatewayClient SHARED_GW;
+    /**
+     * [2026-10-20 P1 · 多设备] 进程级连接表：**一台设备一条 WebSocket**。
+     *
+     * <p>为什么必须这样：旧设计全进程只有一个 {@link GatewayClient}，于是"同时只能有一台在线"、
+     * 切设备必须断旧连新、任何异步回包都可能写错设备。网关本身支持多客户端
+     * （每个配对设备各自一条控制通道），所以 App 这边也要按设备分开。
+     *
+     * <p>监听者规则（决定谁能动 UI）：
+     * <ul>
+     *   <li>**当前选中的那台**：listener = {@code MainActivity}（界面上的会话/对话都是它的）；</li>
+     *   <li>其余已配对设备：listener = null ⇒ 帧不进 UI，但 {@code bgInteractionHook}
+     *       照旧把提问/审批变成通知，回合结束也照样能提醒。</li>
+     * </ul>
+     * 这样一个 Map 同时解决了"能同时在线"和"UI 只显示一台、不会串"两个问题。
+     */
+    private static final java.util.LinkedHashMap<String, GatewayClient> CLIENTS = new java.util.LinkedHashMap<>();
 
     /**
      * [M2] 进程里此刻活着的 Activity（null = 只有 {@link com.dsh.mobile.notify.KeepAliveService}
      * 在跑，没有界面）。
      *
      * <p>为什么要有它：进程被系统回收后由 START_STICKY 拉起来的服务，{@code onCreate} 不会跑，
-     * 于是 {@link #SHARED_GW} 从来没被创建过 —— 服务在跑、通知栏挂着"保持后台接收"，
+     * 于是连接表从来没被建过 —— 服务在跑、通知栏挂着"保持后台接收"，
      * 但一条事件都收不到（后台永久静默）。服务据此判断"该不该由我兜底建连接"：
      * 有界面时连接由 Activity 负责，服务绝不插手（不抢监听者、不重复建连）。
      */
@@ -142,20 +156,41 @@ public final class MainActivity extends Activity implements
     public static boolean hasLiveActivity() { return LIVE != null; }
 
     /**
-     * [M2] 进程级网关实例的**唯一创建点**：Activity 与 KeepAliveService 共用同一个实例
-     * （"不重复创建"这条纪律就落在这里）。
+     * 取（或建）某台设备的连接实例。
      *
-     * @param preferred 期望安装的监听者；null = 只取实例、不动监听者
-     * @param force     true = 无条件把监听者换成 preferred。Activity 启动时必须为 true：
-     *                  进程可能先被服务拉起来（那时挂着后台监听者），界面一起来就得抢回监听权，
-     *                  否则界面收不到任何帧。服务侧传 false，绝不抢 Activity 的监听权。
+     * @param deviceId  设备 localId；空 = 老路径（还不知道是哪台时的临时实例）
+     * @param preferred 期望的监听者；null = 只取实例、不动监听者
+     * @param force     true = 无条件换监听者（界面切到这台时用）
+     */
+    public static synchronized GatewayClient clientFor(String deviceId, GatewayClient.Listener preferred, boolean force) {
+        String key = deviceId == null ? "" : deviceId;
+        GatewayClient c = CLIENTS.get(key);
+        if (c == null) {
+            c = new GatewayClient(preferred);
+            CLIENTS.put(key, c);
+        } else if (preferred != null && (force || c.listener() == null)) {
+            c.setListener(preferred);
+        }
+        return c;
+    }
+
+    /** 取某台设备已有的连接实例（没有就返回 null，不创建）。 */
+    public static synchronized GatewayClient clientOf(String deviceId) {
+        return CLIENTS.get(deviceId == null ? "" : deviceId);
+    }
+
+    /** 所有已建连的设备（后台保活/诊断用）。 */
+    public static synchronized java.util.List<GatewayClient> allClients() {
+        return new java.util.ArrayList<>(CLIENTS.values());
+    }
+
+    /**
+     * [M2 兼容] 旧签名的唯一创建点：等价于"取当前选中设备那条连接"。
+     * 仍供 {@link com.dsh.mobile.notify.KeepAliveService} 与老调用点使用。
      */
     public static synchronized GatewayClient sharedGateway(GatewayClient.Listener preferred, boolean force) {
-        if (SHARED_GW == null) SHARED_GW = new GatewayClient(preferred);
-        else if (preferred != null && (force || SHARED_GW.listener() == null)) {
-            SHARED_GW.setListener(preferred);
-        }
-        return SHARED_GW;
+        String id = LIVE != null && LIVE.store != null ? LIVE.store.activeDeviceId() : "";
+        return clientFor(id, preferred, force);
     }
 
     /**
@@ -187,6 +222,37 @@ public final class MainActivity extends Activity implements
 
     private Store store;
     private GatewayClient gw;
+
+    /**
+     * [多设备串台修复 · 2026-10-20] 当前这条 WebSocket **实际连的是哪台设备**（{@link Store.Device#id}）。
+     *
+     * <p>为什么必须单独记一个：进程里只有一个网关实例（{@link #SHARED_GW}），而"在线"判据
+     * {@link #isOnline()} 只看这个实例 —— 改前只要连着 B，点 A 的「进入」也会被判成"在线"，
+     * 于是**不重连、直接进对话页** ⇒ 打开的是 B 的会话，随后又拿 A 的会话 id 去 B 上订阅 ⇒
+     * 网关反复回错误帧 ⇒ 错误提示一直弹。用户报的「两台设备同时在线时，进第一个显示第二个的对话、
+     * 不停的弹窗」就是这个。
+     *
+     * <p>现在：在线判据一律按设备算（{@link #isOnlineFor(Store.Device)}），换设备一律重连
+     * （见 {@link #onOpenDevice(Store.Device)}）。与网关插件
+     * {@code docs/multi-gateway-app-integration.md §4}「连接代次 + 网关身份绑定、数据按 (localId, resourceId) 隔离」
+     * 是同一口径。
+     */
+    private String connectedDeviceId = "";
+
+    /** [P1] 界面上"当前选中的那台"设备 localId（决定 gw 指向哪条连接）。 */
+    private String selectedDeviceId = "";
+
+    /**
+     * [多设备串台修复] 正在切目标设备（旧连接已关、新连接还没 READY）。
+     *
+     * <p>期间的断线是**我们自己换的**，不是掉线 ⇒ 不许触发「内网死了→切公网」
+     * （{@link #maybeImmediateLanFailover()}）与地址发现，否则会拿旧设备的地址再拨一次，
+     * 把刚要建立的新连接顶掉。
+     */
+    private boolean switchingDevice = false;
+
+    /** [多设备串台修复] 当前这条连接是否**已经收到过会话列表**（换设备后要重新等一份新的）。 */
+    private boolean sessionsLoaded = false;
 
     private FrameLayout root;
     /** [V3.103 · 方案 A] 抽屉里那个「独立全屏弹窗宿主」是否已挂上（只挂一次）。 */
@@ -669,14 +735,23 @@ public final class MainActivity extends Activity implements
         themeMode = store.themeMode();
         applyThemeEverywhere();
         applyScreenshotPolicy();
-        // [M2] 走唯一创建点：进程可能先被 KeepAliveService 拉起来（此时实例上挂着后台监听者），
-        // force=true 把监听权抢回界面，否则界面一帧都收不到。
-        gw = sharedGateway(this, true);
+        // [P1 · 多设备] 界面挂上来时：把这条进程里**当前选中设备**的连接拿过来当 gw，
+        // 并把监听权抢回界面（进程可能先被 KeepAliveService 拉起来，那时监听者是后台那个）。
+        selectedDeviceId = store.activeDeviceId();
+        gw = clientFor(selectedDeviceId, this, true);
         LIVE = this;
         // 通知：建三个渠道（幂等）+ 对齐"人此刻在看哪条会话"（冷启动还没进任何会话）。
         // 渠道必须在任何一条通知之前建好，否则 Android 8+ 直接丢弃。
         Notifier.init(this);
         Notifier.setViewedSession(this, "");
+        // [P1 · 多设备] 任意一条连接的状态变化都要让设备页重画：
+        // 后台那些连接没有 UI 监听者，不靠这个钩子，它们的上线/掉线永远不会反映到卡片上
+        //（真机症状：明明连上了，卡片还停在「可连接」）。
+        GatewayClient.bgStateHook = (tag, st) -> {
+            try {
+                if (LIVE == this && screen == Screen.DEVICE) refreshDevices();
+            } catch (Throwable ignored) { }
+        };
 
         // ---- [M1 钩子安装] 进程级通知钩子：Activity 被回收/划掉后进程仍由 KeepAliveService
         // 保活，这里让提问/审批照常弹提醒 —— 否则 GatewayClient 在 listener==null 时静默丢弃帧。
@@ -722,7 +797,10 @@ public final class MainActivity extends Activity implements
                 // [P1 修复] key 走 Notifier 的唯一实现（与界面建档/深链同规则）
                 String hk = appr ? Notifier.approvalKey(frame) : Notifier.questionKey(frame);
                 Notifier.pending(appCtx, hookStore, hs, hk,
-                        appr ? "有操作等你批准" : "有提问等你回答", !appr);
+                        appr ? "有操作等你批准" : "有提问等你回答", !appr,
+                        // [P1 · 多设备] 帧里带着"哪台电脑"（由 GatewayClient.deliverInteraction 打上），
+                        // 通知带上它，点通知才能切到对的那台再开会话。
+                        frame.optString("dshDeviceId", ""));
             } catch (Throwable ignored) { }
         };
 
@@ -800,15 +878,25 @@ public final class MainActivity extends Activity implements
             refreshListStatus();
         });
 
+        // [2026-10-20 · 自愈] 先修一次"两份地址被写串"的历史数据，再画设备页/连网。
+        // 放在 showDevices() 之前：卡片一上来就要显示修完的真实状态。
+        detectAddressConflicts();
+
         // 冷启动落在「我的设备」页：先看见自己添加过的电脑（在线/离线写在卡片上），
         // 点某台的「连接/进入」才进对话页（用户要求：我的设备在对话页之前）。
         showDevices();
         if (store.paired()) {
+            // [P1 · 多设备] 界面挂上来时：选中设备那条连接可能是进程里早就 READY 的
+            // （KeepAliveService 拉起的 / 从别的 Activity 回来），此时**不会再有 onState(READY)**，
+            // 所以要主动补一次绑定 + 拉列表。
+            bindConnectionToActiveDevice();
             GatewayClient.State st = gw.state();
             if (st == GatewayClient.State.READY || st == GatewayClient.State.CONNECTING
                     || st == GatewayClient.State.AUTHENTICATING) {
                 gw.requestSessions();
                 refreshListStatus();
+                // 其余已配对设备也连上（后台保活，收通知）
+                connectAllDevices();
             } else {
                 gw.setTrustAllCerts(store.insecureTls());
                 checkUpdate(false);   // 启动时后台查一次新版本（6 小时内不重复）
@@ -973,15 +1061,17 @@ public final class MainActivity extends Activity implements
      * 之后就调用它，若在这里清零，就会变成内网↔公网无限来回切。
      */
     private void connectNow() {
-        if (gw == null) return;
+        if (store == null) return;
+        Store.Device active = store.activeDevice();
+        if (active == null) return;
         String url = store.url();
         String token = store.token();
         if (url.isEmpty() || token.isEmpty()) return;
         pendingAutoFailover = false;
         lastConnectUrl = url;
-        // [M2] 取参与连接收口到静态入口 connectWith()：KeepAliveService 在没有界面时
-        // 走的是同一个方法，后台路径不会另写一份连接参数（也不会漏掉明文校验）。
-        connectWith(store, gw);
+        bindConnectionToActiveDevice();   // 记下"这条连接属于哪台"
+        // [P1 · 多设备] 一次把所有配好对的设备都连上（选中的那台装 UI 监听者）
+        connectAllDevices();
         armAutoLanFailover(url);
         refreshRouteUI();
     }
@@ -1103,6 +1193,7 @@ public final class MainActivity extends Activity implements
         lastConnectUrl = store.url();
         discoverLogReconnect("自动切线路 内网→公网", (dead ? "内网已死" : "内网" + why) + " → 已发起");
         gw.setTrustAllCerts(store.insecureTls());
+        bindConnectionToActiveDevice();
         gw.connect(store.url(), store.token(), store.deviceId(), store.deviceName());
         refreshRouteUI();
         return true;
@@ -1773,6 +1864,18 @@ public final class MainActivity extends Activity implements
         if (intent == null) return;
         String sid = intent.getStringExtra(Notifier.EXTRA_SESSION);
         if (sid == null || sid.trim().isEmpty()) return;
+        // [P1 · 多设备] 这条通知是哪台电脑发来的：先切到那台，再去找会话。
+        // 不切的话，另一台的会话在本机的列表里根本不存在 —— 点了就是"没反应"。
+        String devId = intent.getStringExtra(Notifier.EXTRA_DEVICE);
+        if (devId != null && !devId.trim().isEmpty()
+                && !devId.equals(store.activeDeviceId())) {
+            Store.Device to = store.device(devId.trim());
+            if (to != null) {
+                Store.Device from = store.activeDevice();
+                store.setActiveDevice(to.id);
+                switchDevice(from, to);
+            }
+        }
         final String sessionId = sid.trim();
         final String key = intent.getStringExtra(Notifier.EXTRA_KEY);
         pendingOpenSessionId = sessionId;
@@ -1990,7 +2093,11 @@ public final class MainActivity extends Activity implements
         refreshAbout();
         settingsView.setUpdateHint(lastUpdateHint);
         refreshFeedbackHint();
-        settingsView.setStatus(lastStateText.isEmpty() ? "未连接" : lastStateText, false);
+        // [P1 · 多设备] 设置页的字段永远只编辑**当前选中那台**：把"是哪台"直接写在状态行上。
+        // 否则用户改完地址不知道改到了哪台（这正是"右上角进去只有一个地址"的根源观感）。
+        Store.Device editing = store.activeDevice();
+        String who = editing == null ? "" : "正在编辑「" + editing.displayName() + "」 · ";
+        settingsView.setStatus(who + (lastStateText.isEmpty() ? "未连接" : lastStateText), false);
         refreshDiagnostics();
     }
 
@@ -2268,6 +2375,100 @@ public final class MainActivity extends Activity implements
     }
 
     /**
+     * [多设备串台修复 · 2026-10-20] 这条连接是不是就是**这台设备**的。
+     *
+     * <p>{@link #isOnline()} 只回答"socket 活着吗"，它不区分连的是哪台电脑 ——
+     * 进程里只有一个网关实例，"连着 B"和"A 在线"在旧代码里是同一个布尔值。
+     * 凡是"能不能进入/在线状态/该不该重连"的判断都必须用这个按设备算的版本，
+     * 否则就会出现用户报的「进 A 看到 B 的对话」。
+     */
+    /**
+     * [P1] 这条连接是不是就是**这台设备**的。
+     *
+     * <p>多设备改造后判据直接问"这台设备自己的那条连接"：每台设备一个 {@link GatewayClient}，
+     * 所以不再需要"全局 socket 属于谁"这种间接判断，也不会出现 A 的连接被算成 B 在线。
+     */
+    private boolean isOnlineFor(Store.Device d) {
+        if (d == null || d.id == null || d.id.isEmpty()) return false;
+        GatewayClient c = clientOf(d.id);
+        return c != null && c.state() == GatewayClient.State.READY && c.canSend();
+    }
+
+    /**
+     * [多设备串台修复] 所有真正发起连接的入口都要先过这里：记下"这次连的是哪台设备"，
+     * 并在**目标设备变了**的时候把上一台设备的会话态清干净。
+     *
+     * <p>为什么收口成一个方法：{@code gw.connect(...)} 全仓有 8 个调用点
+     * （自动选路 / 用户重连 / 切线路 / 地址发现 / 设置页改线路 / 手动添加 / 会话内重连 / 配对后），
+     * 少接一处就会留下一条"连到 B 却以为是 A"的路。
+     */
+    private void bindConnectionToActiveDevice() {
+        String id = store == null ? "" : store.activeDeviceId();
+        if (id == null) id = "";
+        if (!id.isEmpty() && !connectedDeviceId.isEmpty() && !id.equals(connectedDeviceId)) {
+            // 目标设备换了（且不是在 onOpenDevice 里已经清过的那种）：上一台的会话/列表一律作废
+            clearDeviceScopedState();
+        }
+        connectedDeviceId = id;
+    }
+
+    /**
+     * [P1 · 多设备] 给**某一台**设备建一条连接。
+     *
+     * @param foreground true = 这台就是界面上选中的那台（装 UI 监听者，会话/对话都显示它的）；
+     *                   false = 后台保活（listener=null，帧只走通知钩子，绝不进 UI）。
+     */
+    private GatewayClient connectDevice(Store.Device d, boolean foreground) {
+        if (d == null || d.id == null || d.id.isEmpty()) return null;
+        String token = d.token == null ? "" : d.token;
+        if (token.isEmpty()) return null;
+        RoutePolicy.Pick p = Store.pickOf(d, foreground);
+        String url = p == null || p.url == null ? "" : p.url;
+        if (url.isEmpty()) return null;
+        String problem = GatewayClient.cleartextProblem(url);
+        if (problem != null) {
+            if (foreground) Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            return null;
+        }
+        GatewayClient c = clientFor(d.id, foreground ? this : null, foreground);
+        c.deviceTag = d.id;              // [P1] 让这条连接的后台通知知道"是哪台电脑"
+        c.setTrustAllCerts(store.insecureTls());
+        if (foreground) {
+            connectedDeviceId = d.id;
+            lastConnectUrl = url;
+        }
+        c.connect(url, token, store.deviceId(), store.deviceName());
+        return c;
+    }
+
+    /**
+     * [P1] 把**所有**配好对的设备都连上（选中的那台走前台）。
+     *
+     * <p>这是"两台同时在线"的落点：每台各一条 WebSocket，后台那些也保持着，
+     * 所以提问/审批/完成都能发通知；界面只看选中那台，不会串。
+     */
+    private void connectAllDevices() {
+        if (store == null) return;
+        java.util.List<Store.Device> list = store.devices();
+        Store.Device active = store.activeDevice();
+        selectedDeviceId = active == null ? "" : active.id;
+        for (Store.Device d : list) {
+            if (d == null || !d.pairedReady()) continue;
+            boolean fg = active != null && d.id.equals(active.id);
+            GatewayClient c = clientOf(d.id);
+            // 已经在连/已连上的：只纠正监听者归属，绝不打断（退避由各自 GatewayClient 管）
+            if (c != null && (c.state() == GatewayClient.State.READY
+                    || c.state() == GatewayClient.State.CONNECTING
+                    || c.state() == GatewayClient.State.AUTHENTICATING)) {
+                if (fg && c.listener() != this) c.setListener(this);
+                if (!fg && c.listener() == this) c.setListener(null);
+                continue;
+            }
+            connectDevice(d, fg);
+        }
+    }
+
+    /**
      * [在线态自检 · 2026-10-05 复核 isOnline() / 假连接判据] 前台每 5s 重算一次「在线」判据。
      *
      * <p>为什么必须重算：{@link #isOnline()} 要求"最近 30s 内有入站帧"，但判据只在
@@ -2284,6 +2485,20 @@ public final class MainActivity extends Activity implements
     private Runnable onlineWatchTask;
     /** 界面上最后一次画出来的"在线"结论（null = 还没画过）。 */
     private Boolean lastOnlineShown;
+    /** [P1] 上一次"每台设备在线状态"的指纹：任意一台翻面就让设备页重画。 */
+    private String lastOnlineSig = "";
+
+    // ---- [2026-10-20] 非当前设备的「可达性」缓存（决定徽标写「在线」还是「离线」）
+    /** deviceId -> 是否 TCP 可达。只回答"那台电脑此刻有没有人在听"，不代表已连上。 */
+    private final java.util.Map<String, Boolean> reachCache = new java.util.HashMap<>();
+    /** deviceId -> 上次探测时刻（TTL 内不重复探，省电）。 */
+    private final java.util.Map<String, Long> reachAt = new java.util.HashMap<>();
+    /** 一次只探一台（顺序探测，避免同时开一堆线程/连接）。 */
+    private boolean reachProbeBusy = false;
+    /** 探测结果多久算数：设备页会一直重画，20s 足够跟上"电脑刚关/刚开"。 */
+    private static final long REACH_TTL_MS = 20_000L;
+    /** 单次 TCP 探测超时：太久会让"未知"挂在那儿不动。 */
+    private static final int REACH_TIMEOUT_MS = 1_500;
 
     private void armOnlineWatch() {
         cancelOnlineWatch();
@@ -2293,10 +2508,18 @@ public final class MainActivity extends Activity implements
             boolean now = isOnline();
             Boolean prev = lastOnlineShown;
             lastOnlineShown = now;
-            if (prev != null && prev != now) {
+            // [P1 · 多设备] 指纹覆盖**每一台**：后台那台上线/掉线也要重画卡片
+            StringBuilder sig = new StringBuilder();
+            for (Store.Device dd : store.devices()) {
+                if (dd == null || dd.id == null) continue;
+                sig.append(dd.id).append(isOnlineFor(dd) ? 1 : 0).append(';');
+            }
+            boolean sigChanged = !sig.toString().equals(lastOnlineSig);
+            lastOnlineSig = sig.toString();
+            if (sigChanged || (prev != null && prev != now)) {
                 // 翻面才记一条：正常连接时这个 tick 全程静默（不刷屏）
                 discoverLogReconnect("在线态自检",
-                        "判据 " + (prev ? "在线" : "离线") + " → " + (now ? "在线" : "离线") + "，已重画");
+                        "判据 " + (prev == null ? "?" : (prev ? "在线" : "离线")) + " → " + (now ? "在线" : "离线") + "，已重画");
                 paintBanner();
                 refreshListStatus();
                 if (screen == Screen.DEVICE) refreshDevices();
@@ -2313,21 +2536,156 @@ public final class MainActivity extends Activity implements
         if (r != null) uiHandler.removeCallbacks(r);
     }
 
+    /**
+     * [2026-10-20] 「地址被别的设备共用」的检测（**只标出来，不删用户数据**）。
+     *
+     * <p>真机现场：异步地址同步把家电脑的内网地址写进了公司电脑的记录，公司电脑于是带着
+     * "家电脑的地址 + 自己的令牌"去连，永远「配对信息失效了 · 重新扫码最稳」——
+     * 用户改多少次地址都会被下一次同步覆盖回去（写入端已修，见 maybeRefreshWanUrl 的 owner 守卫）。
+     *
+     * <p>为什么**不自动清掉那条地址**：同一份 URL 到底属于哪台，App 没有可信证据去裁决；
+     * 猜错就把用户唯一还能用的地址删了。所以这里只产出"冲突表"，卡片上直说
+     * 「地址与「X」相同 · 请重新扫码配对」，把选择权留给用户。
+     */
+    private void detectAddressConflicts() {
+        java.util.Map<String, String> found = new java.util.HashMap<>();
+        try {
+            if (store == null) return;
+            java.util.List<Store.Device> list = store.devices();
+            if (list == null || list.size() < 2) {
+                addressConflicts.clear();
+                return;
+            }
+            for (Store.Device d : list) {
+                if (d == null || d.id == null || d.id.isEmpty()) continue;
+                for (Store.Device other : list) {
+                    if (other == d || other == null || other.id == null) continue;
+                    boolean sameLan = !d.lanUrl.isEmpty() && d.lanUrl.equals(other.lanUrl);
+                    boolean sameWan = !d.wanUrl.isEmpty() && d.wanUrl.equals(other.wanUrl);
+                    if (!sameLan && !sameWan) continue;
+                    found.put(d.id, other.displayName());
+                    // 只在"冲突集合真的变了"时记一条：refreshDevices 调用很频繁，不能刷屏
+                    if (!addressConflicts.containsKey(d.id)) {
+                        pairTraceAdd("地址冲突：设备「" + d.displayName() + "」与「" + other.displayName()
+                                + "」共用同一份" + (sameLan ? "内网" : "公网") + "地址 —— 可能被写串了");
+                    }
+                    break;
+                }
+            }
+        } catch (Throwable ignored) { }
+        addressConflicts.clear();
+        addressConflicts.putAll(found);
+    }
+
+    /** deviceId → 与之共用同一份地址的另一台设备名（空 = 没有冲突）。 */
+    private final java.util.Map<String, String> addressConflicts = new java.util.HashMap<>();
+
+    /**
+     * 这个地址是不是**别的设备**已经在用（用于阻止"把 A 的地址写进 B"）。
+     * 只在地址同步落盘那一处用；完全相同才算，同 host 不同端口不算。
+     */
+    private boolean addressOwnedByOther(String url) {
+        if (url == null || url.isEmpty() || store == null) return false;
+        String self = store.activeDeviceId();
+        for (Store.Device d : store.devices()) {
+            if (d == null || d.id == null || d.id.equals(self)) continue;
+            if (url.equals(d.lanUrl) || url.equals(d.wanUrl)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 给**非当前**设备安排一次轻量可达探测。
+     *
+     * <p>为什么要有：进程里只有一条 WebSocket，同一时刻只能连一台电脑。旧文案把"没连它"
+     * 写成「离线」，用户两台电脑都开着却看到两张卡都写离线（原话：「家里的是在线的，
+     * 公司的也是在线的，为啥都显示离线」）。这里补一个"那台电脑到底在不在"的事实来源。
+     *
+     * <p>开销纪律：只在设备页可见时探、每台 20s 内最多一次、一次只探一台、只发 TCP 握手
+     * （不握手协议、不带令牌、不读任何业务数据）。
+     */
+    private void scheduleReachProbes(java.util.List<Store.Device> list, String activeId, boolean activeOnline) {
+        if (screen != Screen.DEVICE || reachProbeBusy) return;
+        if (list == null || list.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (Store.Device d : list) {
+            if (d == null || d.id == null || d.id.isEmpty()) continue;
+            boolean isActive = d.id.equals(activeId);
+            if (isActive && activeOnline) continue;      // 已经连着这台了，不用探
+            Long at = reachAt.get(d.id);
+            if (at != null && now - at < REACH_TTL_MS) continue;
+            String[] urls = probeTargets(d, isActive);
+            reachAt.put(d.id, now);
+            if (urls.length == 0) {
+                reachCache.remove(d.id);                 // 没地址 = 无从判断，徽标按"未连接"处理
+                continue;
+            }
+            startReachProbe(d.id, urls);
+            return;                                      // 一次一台：探完 refreshDevices() 会再来
+        }
+    }
+
+    /**
+     * 这台设备要探哪几条地址：先预测线路那条，再另一条（有就探）。
+     * 只探一条会把"内网不通、公网好好"的电脑误判成离线。
+     */
+    private String[] probeTargets(Store.Device d, boolean isActive) {
+        RoutePolicy.Pick p = isActive ? store.pickActive() : Store.pickOf(d, false);
+        String first = p == null ? "" : (p.url == null ? "" : p.url);
+        String lan = d.lanUrl == null ? "" : d.lanUrl;
+        String wan = d.wanUrl == null ? "" : d.wanUrl;
+        String second = "";
+        if (!first.isEmpty()) second = first.equals(lan) ? wan : lan;
+        if (second.isEmpty()) second = first.equals(wan) ? lan : wan;
+        if (second.equals(first)) second = "";
+        if (first.isEmpty()) return second.isEmpty() ? new String[0] : new String[] { second };
+        if (second.isEmpty()) return new String[] { first };
+        return new String[] { first, second };
+    }
+
+    private void startReachProbe(final String deviceId, final String[] urls) {
+        reachProbeBusy = true;
+        new Thread(() -> {
+            final int r = com.dsh.mobile.net.ReachProbe.probeAny(urls, REACH_TIMEOUT_MS);
+            uiHandler.post(() -> {
+                reachProbeBusy = false;
+                if (r == com.dsh.mobile.net.ReachProbe.REACHABLE) reachCache.put(deviceId, Boolean.TRUE);
+                else if (r == com.dsh.mobile.net.ReachProbe.UNREACHABLE) reachCache.put(deviceId, Boolean.FALSE);
+                else reachCache.remove(deviceId);
+                if (screen == Screen.DEVICE) refreshDevices();
+            });
+        }, "reach-probe").start();
+    }
+
     /** 重画设备卡片：设备表 + 当前生效的那台 + 实况在线状态 + 连接门。 */
     private void refreshDevices() {
         if (deviceHub == null) return;
         java.util.List<Store.Device> list = store.devices();
         Store.Device active = store.activeDevice();
-        boolean online = active != null && isOnline();
+        // [多设备串台修复] 在线状态必须按设备算：连着 B 时 A 的卡片绝不能显示成"在线"
+        boolean online = active != null && isOnlineFor(active);
         lastOnlineShown = online;   // 与"在线态自检"tick 对齐：tick 只认"界面上真正画出来的那个值"
         boolean waiting = !online && !pendingEnterDeviceId.isEmpty();
+        // [2026-10-20 · 非当前设备到底是不是"离线"] 先看缓存/顺手发起一次轻量 TCP 探测，
+        // 结果决定徽标写「在线」还是「离线」（否则"没连它"会被说成"它离线"，用户以为 App 坏了）
+        scheduleReachProbes(list, active == null ? "" : active.id, online);
+        // [2026-10-20] 顺手重算一次"地址是否被别的设备共用"（纯内存比对，开销可忽略）
+        detectAddressConflicts();
         // 先落"是否在等重连"再重建卡片：卡片是整体重建的，按钮文案/置灰在重建时读这个标志
         deviceHub.setConnecting(waiting);
-        deviceHub.setDevices(list, active == null ? "" : active.id, online);
+        deviceHub.setDevices(list, active == null ? "" : active.id, online, new java.util.HashMap<>(reachCache));
         if (glassDeviceState != null) {      // [V3.0] 同步给 Compose 设备页（旧的照样更新，互不影响）
             glassDeviceState.setDevices(new java.util.ArrayList<>(list));
             glassDeviceState.setActiveId(active == null ? "" : active.id);
             glassDeviceState.setOnline(online);
+            // [P1 · 多设备] 每台各自的真实连接状态（两台都连着 ⇒ 两张卡都是「在线」）
+            java.util.Map<String, Boolean> onlineById = new java.util.HashMap<>();
+            for (Store.Device dd : list) {
+                if (dd != null && dd.id != null) onlineById.put(dd.id, isOnlineFor(dd));
+            }
+            glassDeviceState.setOnlineById(onlineById);
+            glassDeviceState.setReachable(new java.util.HashMap<>(reachCache));
+            glassDeviceState.setAddressConflict(new java.util.HashMap<>(addressConflicts));
             glassDeviceState.setConnecting(waiting);
             glassDeviceState.setRouteLabel(routeLabel());
         }
@@ -2399,6 +2757,15 @@ public final class MainActivity extends Activity implements
 
     /** 从设备卡片进对话页：让"冷启动自动落位"逻辑补跑一次（列表可能早就到了）。 */
     private void enterChat() {
+        // [2026-10-20 · 用户「不连接无法进入后续界面」]
+        // 没连上就不许进对话页：留在设备页并把原因说清楚（连上后自己会进来）。
+        Store.Device d = store.activeDevice();
+        if (d != null && !isOnlineFor(d)) {
+            showDevices();
+            Toast.makeText(this, "还没连上「" + d.displayName() + "」，连上后才能进入对话",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
         showChat();
         autoEntered = false;
         maybeAutoEnter();
@@ -2414,12 +2781,14 @@ public final class MainActivity extends Activity implements
         String token = store.token();
         if (url.isEmpty() || token.isEmpty()) {
             Toast.makeText(this, "这台设备还没有地址或令牌，请重新扫码或手动添加", Toast.LENGTH_LONG).show();
+            switchingDevice = false;   // 连接没发起：别把"换设备中"的抑制一直挂着
             refreshDevices();
             return false;
         }
         String problem = GatewayClient.cleartextProblem(url);
         if (problem != null) {
             Toast.makeText(this, problem, Toast.LENGTH_LONG).show();
+            switchingDevice = false;
             refreshDevices();
             return false;
         }
@@ -2429,6 +2798,7 @@ public final class MainActivity extends Activity implements
         Store.clearLanFailure();
         lastConnectUrl = url;
         gw.setTrustAllCerts(store.insecureTls());
+        bindConnectionToActiveDevice();
         gw.connect(url, token, store.deviceId(), store.deviceName());
         armAutoLanFailover(url);
         refreshDevices();
@@ -2611,6 +2981,13 @@ public final class MainActivity extends Activity implements
         autoEntered = true;
         if (!currentSessionId.isEmpty()) return;
         if (screen != Screen.CHAT) return;
+        // [多设备串台修复 · 2026-10-20] 刚切换设备 / 刚 READY 时列表还没回来：
+        // 这次不定落点，放开 autoEntered 让 onSessions() 拿**新设备那份**列表再试一次。
+        // （否则会立刻在空列表上判定"没有会话"、直接拉开空抽屉，用户还得自己再点一次。）
+        if (!sessionsLoaded && isOnlineFor(store.activeDevice())) {
+            autoEntered = false;
+            return;
+        }
 
         // [连接门·2026-10-05] 优先回到「上次所在的会话」（用户要求：连上后再进入上次的会话）。
         // 上次那条已被删/归档（findSession 找不到）时退回下面的"最近一条顶层会话"，不干等。
@@ -2770,7 +3147,7 @@ public final class MainActivity extends Activity implements
      */
     private void notifyPendingRequest(String sessionId, String itemKey, boolean question) {
         if (sessionId == null || sessionId.isEmpty()) return;
-        Notifier.pending(this, store, sessionId, itemKey, sessionLabel(sessionId), question);
+        Notifier.pending(this, store, sessionId, itemKey, sessionLabel(sessionId), question, selectedDeviceId);
     }
 
     /** 通知里显示的会话名：会话列表的标题优先，其次标题缓存；都没有就交回中性文案。 */
@@ -3065,7 +3442,15 @@ public final class MainActivity extends Activity implements
         // 触发后计数清零（下次要再攒 3 次）✓；连上（READY）立刻清零 ✓。
         if (st == GatewayClient.State.READY) {
             connectFailStreak = 0;
-        } else if (isLinkFailureState(st, detail)) {
+            // [多设备串台修复] 连上了 = 这次"换设备"结束了，后续断线恢复正常语义。
+            // 顺带补一次绑定：进程由 KeepAliveService 拉起时 connect 调用点不在本类里，
+            // connectedDeviceId 可能是空的 —— 而 activeDeviceId 就是它连的那台（后台不可能换设备）。
+            switchingDevice = false;
+            if (connectedDeviceId == null || connectedDeviceId.isEmpty()) {
+                connectedDeviceId = store == null ? "" : store.activeDeviceId();
+            }
+        } else if (isLinkFailureState(st, detail) && !switchingDevice) {
+            // 换设备途中的失败不算"地址卡死"，不许触发地址发现（会把刚建的新连接顶掉）
             connectFailStreak++;
             if (connectFailStreak >= AUTO_DISCOVERY_FAIL_STREAK) {
                 connectFailStreak = 0;
@@ -3078,7 +3463,7 @@ public final class MainActivity extends Activity implements
         if (!pendingEnterDeviceId.isEmpty()) {
             if (st == GatewayClient.State.READY) {
                 Store.Device pendActive = store.activeDevice();
-                if (pendActive != null && pendingEnterDeviceId.equals(pendActive.id) && isOnline()) {
+                if (pendActive != null && pendingEnterDeviceId.equals(pendActive.id) && isOnlineFor(pendActive)) {
                     // 还在设备页才替他切页；用户已经走开（去设置/抽屉）就不再抢屏幕
                     if (screen == Screen.DEVICE) finishPendingEnter();
                     else cancelPendingEnter();
@@ -3116,7 +3501,8 @@ public final class MainActivity extends Activity implements
             // 还会把"网关没开 / 请重新配对"这种明确结论覆盖成含糊的重连提示。
             if (prevState == GatewayClient.State.READY
                     && st != GatewayClient.State.GATEWAY_OFF
-                    && st != GatewayClient.State.UNAUTHORIZED) {
+                    && st != GatewayClient.State.UNAUTHORIZED
+                    && !switchingDevice) {   // [多设备串台修复] 换设备时的主动断开 ≠ 内网死了
                 maybeImmediateLanFailover();
             }
             // 掉线时在途的分页请求的响应永远不会来了：必须复位在途标记，
@@ -3255,6 +3641,13 @@ public final class MainActivity extends Activity implements
             if (!n.isEmpty()) store.setDeviceName(n);
         }
         Toast.makeText(this, "配对成功", Toast.LENGTH_SHORT).show();
+        // [2026-10-20] 配对成功 = 这条连接现在属于**刚配好的那台**（beginPairing 已把它设为生效设备）。
+        // 必须显式重绑并让"等会话列表"复位：否则新设备会被判离线、列表也不刷新
+        // （真机症状：扫完码卡片仍写「离线」，其实 socket 已经连上那台电脑了）。
+        connectedDeviceId = store.activeDeviceId();
+        switchingDevice = false;
+        sessionsLoaded = false;
+        autoEntered = false;   // 让"列表到了就自动进最近一条会话"在配对后照常发生
         // 配对成功也要落进轨迹：这样"成功"与"失败"在诊断区里是同一份逐条记录，
         // 用户报"时好时坏"时能直接对比（token 只记长度，不记内容）
         pairTraceAdd("✓ 配对成功：已拿到设备令牌（" + token.length() + " 字符，不记内容）");
@@ -3267,6 +3660,10 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void onSessions(JSONArray arr, JSONObject raw) {
+        // [多设备串台修复 · 2026-10-20] 没有"连着的设备"时（正在换设备的空窗 / 已断开），
+        // 这份列表不属于任何人：丢掉。否则它会把**上一台电脑**的会话写进界面，
+        // 正是用户报的「进 A 却看到 B 的对话」。
+        if (connectedDeviceId == null || connectedDeviceId.isEmpty()) return;
         // 通知用：先记下"上一份列表里谁在跑"。列表本身马上要 clear()，
         // 只有这里能把"跑过、现在不跑了"这个切换捞出来 —— 别的会话结束只有这条线索。
         Map<String, Boolean> wasRunning = new HashMap<>();
@@ -3310,6 +3707,7 @@ public final class MainActivity extends Activity implements
         }
         if (listScreen != null) setSessionRows(buildRows());
         refreshListStatus();
+        sessionsLoaded = true;   // [多设备串台修复] 这台设备的列表到齐了（maybeAutoEnter 据此决定要不要再等）
         // 会话列表一变，子智能体数量与"父会话还在不在"都可能变：
         // 父会话被归档/删掉时，「人在子会话里」这一层就没有上一级可回了，就地退回顶层。
         if (!currentParentId.isEmpty() && findSession(currentParentId) == null) currentParentId = "";
@@ -3345,7 +3743,7 @@ public final class MainActivity extends Activity implements
             // 同一次完成（updatedAt 没变）= 重连/重拉列表又给了一遍，不重复提醒
             if (already != null && already.longValue() == s.updatedAt) continue;
             markDoneNotified(s.id);
-            Notifier.done(this, store, s.id, s.display());
+            Notifier.done(this, store, s.id, s.display(), selectedDeviceId);
         }
     }
 
@@ -5027,7 +5425,10 @@ public final class MainActivity extends Activity implements
         if (currentSessionId.isEmpty()) return;
         if (!gw.wantConnected()) {
             String url = store.url();
-            if (!url.isEmpty()) gw.connect(url, store.token(), store.deviceId(), store.deviceName());
+            if (!url.isEmpty()) {
+                bindConnectionToActiveDevice();
+                gw.connect(url, store.token(), store.deviceId(), store.deviceName());
+            }
         } else if (!gw.canSend()) {
             gw.retryNow();
         }
@@ -5049,6 +5450,31 @@ public final class MainActivity extends Activity implements
         streamResetLog.addLast(line);
         while (streamResetLog.size() > STREAM_RESET_LOG_MAX) streamResetLog.removeFirst();
         refreshDiagnostics();
+    }
+
+    // ---- [多设备串台修复 · 2026-10-20] 错误提示去重（用户报的「不停的弹窗」）
+
+    /** 上一条错误提示的文案与时刻。 */
+    private String lastToastText = "";
+    private long lastToastAt = 0L;
+    /** 同一句话多久内不再重复弹。 */
+    private static final long TOAST_DEDUPE_MS = 8_000L;
+
+    /**
+     * 同一句话短时间内只弹一次。
+     *
+     * <p>为什么必须有：网关的拒绝是**按请求**回的，而 App 侧有多条会重试的路径
+     * （重连后补 subscribe、上滑分页、标题探针、切会话重订阅…）。一旦某个请求是
+     * **必然**被拒的（典型：拿 A 电脑的 sessionId 去 B 电脑上订阅），重试一次弹一条，
+     * 屏幕上就是"不停的弹窗"。正文仍照常写诊断区，不靠 Toast 承载信息。
+     */
+    private void toastOnce(String text) {
+        if (text == null || text.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (text.equals(lastToastText) && now - lastToastAt < TOAST_DEDUPE_MS) return;
+        lastToastText = text;
+        lastToastAt = now;
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -5111,7 +5537,8 @@ public final class MainActivity extends Activity implements
             if (convo != null) convo.setPendingAttachments(pendingAttachments);
         }
         String text = (message == null || message.isEmpty()) ? code : message;
-        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+        // [多设备串台修复] 同一条错误 8s 内只弹一次：重试路径会让它反复回来
+        toastOnce(text);
     }
 
     // ============================================================ 附件暂存 / 生成物 / 权限
@@ -6996,7 +7423,7 @@ public final class MainActivity extends Activity implements
                 // 历史回放（historical=true）不是"现在开始了"：快照里几十个 turn/start 不能
                 // 各弹一条通知。只有实时帧才认。
                 if (!historical) {
-                    Notifier.running(this, store, currentSessionId, sessionLabel(currentSessionId));
+                    Notifier.running(this, store, currentSessionId, sessionLabel(currentSessionId), selectedDeviceId);
                 }
                 setRunning(true);
                 break;
@@ -7009,7 +7436,7 @@ public final class MainActivity extends Activity implements
                 turnStartedAt = 0;
                 if (!historical && wasRunning) {
                     markDoneNotified(currentSessionId);
-                    Notifier.done(this, store, currentSessionId, sessionLabel(currentSessionId));
+                    Notifier.done(this, store, currentSessionId, sessionLabel(currentSessionId), selectedDeviceId);
                 }
                 // 某些历史窗口里 tool/result 不在其中，避免工具条永远停在「运行中」
                 for (ChatItem ci : items) {
@@ -7691,30 +8118,7 @@ public final class MainActivity extends Activity implements
         //   而是给它一个**独立的全屏弹窗宿主**，作为 `DrawerHost` 的**最后一个子 View**
         //   ⇒ 天然在抽屉面板之上、且是全屏 ⇒ 弹窗在**屏幕正中 + 抽屉之上**，抽屉**保持打开** ✓
         //   （空闲时该宿主不画任何东西、也不拦触摸 —— `GlassSheetOverlay` 在不可见时直接 return）
-        if (drawerHost != null && !drawerSheetHostAdded) {
-            try {
-                // Kotlin 的 `() -> Int` 形参在 Java 侧是 Function0<Integer> —— 显式声明，别指望 lambda 推导
-                kotlin.jvm.functions.Function0<Integer> rev =
-                        () -> (sessionState == null ? 0 : sessionState.getThemeRev());
-                // ⚠️ 门面类要对：函数定义在 `GlassSessionList.kt` ⇒ Java 门面是 `GlassSessionListKt`
-                android.view.View sh = com.dsh.mobile.glass.GlassSessionListKt.createGlassSheetHost(
-                        this, drawerSheetState, rev);
-                drawerHost.addView(sh, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                // [V3.107 · 发布前检查 P1] 标志位必须**成功之后**才置：原来先置 true，
-                //   一旦创建抛异常就**永久不再尝试** ⇒ ⋯ 菜单静默失效 ✗。现在失败只记日志，
-                //   下次点 ⋯ 会重新尝试（并可回退到旧弹窗）。
-                drawerSheetHostAdded = true;
-                // [V3.106 · 发布前检查 B3] 弹窗显示期间：抽屉右侧那条不再抢事件（否则点遮罩会关掉抽屉）
-                //   关掉时回调把拦截恢复 —— 现在挂的是**抽屉自己那个状态**的回调（V3.114）。
-                drawerSheetState.setOnHide(() -> {
-                    drawerHost.setSheetOnTop(false);
-                    return kotlin.Unit.INSTANCE;
-                });
-            } catch (Throwable t) {
-                android.util.Log.w("DSH-GLASS", "抽屉弹窗宿主创建失败", t);
-            }
-        }
+        ensureDrawerSheetHost();
         java.util.List<com.dsh.mobile.glass.GlassSheetOption> opts = new java.util.ArrayList<>();
         for (int i = 0; i < labels.length; i++) {
             String s = (subs != null && i < subs.length && subs[i] != null) ? subs[i] : "";
@@ -7815,13 +8219,33 @@ public final class MainActivity extends Activity implements
         showSettings();
     }
 
-    /** 抽屉里的「我的设备」入口：收起抽屉，进设备页看在线状态；返回键回对话页（不是根页）。 */
+    /**
+     * 抽屉里的「我的设备」入口。
+     *
+     * <p>[P1 · 多设备] 现在是**设备切换器**：有两台以上就直接弹出设备列表（点一下切过去，
+     * 会话面板跟着换）；只有一台时才退回原来的"进设备页看在线状态"。
+     * 这样"切设备"不用再进出设备页，抽屉里一步到位。
+     */
     @Override
     public void onDevices() {
+        // [2026-10-20 · 用户「不需要切换弹窗，直接退回我的设备页面就行」]
+        // 抽屉的显示器按钮**只负责回设备页**；换设备由设备页上的卡片完成（点卡片 = 设为当前并连它）。
         closeDrawer();
         deviceOverChat = true;
         showDevices();
     }
+
+    /**
+     * [P1 · 多设备] 抽屉里的设备切换列表。
+     *
+     * <p>⚠️ 必须写 `drawerSheetState`（抽屉自己那层）+ `drawerHost.setSheetOnTop(true)`：
+     * 抽屉打开时 `currentSheetState()` 会把弹窗路由到"当前界面"（对话页）⇒ 它被抽屉面板盖住，
+     * **看得见却点不到**（真机实测：切换设备点了没反应）。这与 `showGlassMenu` 同一条纪律。
+     */
+
+
+    /** 设备切换列表的选项：名字 + 在线状态 + 是否当前。 */
+
 
     @Override
     public void onRefresh() {
@@ -8367,9 +8791,13 @@ public final class MainActivity extends Activity implements
         // 别的设备按它自己存的档位算。
         RoutePolicy.Pick p = (d != null && d.id != null && d.id.equals(store.activeDeviceId()))
                 ? store.pickActive()
-                : Store.pickOf(d);
+                // [2026-10-20] 非当前设备按它自己算，**不算**"内网刚失败"的进程级退避
+                //（那条退避属于当前正在连的那台，否则会写成"你没用过的设备内网也连不上"）
+                : Store.pickOf(d, false);
         if (d == null || d.id == null || gw == null) return p;
-        if (!d.id.equals(store.activeDeviceId())) return p;
+        // [多设备串台修复] 「实际在用的线路」只属于**这条连接连的那台**：
+        // 用 activeDeviceId 判会把"刚从 A 切到 B、连接还在 A 上"的那一瞬算成 B 已连上 A 的线路。
+        if (!d.id.equals(connectedDeviceId)) return p;
         if (gw.state() != GatewayClient.State.READY || lastConnectUrl.isEmpty()) return p;
         boolean wan = isWanUrl(lastConnectUrl);
         boolean lan = isLanUrl(lastConnectUrl);
@@ -8388,6 +8816,15 @@ public final class MainActivity extends Activity implements
      * 下一行**无条件**进对话页，所以卡片上明明写着「离线」，点一下照样能进到对话页（用户报的 bug）。
      * 现在离线走 {@link #beginEnterRetry}：等 READY 才进，失败/超时明确提示、留在设备页。
      * 在线路径行为不变。
+     *
+     * <p><b>[多设备串台修复 · 2026-10-20]</b> 判据从「socket 活着」改成「socket 连的就是这台」
+     * （{@link #isOnlineFor(Store.Device)}），并且**换了设备一定重连**：
+     * <pre>
+     *   改前：连着 B 时点 A → isOnline() 为真 → 不重连、直接进对话页 ⇒ 看到的是 B 的会话
+     *        （网关里没有这条会话的订阅目标也换了）⇒ 后续 subscribe/发消息全打到错的那台
+     *        ⇒ 网关反复回错误帧 ⇒ 提示一直弹。
+     *   改后：目标设备与当前连接不一致 ⇒ 关掉旧连接 + 清空上一台的会话态 + 重连 ⇒ READY 才进对话页。
+     * </pre>
      */
     @Override
     public void onOpenDevice(Store.Device d) {
@@ -8398,16 +8835,135 @@ public final class MainActivity extends Activity implements
             refreshDevices();
             return;
         }
-        if (!d.id.equals(store.activeDeviceId())) {
+        boolean sameTarget = d.id.equals(store.activeDeviceId()) && d.id.equals(connectedDeviceId);
+        if (!sameTarget) {
             // 换了目标设备：上一条"等重连进对话"的等待作废（否则连上另一台也会误进对话页）
             cancelPendingEnter();
-            store.setActiveDevice(d.id);
+            Store.Device from = store.activeDevice();
+            store.setActiveDevice(d.id);     // 之后 store.url()/token() 都是这台的了
+            switchDevice(from, d);           // P1：旧连接保留在后台，只把 UI 切过来
+            // [P1 的收益] 这台**本来就在后台连着** ⇒ 切过来是瞬时的，不用等重连
+            if (isOnlineFor(d)) {
+                enterChat();
+                return;
+            }
+            beginEnterRetry(d);
+            return;
         }
-        if (isOnline()) {
+        if (isOnlineFor(d)) {
             enterChat();
             return;
         }
         beginEnterRetry(d);
+    }
+
+    /**
+     * [P1 · 多设备] 把界面切到另一台设备。
+     *
+     * <p>与旧实现的区别（这是多设备改造的核心）：**不再断开上一台**。
+     * 上一台继续保持连接、继续收事件、继续发通知；这里只做三件事：
+     * <ol>
+     *   <li>把 UI 监听权交给新那台的连接（旧的 listener=null，帧不再进界面）；</li>
+     *   <li>清空上一台的会话态（会话列表/当前会话/待确认卡…都属于上一台）；</li>
+     *   <li>新那台如果还没连，就连上（已连的话切过去是**瞬时**的，不用等重连）。</li>
+     * </ol>
+     */
+    private void switchDevice(Store.Device from, Store.Device to) {
+        // 旧的连接只摘监听者，不断开 —— 它继续替这台电脑收通知
+        GatewayClient old = clientOf(from == null ? "" : from.id);
+        if (old != null && old.listener() == this) old.setListener(null);
+        switchingDevice = true;
+        sessionsLoaded = false;
+        clearDeviceScopedState();
+        if (to == null || !to.pairedReady()) switchingDevice = false;
+        // 新的那台：先把 gw 指过去，再按需建连
+        selectedDeviceId = to == null || to.id == null ? "" : to.id;
+        gw = clientFor(selectedDeviceId, this, true);
+        connectedDeviceId = selectedDeviceId;
+        connectAllDevices();
+        // 已经连着的那台：新监听者不会自动收列表，主动补一次
+        if (gw != null && gw.state() == GatewayClient.State.READY) {
+            gw.requestSessions();
+        }
+        discoverLogAdd("切换设备：" + (from == null ? "（无）" : from.displayName())
+                + " → " + (to == null ? "（无）" : to.displayName())
+                + "（旧连接保留在后台收通知，UI 已切走）");
+        refreshDevices();
+    }
+
+    /**
+     * [多设备串台修复] 把**只属于上一台设备**的运行态全部清空。
+     *
+     * <p>为什么整块清而不是只清会话 id：会话列表、抽屉分组、待确认卡、下载表、标题探针队列
+     * 全都是"按资源 id 建的、但没带设备维度"的账本。换设备后这些 id 属于另一台电脑，
+     * 留着只会让 UI 显示别人的东西、并触发一串必然失败的请求。
+     *
+     * <p>刻意**不清**的：界面偏好（主题/配色/紧凑模式）、工作区折叠账本（按路径，换设备仍通用）、
+     * 设备表本身、通知设置。
+     */
+    private void clearDeviceScopedState() {
+        // ---- 数据
+        sessions.clear();
+        archivedIds.clear();
+        items.clear();
+        byKey.clear();
+        seenSeq.clear();
+        teamMemberIds.clear();
+        queueBySession.clear();
+        pendingBySession.clear();
+        doneNotifiedAt.clear();
+        titleRequested.clear();
+        titleAwaiting.clear();
+        titleAttempts.clear();
+        titleDeadline.clear();
+        titleDeferredUntil.clear();
+        titleInFlight = 0;
+        expandedParents.clear();
+        workspaceIdByPath.clear();
+        workspaceTitleByPath.clear();
+        pendingInteractions.clear();
+        for (Runnable r : interactionWatchdogs.values()) {
+            if (r != null) uiHandler.removeCallbacks(r);
+        }
+        interactionWatchdogs.clear();
+        dlByRequest.clear();
+        dlByTransfer.clear();
+        pendingAttachments.clear();
+        lastSentAttachments = null;
+        // ---- 当前会话
+        currentSessionId = "";
+        currentTitle = "";
+        currentCwd = "";
+        currentParentId = "";
+        nextBeforeSeq = null;
+        hasMore = false;
+        running = false;
+        runningUncertain = false;
+        autoPaging = false;
+        autoPageCount = 0;
+        pendingOpenSessionId = "";
+        pendingJumpSessionId = "";
+        pendingRestoreSessionId = "";
+        clearStreamNotice();
+        clearPendingWorkspace();
+        // 落盘的"上次会话"也属于上一台：不清的话冷启动会拿它的 id 去新设备上找（找不到只会白跑一趟）
+        store.setLastSessionId("");
+        // ---- UI 镜像（旧 View + Compose 两套都要清，否则抽屉/对话页还挂着上一台的内容）
+        if (listScreen != null) setSessionRows(buildRows());
+        setSessionCurrent("");
+        if (convo != null) {
+            convo.setItems(items);
+            convo.setTitleText("");
+            convo.setSubtitleText("");
+            convo.setPlanRich("", new java.util.ArrayList<String[]>());
+            convo.setPendingAttachments(pendingAttachments);
+            convo.refreshNow();
+        }
+        refreshMoreStatus();
+        refreshSubagentEntry();
+        refreshQueueStrip();
+        paintBanner();
+        Notifier.setViewedSession(this, "");
     }
 
     // ---- 「离线时点重连」的等待/超时（问题 A 的核心）
@@ -8442,8 +8998,9 @@ public final class MainActivity extends Activity implements
         refreshDevices();                   // 立刻画出「重连中…」
         pendingEnterTimeout = () -> {
             pendingEnterTimeout = null;
-            if (!pendingEnterDeviceId.isEmpty() && isOnline()) { finishPendingEnter(); return; }
+            if (!pendingEnterDeviceId.isEmpty() && isOnlineFor(store.activeDevice())) { finishPendingEnter(); return; }
             pendingEnterDeviceId = "";
+            switchingDevice = false;   // 换设备这条路到此为止：别让"主动断开"的抑制一直挂着
             refreshDevices();
             Toast.makeText(this,
                     "连不上这台电脑：请确认电脑端 DSH 开着、手机与电脑在同一网络（或公网地址可用）",
@@ -8455,6 +9012,7 @@ public final class MainActivity extends Activity implements
     /** 连上了：撤掉等待，进对话页。 */
     private void finishPendingEnter() {
         pendingEnterDeviceId = "";
+        switchingDevice = false;
         if (pendingEnterTimeout != null) {
             uiHandler.removeCallbacks(pendingEnterTimeout);
             pendingEnterTimeout = null;
@@ -8476,6 +9034,7 @@ public final class MainActivity extends Activity implements
     private void failPendingEnter(String detail) {
         if (pendingEnterDeviceId.isEmpty()) return;
         cancelPendingEnter();
+        switchingDevice = false;   // 换设备这条路到此为止：别让"主动断开"的抑制一直挂着
         refreshDevices();
         String why = detail == null || detail.trim().isEmpty() ? "" : "（" + detail.trim() + "）";
         Toast.makeText(this, "连不上这台电脑" + why
@@ -8537,10 +9096,20 @@ public final class MainActivity extends Activity implements
     private void doDeleteDevice(final Store.Device d) {
         if (d == null) return;
         boolean wasActive = d.id.equals(store.activeDeviceId());
+        // [多设备串台修复 · 2026-10-20] 删的是**正连着**的那台时，它的会话态必须一起清：
+        // 旧实现只 disconnect + 重连下一台，UI 上还留着被删那台的会话列表 ⇒ 又一处串台。
+        boolean wasConnected = d.id.equals(connectedDeviceId);
+        Store.Device from = store.device(d.id);
         store.removeDevice(d.id);
         if (wasActive) {
-            gw.disconnect();
             Store.Device next = store.activeDevice();
+            if (wasConnected) {
+                switchDevice(from, next);
+            } else {
+                gw.disconnect();
+                connectedDeviceId = "";
+            }
+            // 还有别的设备就切过去并重连（删掉的是正在用的那台时）
             if (next != null && next.pairedReady()) gatewayReconnect();
         }
         refreshDevices();
@@ -8563,18 +9132,7 @@ public final class MainActivity extends Activity implements
                 .setTitle("删除「" + d.displayName() + "」")
                 .setMessage("会清除这台设备在本机保存的地址与设备令牌。\n"
                         + "电脑端不受影响，之后重新扫码就能再添加。")
-                .setPositiveButton("删除", (dlg, w) -> {
-                    boolean wasActive = d.id.equals(store.activeDeviceId());
-                    store.removeDevice(d.id);
-                    if (wasActive) {
-                        gw.disconnect();
-                        // 还有别的设备就切过去并重连（删掉的是正在用的那台时）
-                        Store.Device next = store.activeDevice();
-                        if (next != null && next.pairedReady()) gatewayReconnect();
-                    }
-                    refreshDevices();
-                    Toast.makeText(this, "已删除「" + d.displayName() + "」", Toast.LENGTH_SHORT).show();
-                })
+                .setPositiveButton("删除", (dlg, w) -> doDeleteDevice(d))
                 .setNegativeButton("取消", null)
                 .show();
     }
@@ -8681,6 +9239,7 @@ public final class MainActivity extends Activity implements
         discoverLogAdd("连接门：用户切线路 → " + (onWan ? "内网" : "公网")
                 + " " + LanAddress.hostOf(other) + ":" + LanAddress.portOf(other));
         gw.setTrustAllCerts(store.insecureTls());
+        bindConnectionToActiveDevice();
         gw.connect(other, store.token(), store.deviceId(), store.deviceName());
         armAutoLanFailover(other);
         Toast.makeText(this, "改用" + (onWan ? "内网" : "公网") + "地址重连…", Toast.LENGTH_SHORT).show();
@@ -8970,6 +9529,7 @@ public final class MainActivity extends Activity implements
                 Toast.LENGTH_SHORT).show();
         lastConnectUrl = active;
         gw.setTrustAllCerts(store.insecureTls());
+        bindConnectionToActiveDevice();
         gw.connect(active, token, store.deviceId(), store.deviceName());
         armAutoLanFailover(active);
         refreshRouteUI();
@@ -9417,6 +9977,11 @@ public final class MainActivity extends Activity implements
             // 配对可能要依次试几个地址，给个可见反馈，别让人以为点了没反应
             Toast.makeText(this, "正在连接 " + hostOf(target)
                     + "（第 " + pairIndex + "/" + pairCandidates.size() + " 个）", Toast.LENGTH_SHORT).show();
+            // [2026-10-20 · 扫码配对也要绑定] `gw.pair(...)` 是**另一条**建连路径（不走 connect），
+            // 所以它同样必须在这里记下"这条 socket 是替哪台设备建的"。少了这一步的真机症状：
+            // 扫码配对成功了，可是 connectedDeviceId 还是旧值/空 ⇒ 新设备被判「离线」、
+            // 会话帧还被空窗守卫丢掉 ⇒ 用户看到的就是"扫完了还是离线"。
+            bindConnectionToActiveDevice();
             gw.pair(target, pendingPairCode, store.deviceId(), store.deviceName());
             refreshDiagnostics();
             return;
@@ -9563,9 +10128,18 @@ public final class MainActivity extends Activity implements
      */
     private boolean applyAddressSync(String reportedGatewayId, String reportedPublicUrl,
                                      java.util.List<String> endpoints, String trace) {
+        return applyAddressSync(store.gatewayId(), reportedGatewayId, reportedPublicUrl, endpoints, trace);
+    }
+
+    /**
+     * @param ownerGatewayId 发起这次同步时那台设备的网关 id（不是"此刻生效的"）。
+     *                       [2026-10-20] 必须显式传入：同步是异步的，回来时用户可能已经切了设备。
+     */
+    private boolean applyAddressSync(String ownerGatewayId, String reportedGatewayId, String reportedPublicUrl,
+                                     java.util.List<String> endpoints, String trace) {
         try {
             AddressSync.Result r = AddressSync.decide(
-                    store.gatewayId(), reportedGatewayId,
+                    ownerGatewayId, reportedGatewayId,
                     store.lanUrl(), store.wanUrl(), endpoints, reportedPublicUrl);
             if (!r.changed) {
                 if (trace != null) {
@@ -9576,6 +10150,16 @@ public final class MainActivity extends Activity implements
             }
             boolean lanChanged = r.lanUrl != null && !r.lanUrl.isEmpty() && !r.lanUrl.equals(store.lanUrl());
             boolean wanChanged = r.wanUrl != null && !r.wanUrl.isEmpty() && !r.wanUrl.equals(store.wanUrl());
+            // [2026-10-20] 最后一道闸：别的设备已经在用的地址，绝不写进来。
+            // 这条防的是"电脑报的地址恰好是另一台设备的" —— 一旦写进去，那台就永远连不上了。
+            if (lanChanged && addressOwnedByOther(r.lanUrl)) {
+                if (trace != null) pairTraceAdd(trace + " → 内网地址属于另一台设备，跳过写入");
+                lanChanged = false;
+            }
+            if (wanChanged && addressOwnedByOther(r.wanUrl)) {
+                if (trace != null) pairTraceAdd(trace + " → 公网地址属于另一台设备，跳过写入");
+                wanChanged = false;
+            }
             if (lanChanged) store.setLanUrl(r.lanUrl);
             if (wanChanged) store.setWanUrl(r.wanUrl);
             if (trace != null) pairTraceAdd(trace + " → " + r.note);
@@ -9610,6 +10194,11 @@ public final class MainActivity extends Activity implements
         try {
             if (store == null) return;
             if (!manual && !store.isAutoMode()) return;            // 手动档不擅自改用户填的地址
+            // [2026-10-20 P0] **只在真的连着的时候同步**。
+            // 这条接口问的是"你（这台电脑）现在的公网地址是多少"，没连上就无从知道问的是哪台；
+            // 旧实现会拿"上一次连过的地址"或"当前存的地址"去问，答回来的可能是**另一台电脑**，
+            // 再写进当前设备 —— 这就是把家电脑地址写进公司电脑、让公司电脑一直 401 的那条路。
+            if (gw == null || gw.state() != GatewayClient.State.READY) return;
             final long now = System.currentTimeMillis();
             if (!manual && now - lastWanRefreshAt < 30_000L) return;
             lastWanRefreshAt = now;
@@ -9620,14 +10209,22 @@ public final class MainActivity extends Activity implements
             // （真机诊断原文：`同步地址[回前台] → 192.168.2.29:3091:8099 → 失败：MalformedURLException`）
             // → READY / 回前台 / 网络变化 **全都同步失败**，这正是"连了半天没同步"的真正原因 ✓。
             // 改用 B 的纯函数 LanAddress.hostOf()（剥端口 + 处理 IPv6 方括号）✓，不自己再写一份 ✗。
+            // [2026-10-20 P0] 只认**这条活连接**的地址：不再拿 store.lanUrl() 兜底（那可能是另一台的）。
             if (!lastConnectUrl.isEmpty() && isLanUrl(lastConnectUrl)) host = LanAddress.hostOf(lastConnectUrl);
-            if (host.isEmpty()) host = LanAddress.hostOf(store.lanUrl());
             if (host.isEmpty()) {
-                pairTraceReconnect("同步地址[" + source + "]", "没有可用的内网地址，跳过");
+                pairTraceReconnect("同步地址[" + source + "]", "当前不是内网连接，跳过（避免问错电脑）");
                 return;
             }
             final String targetHost = host;
             final String token = store.token();
+            // [2026-10-20 · 跨设备写串的根因修复]
+            // 这次同步是**替哪台设备**去问的，必须在开线程前就钉死：
+            // 线程去问电脑（可能几秒），期间用户完全可能切到另一台 —
+            // 回来后的 applyAddressSync 读的是"当时生效的那台"，于是会把 A 的地址写进 B
+            // （真机现场：公司电脑的内网地址被写成家电脑的 192.168.2.29，之后一直「配对信息失效」）。
+            // P0 起 owner 取 connectedDeviceId（这条 socket 真正所属的那台），与 active 不一致也不写。
+            final String ownerDeviceId = connectedDeviceId;
+            final String ownerGatewayId = store.gatewayId();
             final String trace = "重连[同步地址·" + source + "] → 连接目标 " + attemptTargetText()
                     + " → 面板 " + targetHost + ":8099";
             new Thread(() -> {
@@ -9665,6 +10262,14 @@ public final class MainActivity extends Activity implements
                 final java.util.List<String> rEps = eps;
                 runOnUiThread(() -> {
                     try {
+                        // [2026-10-20] 设备已经换了：这次结果属于上一台，**一个字都不许写**。
+                        // 否则就是「A 的地址写进 B」——用户看到的正是"我改好的地址又自己变回去了"。
+                        if (ownerDeviceId == null || ownerDeviceId.isEmpty()
+                                || !ownerDeviceId.equals(store.activeDeviceId())
+                                || !ownerDeviceId.equals(connectedDeviceId)) {
+                            pairTraceAdd(trace + " → 已切换设备，丢弃这次同步结果（不写地址）");
+                            return;
+                        }
                         if (url == null || url.isEmpty()) {
                             pairTraceAdd(trace + " → " + res);
                             if (manual) Toast.makeText(this, "没取到公网地址：" + res, Toast.LENGTH_LONG).show();
@@ -9672,7 +10277,8 @@ public final class MainActivity extends Activity implements
                         }
                         // [2026-10-07 合并朋友 fork] 落盘改走 AddressSync 的安全判据：
                         // 不覆盖用户自己填的固定公网地址，也不把 ws://127.0.0.1 这类本机地址当公网地址存下来。
-                        boolean changed = applyAddressSync(rGwId, url, rEps, trace);
+                        // 身份用**发起时**那份（ownerGatewayId），不用此刻的 active —— 两者可能已经不是同一台。
+                        boolean changed = applyAddressSync(ownerGatewayId, rGwId, url, rEps, trace);
                         if (!changed) {
                             pairTraceAdd(trace + " → " + res + " · 与本地一致或按判据不更新");
                             if (manual) Toast.makeText(this, "公网地址已是最新", Toast.LENGTH_SHORT).show();
@@ -10096,6 +10702,7 @@ public final class MainActivity extends Activity implements
                 lastConnectUrl = url;
                 discoverLogReconnect("地址发现拿到新地址", "已发起重连（地址已更新，changed=" + changed + "）");
                 gw.setTrustAllCerts(store.insecureTls());
+                bindConnectionToActiveDevice();
                 gw.connect(url, store.token(), store.deviceId(), store.deviceName());
                 armAutoLanFailover(url);
                 Toast.makeText(MainActivity.this,
@@ -10756,6 +11363,7 @@ public final class MainActivity extends Activity implements
                 Toast.LENGTH_SHORT).show();
         lastConnectUrl = active;
         gw.setTrustAllCerts(store.insecureTls());
+        bindConnectionToActiveDevice();
         gw.connect(active, store.token(), store.deviceId(), store.deviceName());
         armAutoLanFailover(active);
         refreshRouteUI();
@@ -10947,6 +11555,7 @@ public final class MainActivity extends Activity implements
     public void onDisconnect() {
         store.clearPairing();
         gw.disconnect();
+        connectedDeviceId = "";   // [多设备串台修复] 连接目标一并作废，别把"没连上"当"这台在线"
         settingsView.setStatus("已清除配对", false);
         Toast.makeText(this, "已清除配对", Toast.LENGTH_SHORT).show();
     }
@@ -11170,6 +11779,15 @@ public final class MainActivity extends Activity implements
             // 先决定这次配对写进哪台设备（同一台电脑重扫 = 更新它的地址，不会多出重复卡片），
             // 再写地址/令牌，后续 setUrl/setLanUrl/setToken 才会落到这台设备上。
             store.beginPairing(payload.optString("gatewayId", ""), payload.optString("gatewayName", ""));
+            // [2026-10-20] 这次配对如果指向**另一台**电脑，UI 上属于上一台的会话态必须作废：
+            // 配对走的是 gw.pair()（不是 onOpenDevice），不经过 switchDevice —— 不清的话
+            // 会拿上一台的 currentSessionId 去新一台订阅（串台 + 一直回错误帧）。
+            // 这里只清状态、**不断开**：接下来 gw.pair() 自己会换掉这条 socket。
+            if (!store.activeDeviceId().equals(connectedDeviceId)) {
+                connectedDeviceId = "";
+                sessionsLoaded = false;
+                clearDeviceScopedState();
+            }
             store.setUrl(pairCandidates.get(0));
             // 网关把可用地址都放在 endpoints：可用内网进「内网」，公网/隧道进「公网」。
             // 扫一次码就把两个地址都填好，不用手输（隧道域名每次重启会变，重扫即可）。
@@ -11291,5 +11909,28 @@ public final class MainActivity extends Activity implements
             while (it.hasNext()) sb.append('\n').append("  ").append(it.next());
         }
         settingsView.setDiagnostics(sb.toString());
+    }
+
+    /**
+     * [P1 · 多设备] 确保「抽屉弹窗宿主」已挂上：抽屉里的弹窗必须画在**抽屉自己那层**，
+     * 否则它落在对话页那一层、被抽屉面板盖住 ⇒ 看得见但点不到（真机现象：切换设备点了没反应）。
+     */
+    private void ensureDrawerSheetHost() {
+        if (drawerHost == null || drawerSheetHostAdded) return;
+        try {
+            kotlin.jvm.functions.Function0<Integer> rev =
+                    () -> (sessionState == null ? 0 : sessionState.getThemeRev());
+            android.view.View sh = com.dsh.mobile.glass.GlassSessionListKt.createGlassSheetHost(
+                    this, drawerSheetState, rev);
+            drawerHost.addView(sh, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            drawerSheetHostAdded = true;
+            drawerSheetState.setOnHide(() -> {
+                drawerHost.setSheetOnTop(false);
+                return kotlin.Unit.INSTANCE;
+            });
+        } catch (Throwable t) {
+            android.util.Log.w("DSH-GLASS", "抽屉弹窗宿主创建失败", t);
+        }
     }
 }

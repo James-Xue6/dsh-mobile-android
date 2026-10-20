@@ -35,7 +35,7 @@ public final class Store {
     /**
      * 「当前生效设备怎么选线路」的旧字段：auto（自动，默认）/ lan（只用内网）/ wan（只用公网）。
      * **它是真身**，设备表里的 {@link Device#netMode} 是它的镜像 —— 与 {@link #K_LAN}/{@link #K_WAN}
-     * 同一套设计（写入落旧字段，再由 {@link #syncLegacyIntoActive()} 同步进当前生效的那台）。
+     * [2026-10-20 P0] 真身已改为设备记录，旧字段只作降级兼容镜像。
      * 设备表为空（全新安装还没配过对）时它就是唯一的档位来源。
      */
     private static final String K_NET_MODE = "net_mode";
@@ -196,16 +196,64 @@ public final class Store {
         sp.edit().putString(K_LAST_SESSION, sessionId == null ? "" : sessionId.trim()).apply();
     }
 
-    public String lanUrl() { return sp.getString(K_LAN, ""); }
-    public void setLanUrl(String v) {
-        sp.edit().putString(K_LAN, v == null ? "" : v.trim()).apply();
-        syncLegacyIntoActive();
+    // ============================================================ 当前生效设备的配置（唯一真身 = 设备表）
+    //
+    // [2026-10-20 P0 · 多设备架构改造] 改前的设计是：地址/令牌以**旧字段**（K_LAN / K_WAN / K_TOKEN /
+    // K_GATEWAY_* / K_NET_MODE）为"真身"，再把当前设备镜像进设备表（writeLegacy / syncLegacyIntoActive）。
+    // 后果（用户实测）：
+    //   ① 设置页只有**一套**地址，改 A 等于改 B —— "右上角进去只有一个地址"；
+    //   ② 异步地址同步在"切设备"的空窗里会把 A 的地址写进 B，于是 B 一直 401「配对信息失效」。
+    //
+    // 现在反过来：**设备表里那条记录才是唯一真身**。旧字段只在三处保留：
+    //   ① 全新安装、还没有任何设备时当临时存放（首配对时由 legacyDevice() 迁移成一条记录）；
+    //   ② writeLegacy() 写入的"降级兼容镜像"，供老版本 App 读取；
+    //   ③ sanitizeStoredLan() 的一次性清洗。
+    // 于是每台设备的地址/令牌互不影响，任意一台都能单独编辑。
+
+    private static String nz(String s) { return s == null ? "" : s; }
+
+    /**
+     * 修改**当前生效设备**的那一条记录并落盘。
+     *
+     * <p>没有设备时直接返回 false，由调用方回退到旧字段（全新安装的中间态）。
+     * 写完顺手镜像一份旧字段（降级兼容），但**读的时候永远以设备记录为准**。
+     */
+    private boolean updateActiveConfig(java.util.function.Consumer<Device> mut) {
+        java.util.List<Device> list = devices();      // 顺带完成"旧字段 -> 设备表"的一次性迁移
+        Device target = null;
+        String id = activeDeviceId();
+        for (Device d : list) {
+            if (d.id != null && d.id.equals(id)) { target = d; break; }
+        }
+        if (target == null && !list.isEmpty()) {
+            target = list.get(0);
+            sp.edit().putString(K_ACTIVE_DEVICE, target.id).apply();
+        }
+        if (target == null) return false;
+        mut.accept(target);
+        saveDevices(list);
+        writeLegacy(target);                          // 兼容镜像，不是真身
+        return true;
     }
 
-    public String wanUrl() { return sp.getString(K_WAN, ""); }
+    public String lanUrl() {
+        Device d = activeDevice();
+        return d == null ? sp.getString(K_LAN, "") : nz(d.lanUrl);
+    }
+
+    public void setLanUrl(String v) {
+        final String val = v == null ? "" : v.trim();
+        if (!updateActiveConfig(d -> d.lanUrl = val)) sp.edit().putString(K_LAN, val).apply();
+    }
+
+    public String wanUrl() {
+        Device d = activeDevice();
+        return d == null ? sp.getString(K_WAN, "") : nz(d.wanUrl);
+    }
+
     public void setWanUrl(String v) {
-        sp.edit().putString(K_WAN, v == null ? "" : v.trim()).apply();
-        syncLegacyIntoActive();
+        final String val = v == null ? "" : v.trim();
+        if (!updateActiveConfig(d -> d.wanUrl = val)) sp.edit().putString(K_WAN, val).apply();
     }
 
     /** 自建反代自签名证书时允许不校验证书。 */
@@ -301,29 +349,27 @@ public final class Store {
     /**
      * 当前生效设备的连接方式：{@link RoutePolicy#AUTO}（默认）/ {@link RoutePolicy#LAN} / {@link RoutePolicy#WAN}。
      *
-     * <p>⚠️ 真身是**旧字段 K_NET_MODE**，设备表里的 {@code Device.netMode} 是它的镜像 —— 与
-     * {@link #lanUrl()}/{@link #wanUrl()} 完全同一套设计（写入落旧字段，再由
-     * {@link #syncLegacyIntoActive()} 同步进当前生效的那台）。
-     * 真机踩过（2026-10-02，Android TV 盒子）：这里若反过来优先读设备字段，
-     * {@link #setNetMode(String)} 写进 K_NET_MODE 后会被 syncLegacyIntoActive 用
-     * 设备里的旧值覆盖，**设置页点「自动」根本没生效**（顶栏一直显示「手动 · 只用公网」）。
+     * <p>[2026-10-20 P0] 真身已改为**设备记录里的 netMode**（旧字段 K_NET_MODE 只在"还没有设备"时兜底）。
+     * 这样两台设备可以各自是"自动 / 只用公网"，互不覆盖 —— 旧设计下改一台等于改全部。
      */
     public String netMode() {
-        String m = sp.getString(K_NET_MODE, "");
-        if (m != null && !m.isEmpty()) return RoutePolicy.normalizeMode(m);
         Device d = activeDevice();
         if (d != null) return RoutePolicy.normalizeMode(d.netMode);
+        String m = sp.getString(K_NET_MODE, "");
+        if (m != null && !m.isEmpty()) return RoutePolicy.normalizeMode(m);
         return RoutePolicy.normalizeMode(sp.getBoolean(K_USE_WAN, false) ? RoutePolicy.WAN : RoutePolicy.AUTO);
     }
 
-    /** 设置连接方式（手动档 = 用户显式决定，自动档会按 WiFi/移动数据实时挑）。 */
+    /** 设置连接方式（只改当前生效的那台；手动档 = 用户显式决定，自动档会按 WiFi/移动数据实时挑）。 */
     public void setNetMode(String mode) {
-        String m = RoutePolicy.normalizeMode(mode);
+        final String m = RoutePolicy.normalizeMode(mode);
+        boolean ok = updateActiveConfig(d -> d.netMode = m);
+        // 兼容镜像（老版本只认 use_wan / net_mode）
         sp.edit()
                 .putString(K_NET_MODE, m)
-                .putBoolean(K_USE_WAN, RoutePolicy.WAN.equals(m))   // 降级兼容：老版本只认这个布尔
+                .putBoolean(K_USE_WAN, RoutePolicy.WAN.equals(m))
                 .apply();
-        syncLegacyIntoActive();
+        if (!ok) { /* 还没有设备：上面那段旧字段就是唯一存放处 */ }
     }
 
     /** 是不是自动档（手动档下绝不自动切线路 —— 「手动永远优先」）。 */
@@ -334,9 +380,20 @@ public final class Store {
      * 卡片文案、连接地址、诊断信息全部走这里，保证「显示的」和「连的」是同一个结论。
      */
     public static RoutePolicy.Pick pickOf(Device d) {
+        return pickOf(d, true);
+    }
+
+    /**
+     * [2026-10-20 · 多设备文案修正] 是否把「内网刚失败」的进程级退避算进来。
+     *
+     * <p>那条退避只属于**当前正在连的那台**（失败是它失败）。旧实现它是个全局静态量，
+     * 于是 A 电脑内网连不上，B 电脑的卡片也会写「内网连不上，暂用公网」—— 用户看到
+     * "没用过的设备也说我内网坏"，属于跨设备串味。非当前设备的**预测线路**一律传 false。
+     */
+    public static RoutePolicy.Pick pickOf(Device d, boolean allowLanBackoff) {
         if (d == null) return RoutePolicy.decide(RoutePolicy.AUTO, "", "", NetStatus.wifi(), NetStatus.known(), false);
         return RoutePolicy.decide(d.netMode, d.lanUrl, d.wanUrl,
-                NetStatus.wifi(), NetStatus.known(), lanBackoff(), !NetStatus.online());
+                NetStatus.wifi(), NetStatus.known(), allowLanBackoff && lanBackoff(), !NetStatus.online());
     }
 
     /** 当前生效设备的选择结果。 */
@@ -375,14 +432,17 @@ public final class Store {
         return "";
     }
 
-    /** 配对/手填时按地址性质归位到内网或公网槽位。 */
+    /** 配对/手填时按地址性质归位到内网或公网槽位（只写当前生效设备那条记录）。 */
     public void setUrl(String v) {
         String u = v == null ? "" : v.trim();
-        sp.edit().putString(K_URL, u).apply();
-        if (u.isEmpty()) { syncLegacyIntoActive(); return; }
+        if (u.isEmpty()) return;
+        if (activeDevice() == null) {
+            sp.edit().putString(K_URL, u).apply();    // 还没有设备：先当临时存放，首配对时迁移
+            return;
+        }
         if (isPrivateUrl(u)) setLanUrl(u);
         else setWanUrl(u);
-        syncLegacyIntoActive();
+        sp.edit().putString(K_URL, u).apply();        // 兼容镜像，不是真身
     }
 
     /** 私有地址判定：localhost/.local/.lan/.ts.net、10./127./169.254./192.168./172.16-31、
@@ -449,22 +509,35 @@ public final class Store {
         return false;
     }
 
-    public String token() { return sp.getString(K_TOKEN, ""); }
+    // [2026-10-20 P0] 令牌/网关身份也一律以**设备记录**为真身（每台各一份，互不覆盖）
+    public String token() {
+        Device d = activeDevice();
+        return d == null ? sp.getString(K_TOKEN, "") : nz(d.token);
+    }
+
     public void setToken(String v) {
-        sp.edit().putString(K_TOKEN, v == null ? "" : v).apply();
-        syncLegacyIntoActive();
+        final String val = v == null ? "" : v;
+        if (!updateActiveConfig(d -> d.token = val)) sp.edit().putString(K_TOKEN, val).apply();
     }
 
-    public String gatewayId() { return sp.getString(K_GATEWAY_ID, ""); }
+    public String gatewayId() {
+        Device d = activeDevice();
+        return d == null ? sp.getString(K_GATEWAY_ID, "") : nz(d.gatewayId);
+    }
+
     public void setGatewayId(String v) {
-        sp.edit().putString(K_GATEWAY_ID, v == null ? "" : v).apply();
-        syncLegacyIntoActive();
+        final String val = v == null ? "" : v;
+        if (!updateActiveConfig(d -> d.gatewayId = val)) sp.edit().putString(K_GATEWAY_ID, val).apply();
     }
 
-    public String gatewayName() { return sp.getString(K_GATEWAY_NAME, ""); }
+    public String gatewayName() {
+        Device d = activeDevice();
+        return d == null ? sp.getString(K_GATEWAY_NAME, "") : nz(d.gatewayName);
+    }
+
     public void setGatewayName(String v) {
-        sp.edit().putString(K_GATEWAY_NAME, v == null ? "" : v).apply();
-        syncLegacyIntoActive();
+        final String val = v == null ? "" : v;
+        if (!updateActiveConfig(d -> d.gatewayName = val)) sp.edit().putString(K_GATEWAY_NAME, val).apply();
     }
 
     /** 安装级稳定 UUID，用于配对时复用可信设备记录。 */
@@ -850,7 +923,7 @@ public final class Store {
         writeLegacy(d);
     }
 
-    /** 直接写旧字段（**不**回调 syncLegacyIntoActive，避免与 setXxx 形成回环）。 */
+    /** 写一份旧字段（降级兼容镜像；读的时候一律以设备记录为准）。 */
     private void writeLegacy(Device d) {
         String active = d.activeUrl();
         String mode = RoutePolicy.normalizeMode(d.netMode);
@@ -1008,34 +1081,14 @@ public final class Store {
      * 旧字段被别处改动（配对成功写入令牌、hello 写入网关名…）后，同步进当前生效的设备。
      * 旧字段是"当前生效设备"的镜像，两边必须一致，否则重启后设备卡片会显示旧值。
      */
-    private void syncLegacyIntoActive() {
-        String id = activeDeviceId();
-        if (id.isEmpty()) {
-            // 还没有"当前设备"（全新安装直接手填地址、或旧数据迁移之前的写入）：
-            // 先让 devices() 把旧字段迁移成一台设备，迁移会顺手把 active 选上。
-            java.util.List<Device> list = devices();
-            if (list.isEmpty()) return;
-            id = activeDeviceId();
-            if (id.isEmpty()) { id = list.get(0).id; sp.edit().putString(K_ACTIVE_DEVICE, id).apply(); }
-        }
-        java.util.List<Device> list = loadDeviceList();
-        if (list.isEmpty()) return;
-        for (Device d : list) {
-            if (!d.id.equals(id)) continue;
-            d.lanUrl = lanUrl();
-            d.wanUrl = wanUrl();
-            d.netMode = netMode();
-            d.token = token();
-            d.gatewayId = gatewayId();
-            d.gatewayName = gatewayName();
-            saveDevices(list);
-            return;
-        }
-    }
-
-    /** 解绑：清掉 token 与网关身份，保留地址方便重新配对。 */
+    /** 解绑：清掉 token 与网关身份，保留地址方便重新配对（只作用于当前生效的那台）。 */
     public void clearPairing() {
+        boolean ok = updateActiveConfig(d -> {
+            d.token = "";
+            d.gatewayId = "";
+            d.gatewayName = "";
+        });
+        if (!ok) sp.edit().remove(K_TOKEN).remove(K_GATEWAY_ID).remove(K_GATEWAY_NAME).apply();
         sp.edit().remove(K_TOKEN).remove(K_GATEWAY_ID).remove(K_GATEWAY_NAME).apply();
-        syncLegacyIntoActive();
     }
 }
